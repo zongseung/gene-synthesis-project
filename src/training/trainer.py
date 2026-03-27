@@ -35,6 +35,12 @@ import torch.distributed as dist
 import torch.nn as nn
 from torch.utils.data import DataLoader, DistributedSampler
 
+# Allow direct execution: torchrun src/training/trainer.py
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_PROJECT_ROOT = os.path.abspath(os.path.join(_SCRIPT_DIR, "..", ".."))
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
+
 # Project imports
 from src.data.dataloader import create_dataloaders
 from src.models import GaussianDiffusion, HybridCNNDiTFiLM
@@ -250,6 +256,15 @@ def train(config: dict) -> None:
             f"Train: {len(train_loader.dataset)} samples, "
             f"Test: {len(test_loader.dataset)} samples"
         )
+
+    # ── Load label hierarchy (pop_to_superpop mapping for model) ──
+    import pickle
+    label_hier_path = config["data"].get(
+        "label_hierarchy_path", "data/processed/label_hierarchy.pkl"
+    )
+    with open(label_hier_path, "rb") as f:
+        label_hierarchy = pickle.load(f)
+    config.setdefault("model", {})["pop_to_superpop"] = label_hierarchy["pop_to_superpop"]
 
     # ── Model ──
     model = HybridCNNDiTFiLM(config).to(device)
