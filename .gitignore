@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Environment / Secrets
+.env
+.env.*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Jupyter
+.ipynb_checkpoints/
+notebooks/*.html
+
+# Data (large files, not tracked)
+data/
+!data/.gitkeep
+
+# Model outputs (checkpoints, samples, evaluation results)
+outputs/
+
+# wandb
+wandb/
+
+# uv
+uv.lock
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/

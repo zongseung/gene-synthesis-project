@@ -1,0 +1,78 @@
+# ── 데이터 ──
+data:
+  gene_size: 26624
+  num_channels: 8
+  num_classes: 26
+  num_superpops: 5
+  num_samples: 2504
+  test_ratio: 0.1
+  split_seed: 20260327
+  normalize: true
+  enforce_zeros: true
+  zero_mask_path: "data/processed/zero_mask.pt"
+  label_hierarchy_path: "data/processed/label_hierarchy.pkl"
+  split_manifest_path: "data/processed/split_manifest.json"
+
+# ── 모델 ──
+model:
+  name: "HybridCNNDiTFiLM"
+  # CNN
+  cnn_base_channels: 64
+  cnn_channel_mult: [1, 1, 2, 4]
+  cnn_kernel_size: 3
+  # DiT
+  dit_d_model: 256
+  dit_n_blocks: 4
+  dit_n_heads: 4
+  dit_mlp_ratio: 4.0
+  dit_dropout: 0.0
+  # Patch
+  patch_size: 16
+  # FiLM
+  pop_emb_dim: 256
+  superpop_emb_dim: 256
+  film_type: "adaln_zero"
+
+# ── Diffusion ──
+diffusion:
+  max_timesteps: 500
+  noise_schedule: "cosine"
+  prediction_target: "epsilon"
+  guidance_type: "normal"
+  guidance_weight: 3.0
+
+# ── 학습 ──
+training:
+  epochs: 100                    # 조기종료 없이 전체 실행
+  batch_size: 32
+  lr: 2e-4
+  seed: 20260327
+  weight_decay: 1e-4
+  optimizer: "adamw"
+  gradient_clipping: 1.0
+  warmup_steps: 100
+  precision: "bf16"              # bf16 부동소수점
+  save_every: 20                 # checkpoint 저장 주기
+
+# ── 실험 운영 ──
+experiment:
+  run_name: "20260327_baseline_seed20260327"
+  tags: ["baseline", "hybrid-genodit"]
+  save_top_k_checkpoints: 3
+  export_policy: "internal_only"
+
+# ── DDP ──
+distributed:
+  backend: "nccl"
+  num_gpus: 2
+
+# ── 보조 손실 ──
+aux_loss:
+  enabled: false
+  lambda_pca_dist: 0.01
+  lambda_pop_structure: 0.01
+  type: "mmd_rbf"
+  warmup_epochs: 20
+
+# ── 저장 ──
+save_dir: "outputs/default"
