@@ -63,7 +63,9 @@ PROJECT_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, "..", ".."))
 DATA_DIR = os.path.join(PROJECT_ROOT, "data")
 PROCESSED_DIR = os.path.join(DATA_DIR, "processed")
 
-VCF_PATH = os.path.join(DATA_DIR, "ALL.autosomes.phase3.genotypes.vcf.gz")
+# Per-chromosome VCF files (original 1KG Phase 3)
+VCF_DIR = os.path.expanduser("~/GeneDiffusion")
+VCF_PATTERN = "ALL.chr{chrom}.phase3_shapeit2_mvncall_integrated_v5b.20130502.genotypes.vcf.gz"
 PANEL_PATH = os.path.join(
     DATA_DIR, "integrated_call_samples_v3.20130502.ALL.panel"
 )
@@ -92,13 +94,22 @@ MAX_VARIANTS_PER_GENE = 500
 
 def validate_input_files() -> None:
     """Check that required input files exist."""
-    for path, desc in [
-        (VCF_PATH, "Merged VCF"),
-        (PANEL_PATH, "Panel file"),
-    ]:
-        if not Path(path).exists():
-            raise FileNotFoundError(f"{desc} not found: {path}")
-    logger.info("Input files validated")
+    # Check per-chromosome VCFs
+    missing_chroms = []
+    for chrom in CHROMOSOMES:
+        vcf_path = os.path.join(VCF_DIR, VCF_PATTERN.format(chrom=chrom))
+        if not Path(vcf_path).exists():
+            missing_chroms.append(chrom)
+    if missing_chroms:
+        raise FileNotFoundError(
+            f"Per-chromosome VCF files missing for chr {missing_chroms}. "
+            f"Expected in: {VCF_DIR}/{VCF_PATTERN}"
+        )
+
+    if not Path(PANEL_PATH).exists():
+        raise FileNotFoundError(f"Panel file not found: {PANEL_PATH}")
+
+    logger.info(f"Input files validated: {len(CHROMOSOMES)} VCFs + panel")
 
 
 # ───────────────────────────────────────────────────────────────────
@@ -148,142 +159,177 @@ def _parse_refgene_simple(vcf_path: str) -> dict[str, list[dict]]:
     return gene_coords
 
 
-def process_chromosome(args: tuple) -> tuple[int, dict, list]:
-    """Parse a single chromosome from VCF and extract gene-level variant matrices.
+def _process_one_chromosome(args: tuple) -> tuple[int, dict, list]:
+    """Parse a single per-chromosome VCF file with cyvcf2.
+
+    cyvcf2 returns gt_types as a numpy array in one C call — no Python loop
+    over 2,504 samples. ~10x faster than pysam per-sample iteration.
+
+    Each worker opens its own file — true parallel I/O on NVMe SSD.
 
     Args:
         args: (chrom_num, vcf_path, maf_threshold, max_variants)
 
     Returns:
         (chrom_num, gene_matrices, sample_ids)
-        gene_matrices: {gene_name: (n_samples, n_variants) ndarray}
     """
     chrom_num, vcf_path, maf_threshold, max_variants = args
-
-    try:
-        from cyvcf2 import VCF
-    except ImportError:
-        logger.error("cyvcf2 required for VCF parsing. Install: pip install cyvcf2")
-        return chrom_num, {}, []
+    from cyvcf2 import VCF
 
     if not Path(vcf_path).exists():
         logger.warning(f"[chr{chrom_num}] VCF not found: {vcf_path}")
         return chrom_num, {}, []
 
     t0 = time.time()
-    logger.info(f"[chr{chrom_num}] Processing...")
 
     try:
         vcf = VCF(vcf_path)
         sample_ids = list(vcf.samples)
-        n_samples = len(sample_ids)
     except Exception as e:
         logger.error(f"[chr{chrom_num}] VCF open failed: {e}")
         return chrom_num, {}, []
 
-    # Collect variants by 100kb windows (proxy genes)
     window_size = 100_000
     gene_variants: dict[str, list[np.ndarray]] = {}
-
-    region = str(chrom_num)
-    try:
-        variant_iter = vcf(region)
-    except Exception:
-        variant_iter = vcf
-
     n_variants = 0
-    for variant in variant_iter:
+
+    for v in vcf:
         try:
             # Biallelic SNP filter
-            if len(variant.ALT) != 1:
+            if len(v.ALT) != 1:
                 continue
-            if len(variant.REF) != 1 or len(variant.ALT[0]) != 1:
+            if len(v.REF) != 1 or len(v.ALT[0]) != 1:
                 continue
 
-            # Extract dosage (0, 1, 2)
-            gt = variant.gt_types  # 0=hom_ref, 1=het, 2=unknown, 3=hom_alt
-            dosage = gt.copy().astype(np.float32)
-            dosage[gt == 3] = 2.0     # hom_alt
-            dosage[gt == 2] = np.nan  # missing
+            # gt_types: numpy int32 array (C-level, no Python loop)
+            # 0=hom_ref, 1=het, 2=unknown, 3=hom_alt
+            gt = v.gt_types
+            dosage = gt.astype(np.float32)
+            dosage[gt == 3] = 2.0     # hom_alt → 2
+            dosage[gt == 2] = np.nan  # unknown → NaN
 
             if np.all(np.isnan(dosage)):
                 continue
 
             # MAF filter
             valid = ~np.isnan(dosage)
-            if valid.sum() == 0:
+            n_valid = valid.sum()
+            if n_valid == 0:
                 continue
             af = np.nanmean(dosage[valid]) / 2.0
             maf = min(af, 1.0 - af)
             if maf < maf_threshold:
                 continue
 
-            # Mean imputation for missing values
+            # Mean imputation
             dosage[np.isnan(dosage)] = np.nanmean(dosage[valid])
 
-            # Assign to gene window
-            pos = variant.POS
-            window_start = (pos // window_size) * window_size
+            # 100kb window
+            window_start = (v.POS // window_size) * window_size
             gene_name = f"chr{chrom_num}:{window_start}"
 
             if gene_name not in gene_variants:
                 gene_variants[gene_name] = []
-
             if len(gene_variants[gene_name]) < max_variants:
                 gene_variants[gene_name].append(dosage)
 
             n_variants += 1
 
         except Exception:
-            continue  # Skip individual variant errors
+            continue
 
     vcf.close()
 
-    # Convert to matrices
+    # Convert to matrices (>= 2 variants for PCA)
     gene_matrices = {}
     for gene_name, variants in gene_variants.items():
-        if len(variants) >= 2:  # Need at least 2 variants for PCA
-            matrix = np.stack(variants, axis=1)  # (n_samples, n_variants)
-            gene_matrices[gene_name] = matrix
+        if len(variants) >= 2:
+            gene_matrices[gene_name] = np.stack(variants, axis=1)
 
     elapsed = time.time() - t0
     logger.info(
-        f"[chr{chrom_num}] Done: {n_variants:,} variants, "
+        f"[chr{chrom_num}] {n_variants:,} variants, "
         f"{len(gene_matrices)} genes ({elapsed:.0f}s)"
     )
-
     return chrom_num, gene_matrices, sample_ids
 
 
 def parallel_vcf_processing(
-    vcf_path: str,
+    vcf_dir: str = VCF_DIR,
+    max_workers: int = 12,
 ) -> tuple[dict[str, np.ndarray], list[str]]:
-    """Parse all 22 chromosomes in parallel.
+    """Parse 22 per-chromosome VCF files in parallel with bounded memory.
+
+    Uses imap_unordered: as each chromosome finishes, its result is saved
+    to a temp pickle on disk and freed from memory. This limits peak RAM
+    to ~(max_workers) chromosome results, not all 22 at once.
+
+    After all chromosomes are done, results are loaded back and merged.
+
+    Args:
+        vcf_dir: Directory with per-chromosome VCF files.
+        max_workers: Max parallel workers (default 6 to keep RAM ~25GB).
 
     Returns:
         gene_matrices: {gene_name: (n_samples, n_variants)} dict
         sample_ids: list of sample IDs
     """
-    logger.info(f"VCF parallel parsing: {N_WORKERS} workers, {len(CHROMOSOMES)} chromosomes")
+    tasks = []
+    for chrom in CHROMOSOMES:
+        vcf_path = os.path.join(vcf_dir, VCF_PATTERN.format(chrom=chrom))
+        tasks.append((chrom, vcf_path, MAF_THRESHOLD, MAX_VARIANTS_PER_GENE))
 
-    tasks = [
-        (chrom, vcf_path, MAF_THRESHOLD, MAX_VARIANTS_PER_GENE)
-        for chrom in CHROMOSOMES
-    ]
+    n_workers = min(max_workers, len(tasks))
+    logger.info(
+        f"VCF parallel parsing: {n_workers} workers, {len(tasks)} chromosomes "
+        f"(stream-to-disk to bound memory)"
+    )
 
-    all_gene_matrices = {}
+    # Temp dir for per-chromosome results
+    tmp_dir = os.path.join(PROCESSED_DIR, ".vcf_parse_tmp")
+    os.makedirs(tmp_dir, exist_ok=True)
+
     sample_ids = []
+    completed = 0
 
-    with Pool(N_WORKERS) as pool:
-        results = pool.map(process_chromosome, tasks)
+    with Pool(n_workers) as pool:
+        for chrom_num, gene_matrices, sids in pool.imap_unordered(
+            _process_one_chromosome, tasks
+        ):
+            completed += 1
+            # Save to disk immediately, free memory
+            tmp_path = os.path.join(tmp_dir, f"chr{chrom_num}.pkl")
+            with open(tmp_path, "wb") as f:
+                pickle.dump(gene_matrices, f, protocol=pickle.HIGHEST_PROTOCOL)
 
-    for chrom_num, gene_matrices, sids in sorted(results, key=lambda x: x[0]):
-        all_gene_matrices.update(gene_matrices)
-        if not sample_ids and sids:
-            sample_ids = sids
+            n_genes = len(gene_matrices)
+            del gene_matrices  # free RAM
+
+            if not sample_ids and sids:
+                sample_ids = sids
+
+            logger.info(f"  [{completed}/22] chr{chrom_num} saved ({n_genes} genes)")
+
+    # Load back and merge
+    logger.info("Merging chromosome results from disk...")
+    all_gene_matrices = {}
+    for chrom in CHROMOSOMES:
+        tmp_path = os.path.join(tmp_dir, f"chr{chrom}.pkl")
+        if os.path.exists(tmp_path):
+            with open(tmp_path, "rb") as f:
+                chrom_genes = pickle.load(f)
+            all_gene_matrices.update(chrom_genes)
+            del chrom_genes
+            os.remove(tmp_path)
+
+    # Cleanup
+    try:
+        os.rmdir(tmp_dir)
+    except OSError:
+        pass
 
     logger.info(
-        f"VCF parsing complete: {len(all_gene_matrices)} total genes, "
+        f"VCF parsing complete: {len(all_gene_matrices)} genes, "
         f"{len(sample_ids)} samples"
     )
     return all_gene_matrices, sample_ids
@@ -817,17 +863,21 @@ def split_dataset_stratified(
     tokenized: np.ndarray,
     labels: dict,
     sample_ids: list[str],
+    val_ratio: float = 0.1,
     test_ratio: float = 0.1,
     seed: int = PREPROCESS_SEED,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, dict]:
-    """Population-stratified train/test split.
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, dict]:
+    """Population-stratified train/val/test split.
+
+    Split: train 80% / val 10% / test 10%
+    - val: used during training for best model selection (val_reconstruction_error)
+    - test: held out, used only for final evaluation metrics
 
     Returns:
-        x_train, x_test, y_train, y_test, split_manifest
+        x_train, x_val, x_test, y_train, y_val, y_test, split_manifest
     """
     pop_labels = labels["pop_labels"]
 
-    # Ensure sample alignment
     if len(tokenized) != len(pop_labels):
         raise ValueError(
             f"Sample count mismatch: tokenized={len(tokenized)}, "
@@ -835,7 +885,9 @@ def split_dataset_stratified(
         )
 
     idx = np.arange(len(tokenized))
-    train_idx, test_idx = train_test_split(
+
+    # First split: train+val vs test
+    trainval_idx, test_idx = train_test_split(
         idx,
         test_size=test_ratio,
         random_state=seed,
@@ -843,34 +895,50 @@ def split_dataset_stratified(
         stratify=pop_labels,
     )
 
+    # Second split: train vs val (from trainval)
+    trainval_labels = pop_labels[trainval_idx]
+    relative_val_ratio = val_ratio / (1.0 - test_ratio)  # 0.1/0.9 ≈ 0.111
+    train_idx, val_idx = train_test_split(
+        trainval_idx,
+        test_size=relative_val_ratio,
+        random_state=seed,
+        shuffle=True,
+        stratify=trainval_labels,
+    )
+
     x_train = tokenized[train_idx]
+    x_val = tokenized[val_idx]
     x_test = tokenized[test_idx]
     y_train = pop_labels[train_idx]
+    y_val = pop_labels[val_idx]
     y_test = pop_labels[test_idx]
 
-    # Build manifest
+    def _pop_counts(y):
+        return {
+            str(k): int(v)
+            for k, v in pd.Series(y).value_counts().sort_index().items()
+        }
+
+    def _sample_ids_for(indices):
+        return [sample_ids[i] for i in indices] if sample_ids else []
+
     split_manifest = {
         "seed": seed,
+        "val_ratio": val_ratio,
         "test_ratio": test_ratio,
         "n_total": int(len(idx)),
         "n_train": int(len(train_idx)),
+        "n_val": int(len(val_idx)),
         "n_test": int(len(test_idx)),
         "train_indices": train_idx.tolist(),
+        "val_indices": val_idx.tolist(),
         "test_indices": test_idx.tolist(),
-        "train_sample_ids": (
-            [sample_ids[i] for i in train_idx] if sample_ids else []
-        ),
-        "test_sample_ids": (
-            [sample_ids[i] for i in test_idx] if sample_ids else []
-        ),
-        "train_pop_counts": {
-            str(k): int(v)
-            for k, v in pd.Series(y_train).value_counts().sort_index().items()
-        },
-        "test_pop_counts": {
-            str(k): int(v)
-            for k, v in pd.Series(y_test).value_counts().sort_index().items()
-        },
+        "train_sample_ids": _sample_ids_for(train_idx),
+        "val_sample_ids": _sample_ids_for(val_idx),
+        "test_sample_ids": _sample_ids_for(test_idx),
+        "train_pop_counts": _pop_counts(y_train),
+        "val_pop_counts": _pop_counts(y_val),
+        "test_pop_counts": _pop_counts(y_test),
     }
 
     manifest_path = os.path.join(PROCESSED_DIR, "split_manifest.json")
@@ -878,12 +946,12 @@ def split_dataset_stratified(
         json.dump(split_manifest, f, indent=2)
 
     logger.info(
-        f"Split: train={len(train_idx)}, test={len(test_idx)} "
-        f"(ratio={test_ratio}, seed={seed})"
+        f"Split: train={len(train_idx)}, val={len(val_idx)}, test={len(test_idx)} "
+        f"(ratio={1-val_ratio-test_ratio:.0%}/{val_ratio:.0%}/{test_ratio:.0%}, seed={seed})"
     )
     logger.info(f"Manifest saved to {manifest_path}")
 
-    return x_train, x_test, y_train, y_test, split_manifest
+    return x_train, x_val, x_test, y_train, y_val, y_test, split_manifest
 
 
 # ───────────────────────────────────────────────────────────────────
@@ -917,6 +985,7 @@ def save_all(
 
     # Pad to gene_size
     x_train_padded = pad_to_gene_size(x_train, gene_size)
+    x_val_padded = pad_to_gene_size(x_val, gene_size)
     x_test_padded = pad_to_gene_size(x_test, gene_size)
 
     # train_data.pkl: (x_data, y_labels) tuple
@@ -924,6 +993,12 @@ def save_all(
     with open(train_path, "wb") as f:
         pickle.dump((x_train_padded, y_train), f, protocol=4)
     logger.info(f"Train data: {train_path} {x_train_padded.shape}")
+
+    # val_data.pkl: (x_data, y_labels) tuple
+    val_path = os.path.join(PROCESSED_DIR, "val_data.pkl")
+    with open(val_path, "wb") as f:
+        pickle.dump((x_val_padded, y_val), f, protocol=4)
+    logger.info(f"Val data: {val_path} {x_val_padded.shape}")
 
     # test_data.pkl: (x_data, y_labels) tuple
     test_path = os.path.join(PROCESSED_DIR, "test_data.pkl")
@@ -953,7 +1028,7 @@ def main() -> None:
     validate_input_files()
 
     # Step 1: Parallel VCF parsing (22 chromosomes)
-    gene_matrices, sample_ids = parallel_vcf_processing(VCF_PATH)
+    gene_matrices, sample_ids = parallel_vcf_processing(VCF_DIR)
 
     if not gene_matrices:
         logger.error("No gene matrices extracted. Aborting.")
