@@ -25,6 +25,7 @@ import json
 import logging
 import os
 import pickle
+import sys
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
@@ -32,6 +33,11 @@ from typing import Any
 
 import numpy as np
 import torch
+
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_PROJECT_ROOT = os.path.abspath(os.path.join(_SCRIPT_DIR, "..", ".."))
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
 
 from src.evaluation.metrics import (
     af_correlation,
@@ -58,15 +64,56 @@ logger = logging.getLogger(__name__)
 # Data loading
 # ───────────────────────────────────────────────────────────────────
 
+def _denormalize_real_data(
+    data: np.ndarray,
+    stats_path: str,
+) -> np.ndarray:
+    """Denormalize real data back to original scale for fair comparison.
+
+    Args:
+        data: (N, gene_size, K) or (N, K, gene_size) normalized data.
+        stats_path: Path to normalization_stats.pkl.
+
+    Returns:
+        Denormalized array with same shape.
+    """
+    if not Path(stats_path).exists():
+        return data
+
+    with open(stats_path, "rb") as f:
+        stats = pickle.load(f)
+
+    xmean = stats["mean"]  # (gene_size_stats, K)
+    xstd = stats["std"]
+
+    # Data is stored as (N, gene_size, K)
+    gene_dim = data.shape[1]
+    stats_dim = xmean.shape[0]
+
+    if stats_dim < gene_dim:
+        pad_len = gene_dim - stats_dim
+        n_k = xmean.shape[1]
+        xmean = np.concatenate([xmean, np.zeros((pad_len, n_k), dtype=xmean.dtype)], axis=0)
+        xstd = np.concatenate([xstd, np.ones((pad_len, n_k), dtype=xstd.dtype)], axis=0)
+
+    return data * xstd + xmean
+
+
 def load_real_data(
     test_path: str,
     train_path: str | None = None,
+    normalization_stats_path: str | None = None,
 ) -> dict[str, np.ndarray]:
     """Load real test (and optionally train) data from pickle files.
+
+    If normalization_stats_path is provided, denormalizes the data so that
+    real and synthetic samples are compared in the same (original) scale.
 
     Args:
         test_path: Path to test_data.pkl containing (x_test, y_test).
         train_path: Optional path to train_data.pkl.
+        normalization_stats_path: Path to normalization_stats.pkl for
+            denormalization. If None, data is returned as-is (normalized).
 
     Returns:
         Dict with 'test_x', 'test_y', and optionally 'train_x', 'train_y'.
@@ -74,15 +121,22 @@ def load_real_data(
     with open(test_path, "rb") as f:
         x_test, y_test = pickle.load(f)
 
+    x_test = np.asarray(x_test, dtype=np.float32)
+    if normalization_stats_path:
+        x_test = _denormalize_real_data(x_test, normalization_stats_path)
+
     result = {
-        "test_x": np.asarray(x_test, dtype=np.float32),
+        "test_x": x_test,
         "test_y": np.asarray(y_test, dtype=np.int64),
     }
 
     if train_path and Path(train_path).exists():
         with open(train_path, "rb") as f:
             x_train, y_train = pickle.load(f)
-        result["train_x"] = np.asarray(x_train, dtype=np.float32)
+        x_train = np.asarray(x_train, dtype=np.float32)
+        if normalization_stats_path:
+            x_train = _denormalize_real_data(x_train, normalization_stats_path)
+        result["train_x"] = x_train
         result["train_y"] = np.asarray(y_train, dtype=np.int64)
 
     return result
@@ -499,9 +553,10 @@ def main() -> None:
         save_dir = config.get("save_dir", "outputs/default")
         args.output_dir = os.path.join(save_dir, "evaluation")
 
-    # Load data
+    # Load data (denormalize real data to match denormalized synthetic samples)
+    normalization_stats_path = "data/processed/normalization_stats.pkl"
     logger.info("Loading real data...")
-    real_data = load_real_data(real_test_path, real_train_path)
+    real_data = load_real_data(real_test_path, real_train_path, normalization_stats_path)
 
     logger.info("Loading synthetic data...")
     syn_x, syn_y = load_synthetic_data(args.syn_dir)

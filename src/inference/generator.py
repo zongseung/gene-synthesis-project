@@ -26,12 +26,18 @@ import json
 import logging
 import os
 import pickle
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
 
 import numpy as np
 import torch
+
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_PROJECT_ROOT = os.path.abspath(os.path.join(_SCRIPT_DIR, "..", ".."))
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
 
 from src.models import GaussianDiffusion, HybridCNNDiTFiLM
 from src.utils.config import load_config
@@ -61,16 +67,30 @@ def denormalize_samples(
         (B, K, gene_size) float32 denormalized tensor.
 
     Broadcasting:
-        stats['mean'] and stats['std'] are (gene_size, K).
+        stats['mean'] and stats['std'] are (gene_size_stats, K).
         Model output is (B, K, gene_size).
-        Transpose stats to (K, gene_size), unsqueeze for batch dim.
+        If gene_size_stats < gene_size (stats from unpadded data),
+        pad stats with mean=0, std=1 for the padded region.
     """
     with open(stats_path, "rb") as f:
         stats = pickle.load(f)
 
+    mean_np = stats["mean"]  # (gene_size_stats, K)
+    std_np = stats["std"]    # (gene_size_stats, K)
+
+    gene_size = samples.shape[2]
+    stats_gene_size = mean_np.shape[0]
+
+    # Pad stats if they were computed on unpadded data
+    if stats_gene_size < gene_size:
+        pad_len = gene_size - stats_gene_size
+        n_k = mean_np.shape[1]
+        mean_np = np.concatenate([mean_np, np.zeros((pad_len, n_k), dtype=mean_np.dtype)], axis=0)
+        std_np = np.concatenate([std_np, np.ones((pad_len, n_k), dtype=std_np.dtype)], axis=0)
+
     # (gene_size, K) -> (K, gene_size) -> (1, K, gene_size)
-    xmean = torch.tensor(stats["mean"].T, dtype=torch.float32).unsqueeze(0)
-    xstd = torch.tensor(stats["std"].T, dtype=torch.float32).unsqueeze(0)
+    xmean = torch.tensor(mean_np.T, dtype=torch.float32).unsqueeze(0)
+    xstd = torch.tensor(std_np.T, dtype=torch.float32).unsqueeze(0)
 
     return samples * xstd + xmean
 
@@ -143,6 +163,9 @@ def generate_samples(
     zero_mask_path = data_cfg.get("zero_mask_path", "data/processed/zero_mask.pt")
     if Path(zero_mask_path).exists():
         zero_mask = torch.load(zero_mask_path, map_location=device, weights_only=True)
+        # zero_mask saved as (gene_size, K), model expects (K, gene_size)
+        if zero_mask.ndim == 2 and zero_mask.shape[1] < zero_mask.shape[0]:
+            zero_mask = zero_mask.T
     else:
         zero_mask = None
         logger.warning(f"Zero mask not found at {zero_mask_path}")
@@ -224,12 +247,11 @@ def generate_samples(
 
             # Enforce zeros on final output
             if zero_mask is not None and data_cfg.get("enforce_zeros", True):
-                # zero_mask is (gene_size, K), need (K, gene_size) for model layout
+                # zero_mask already transposed to (K, gene_size) above
                 zm = zero_mask.cpu()
                 if zm.shape[0] != num_channels:
                     zm = zm.T
-                not_zero = ~zm.unsqueeze(0)  # (1, K, gene_size)
-                samples = samples * not_zero.float()
+                samples = samples * (~zm).unsqueeze(0).float()
 
             # Save individual samples
             for i in range(current_batch):

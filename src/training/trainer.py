@@ -276,6 +276,9 @@ def train(config: dict) -> None:
     zero_mask_path = data_cfg.get("zero_mask_path", "data/processed/zero_mask.pt")
     if Path(zero_mask_path).exists():
         zero_mask = torch.load(zero_mask_path, map_location=device, weights_only=True)
+        # zero_mask saved as (gene_size, K), model expects (K, gene_size)
+        if zero_mask.ndim == 2 and zero_mask.shape[1] < zero_mask.shape[0]:
+            zero_mask = zero_mask.T
     else:
         zero_mask = None
         logger.warning(f"Zero mask not found at {zero_mask_path}")

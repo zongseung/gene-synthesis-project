@@ -42,7 +42,7 @@ from src.preprocessing.config import (
     VCF_TBI_PATH,
 )
 from src.preprocessing.gene_annotation import load_refgene
-from src.preprocessing.labels import create_hierarchical_labels, save_all, split_dataset_stratified
+from src.preprocessing.labels import create_hierarchical_labels, pad_to_gene_size, save_all, split_dataset_stratified
 from src.preprocessing.pca import (
     analyze_pca_information_loss,
     grid_search_optimal_pca,
@@ -156,16 +156,22 @@ def main() -> None:
     del tokenized
     gc.collect()
 
-    # Step 6: Normalize
+    # Step 6: Pad to aligned gene_size BEFORE normalization
+    #   so that normalization stats have the same shape as model I/O
+    gene_size = compute_gene_size(n_genes)
+    x_train = pad_to_gene_size(x_train, gene_size)
+    x_val = pad_to_gene_size(x_val, gene_size)
+    x_test = pad_to_gene_size(x_test, gene_size)
+
+    # Step 7: Normalize (stats now have shape (gene_size, K) = (24576, K))
     x_train_norm, x_val_norm, x_test_norm, _ = normalize_data(x_train, x_val, x_test)
     del x_train, x_val, x_test
     gc.collect()
 
-    # Step 7: Zero mask
-    gene_size = compute_gene_size(n_genes)
+    # Step 8: Zero mask
     generate_zero_mask(x_train_norm, gene_size, optimal_k)
 
-    # Step 8: Save
+    # Step 9: Save (already padded, save_all will skip re-padding)
     save_all(
         x_train_norm, x_val_norm, x_test_norm,
         y_train, y_val, y_test, features_df, gene_size,
