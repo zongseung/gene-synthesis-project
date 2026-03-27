@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split
 
-from .config import PREPROCESS_SEED, PROCESSED_DIR
+from src.preprocessing.config import PREPROCESS_SEED, PROCESSED_DIR
 
 logger = logging.getLogger(__name__)
 

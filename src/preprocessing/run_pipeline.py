@@ -14,13 +14,20 @@ from __future__ import annotations
 
 import gc
 import logging
+import os
 import sys
 import time
 from pathlib import Path
 
+# Allow direct execution: python src/preprocessing/run_pipeline.py
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_PROJECT_ROOT = os.path.abspath(os.path.join(_SCRIPT_DIR, "..", ".."))
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
+
 import pandas as pd
 
-from .config import (
+from src.preprocessing.config import (
     MAF_THRESHOLD,
     MAX_VARIANTS_PER_GENE,
     MARGINAL_GAIN_DECAY_RATIO,
@@ -30,17 +37,19 @@ from .config import (
     PCA_SAMPLE_GENES,
     PREPROCESS_SEED,
     PROCESSED_DIR,
+    REFGENE_PATH,
     VCF_PATH,
     VCF_TBI_PATH,
 )
-from .labels import create_hierarchical_labels, save_all, split_dataset_stratified
-from .pca import (
+from src.preprocessing.gene_annotation import load_refgene
+from src.preprocessing.labels import create_hierarchical_labels, save_all, split_dataset_stratified
+from src.preprocessing.pca import (
     analyze_pca_information_loss,
     grid_search_optimal_pca,
     stream_vcf_and_pca,
 )
-from .tokenizer import compute_gene_size, generate_zero_mask, normalize_data, tokenize_dataset
-from .vcf_parser import process_one_chromosome
+from src.preprocessing.tokenizer import compute_gene_size, generate_zero_mask, normalize_data, tokenize_dataset
+from src.preprocessing.vcf_parser import process_one_chromosome
 
 logging.basicConfig(
     level=logging.INFO,
@@ -60,8 +69,10 @@ def validate_input_files() -> None:
         )
     if not Path(PANEL_PATH).exists():
         raise FileNotFoundError(f"Panel file not found: {PANEL_PATH}")
+    if not Path(REFGENE_PATH).exists():
+        raise FileNotFoundError(f"RefGene annotation not found: {REFGENE_PATH}")
 
-    logger.info(f"Input validated: {VCF_PATH} + .tbi + panel")
+    logger.info(f"Input validated: {VCF_PATH} + .tbi + panel + refGene")
 
 
 def main() -> None:
@@ -74,6 +85,9 @@ def main() -> None:
     # Step 0: Validate
     validate_input_files()
 
+    # Load gene annotations (RefGene)
+    gene_coords = load_refgene(REFGENE_PATH)
+
     # Step 1 (Pass 1): PCA grid search on chr1,11,22
     grid_search_chroms = [1, 11, 22]
     logger.info(f"Pass 1: PCA grid search on chr{grid_search_chroms}")
@@ -81,7 +95,8 @@ def main() -> None:
     subset_genes = {}
     sample_ids = []
     for chrom in grid_search_chroms:
-        args = (chrom, VCF_PATH, MAF_THRESHOLD, MAX_VARIANTS_PER_GENE)
+        chrom_genes = gene_coords.get(str(chrom), [])
+        args = (chrom, VCF_PATH, MAF_THRESHOLD, MAX_VARIANTS_PER_GENE, chrom_genes)
         _, gene_matrices, sids = process_one_chromosome(args)
         subset_genes.update(gene_matrices)
         del gene_matrices
@@ -101,7 +116,7 @@ def main() -> None:
     # Step 2 (Pass 2): Stream all 22 chr → PCA
     logger.info(f"Pass 2: Full VCF→PCA streaming with K={optimal_k}")
     all_pca_features, sample_ids, pca_stats = stream_vcf_and_pca(
-        VCF_PATH, optimal_k=optimal_k,
+        VCF_PATH, optimal_k=optimal_k, gene_coords=gene_coords,
     )
     gc.collect()
 

@@ -1,5 +1,5 @@
 """Allow running as: python -m src.preprocessing"""
 
-from .run_pipeline import main
+from src.preprocessing.run_pipeline import main
 
 main()

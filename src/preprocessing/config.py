@@ -17,6 +17,11 @@ VCF_TBI_PATH = VCF_PATH + ".tbi"
 PANEL_PATH = os.path.join(
     DATA_DIR, "integrated_call_samples_v3.20130502.ALL.panel"
 )
+REFGENE_PATH = os.path.join(DATA_DIR, "refGene.txt.gz")
+
+# Per-chromosome VCF files (for Rust parser — avoids full-file scan)
+PER_CHROM_VCF_DIR = os.path.expanduser("~/GeneDiffusion")
+PER_CHROM_VCF_PATTERN = "ALL.chr{chrom}.phase3_shapeit2_mvncall_integrated_v5b.20130502.genotypes.vcf.gz"
 
 CHROMOSOMES = list(range(1, 23))
 PREPROCESS_SEED = 20260327

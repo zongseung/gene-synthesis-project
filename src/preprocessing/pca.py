@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 from sklearn.decomposition import PCA
 
-from .config import (
+from src.preprocessing.config import (
     CHROMOSOMES,
     MAF_THRESHOLD,
     MAX_VARIANTS_PER_GENE,
@@ -22,7 +22,7 @@ from .config import (
     PCA_SAMPLE_GENES,
     PROCESSED_DIR,
 )
-from .vcf_parser import process_one_chromosome
+from src.preprocessing.vcf_parser import process_one_chromosome
 
 logger = logging.getLogger(__name__)
 
@@ -202,12 +202,19 @@ def grid_search_optimal_pca(
 def stream_vcf_and_pca(
     vcf_path: str,
     optimal_k: int,
+    gene_coords: dict[str, list[dict]],
     chroms: list[int] | None = None,
 ) -> tuple[dict[str, np.ndarray], list[str], pd.DataFrame]:
     """Stream chromosomes sequentially: parse → PCA → free variants.
 
     OOM-safe: only one chromosome's variant data is in memory at a time.
     Peak memory ≈ one chromosome's variants (~3-5GB for chr1) + PCA features.
+
+    Args:
+        vcf_path: Path to merged VCF with tabix index.
+        optimal_k: Number of PCA components.
+        gene_coords: Per-chromosome gene boundaries from load_refgene().
+        chroms: Chromosomes to process (default: all 22).
     """
     if chroms is None:
         chroms = CHROMOSOMES
@@ -222,7 +229,12 @@ def stream_vcf_and_pca(
     )
 
     for i, chrom_num in enumerate(chroms):
-        args = (chrom_num, vcf_path, MAF_THRESHOLD, MAX_VARIANTS_PER_GENE)
+        chrom_genes = gene_coords.get(str(chrom_num), [])
+        if not chrom_genes:
+            logger.warning(f"[chr{chrom_num}] No gene annotations found, skipping")
+            continue
+
+        args = (chrom_num, vcf_path, MAF_THRESHOLD, MAX_VARIANTS_PER_GENE, chrom_genes)
         _, gene_matrices, sids = process_one_chromosome(args)
 
         if not sample_ids and sids:

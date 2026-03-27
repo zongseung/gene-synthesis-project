@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 import torch
 
-from .config import GENE_SIZE_ALIGNMENT, PROCESSED_DIR
+from src.preprocessing.config import GENE_SIZE_ALIGNMENT, PROCESSED_DIR
 
 logger = logging.getLogger(__name__)
 
