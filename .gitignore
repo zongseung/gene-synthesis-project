@@ -40,6 +40,10 @@ wandb/
 # uv
 uv.lock
 
+# Rust
+vcf_parser_rs/target/
+vcf_parser_rs/.venv/
+
 # OS
 .DS_Store
 Thumbs.db
