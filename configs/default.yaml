@@ -1,6 +1,6 @@
 # ── 데이터 ──
 data:
-  gene_size: 26624
+  gene_size: 24576
   num_channels: 8
   num_classes: 26
   num_superpops: 5
@@ -45,9 +45,9 @@ diffusion:
 training:
   epochs: 100                    # 조기종료 없이 전체 실행
   batch_size: 32
-  lr: 2e-4
+  lr: 0.0002
   seed: 20260327
-  weight_decay: 1e-4
+  weight_decay: 0.0001
   optimizer: "adamw"
   gradient_clipping: 1.0
   warmup_steps: 100
