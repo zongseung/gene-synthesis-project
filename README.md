@@ -92,7 +92,7 @@ FiLM: output = γ · input + β
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                        HybridCNNDiTFiLM (~6.8M params)                      │
 │                                                                             │
-│  Input: (B, K, 26624) + pop_label (B,) + timestep (B,)                     │
+│  Input: (B, K, 24576) + pop_label (B,) + timestep (B,)                     │
 │  ─────────────────────────────────────────────────────────                  │
 │                                                                             │
 │  ┌──────────────┐   ┌───────────────────────┐   ┌──────────────────────┐   │
@@ -111,16 +111,16 @@ FiLM: output = γ · input + β
 │  ┌─────────────────────────────────────────────────────────────────────┐    │
 │  │                    CNN Stem Encoder + FiLM                          │    │
 │  │                                                                     │    │
-│  │  (B, K, 26624) ──FiLMConv──► (B, C, 26624)  ─── skip₁             │    │
-│  │                  ──FiLMConv+↓2──► (B, C, 13312)  ─── skip₂        │    │
-│  │                  ──FiLMConv+↓2──► (B, 2C, 6656)  ─── skip₃        │    │
-│  │                  ──FiLMConv+↓2──► (B, 4C, 3328)                    │    │
+│  │  (B, K, 24576) ──FiLMConv──► (B, C, 24576)  ─── skip₁             │    │
+│  │                  ──FiLMConv+↓2──► (B, C, 12288)  ─── skip₂        │    │
+│  │                  ──FiLMConv+↓2──► (B, 2C, 6144)  ─── skip₃        │    │
+│  │                  ──FiLMConv+↓2──► (B, 4C, 3072)                    │    │
 │  └──────────────────────────┬──────────────────────────────────────────┘    │
 │                             │                                               │
 │  ┌──────────────────────────▼──────────────────────────────────────────┐    │
 │  │                    Patchify + Position Embedding                     │    │
 │  │                                                                     │    │
-│  │  (B, 4C, 3328) → Conv1d(kernel=16, stride=16) → (B, 208, d_model) │    │
+│  │  (B, 4C, 3072) → Conv1d(kernel=16, stride=16) → (B, 192, d_model) │    │
 │  │  + learnable positional embedding                                   │    │
 │  └──────────────────────────┬──────────────────────────────────────────┘    │
 │                             │                                               │
@@ -144,23 +144,23 @@ FiLM: output = γ · input + β
 │  ┌──────────────────────────▼──────────────────────────────────────────┐    │
 │  │                    Un-Patchify                                       │    │
 │  │                                                                     │    │
-│  │  (B, 208, d_model) → Linear → reshape → (B, 4C, 3328)             │    │
+│  │  (B, 192, d_model) → Linear → reshape → (B, 4C, 3072)             │    │
 │  └──────────────────────────┬──────────────────────────────────────────┘    │
 │                             │                                               │
 │  ┌──────────────────────────▼──────────────────────────────────────────┐    │
 │  │                    CNN Decoder + FiLM + Skip Connections             │    │
 │  │                                                                     │    │
-│  │  (B, 4C, 3328)  ──FiLMDeconv+↑2+skip₃──► (B, 2C, 6656)           │    │
-│  │                  ──FiLMDeconv+↑2+skip₂──► (B, C, 13312)           │    │
-│  │                  ──FiLMDeconv+↑2+skip₁──► (B, C, 26624)           │    │
-│  │                  ──Conv1d(1×1)──► (B, K, 26624)                    │    │
+│  │  (B, 4C, 3072)  ──FiLMDeconv+↑2+skip₃──► (B, 2C, 6144)           │    │
+│  │                  ──FiLMDeconv+↑2+skip₂──► (B, C, 12288)           │    │
+│  │                  ──FiLMDeconv+↑2+skip₁──► (B, C, 24576)           │    │
+│  │                  ──Conv1d(1×1)──► (B, K, 24576)                    │    │
 │  └──────────────────────────┬──────────────────────────────────────────┘    │
 │                             │                                               │
 │  ┌──────────────────────────▼──────────────────────────────────────────┐    │
 │  │  enforce_zeros: output × (~zero_mask)                               │    │
 │  └──────────────────────────┬──────────────────────────────────────────┘    │
 │                             │                                               │
-│  Output: predicted noise ε (B, K, 26624)                                   │
+│  Output: predicted noise ε (B, K, 24576)                                   │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -237,6 +237,7 @@ Forward (학습):
 Reverse (생성):
   xₜ ~ N(0,1) ──DDIM 50 steps──► x₀ (합성 유전형)
   매 step: enforce_zeros(xₜ, zero_mask)
+  생성 후: denormalize(x₀, stats) → 원래 PCA 스케일 복원
   CFG: ε = (1+w)·ε_cond - w·ε_uncond   (w=3.0)
 
 Noise Schedule: cosine (Nichol & Dhariwal), 500 timesteps
@@ -249,7 +250,7 @@ Noise Schedule: cosine (Nichol & Dhariwal), 500 timesteps
 | Hierarchical Pop Embedding | ~0.07M | pop(26) + superpop(5) + fusion MLP |
 | Unified FiLM Generator | ~0.5M | per-block linear layers |
 | CNN Encoder (4 blocks) | ~1.2M | stride-2 downsample × 3 |
-| Patchify + Position Embedding | ~0.3M | patch_size=16, 208 tokens |
+| Patchify + Position Embedding | ~0.3M | patch_size=16, 192 tokens |
 | DiT Core (4 blocks, d=256) | ~3.2M | self-attention + FFN |
 | CNN Decoder (4 blocks) | ~1.5M | transposed conv + skip connections |
 | **Total** | **~6.8M** | bf16: ~14MB VRAM |
@@ -563,16 +564,37 @@ data/
 └── integrated_call_samples_v3.20130502.ALL.panel   (sample→pop→superpop mapping)
 ```
 
+### 전처리 파이프라인 흐름
+
+```
+OOM-safe 2-pass approach:
+
+Pass 1: chr1,11,22 파싱 → PCA grid search → 최적 K 결정 → 메모리 해제
+Pass 2: 22 chr 순차 스트리밍 → PCA 변환 → variant 즉시 해제
+Peak RAM ≈ 1 chromosome (~3-5GB for chr1) + 누적 PCA features (~2GB)
+
+전처리 순서:
+  1. VCF 파싱 (MAF >= 0.01 필터링)
+  2. Gene annotation (RefGene 기반 유전자 매핑)
+  3. PCA grid search (K 후보: [4,6,8,10,12,16], Marginal Gain Elbow)
+  4. 전체 VCF → Gene PCA 스트리밍 변환
+  5. 계층적 레이블 생성 (pop → superpop)
+  6. 토큰화 + alignment 패딩 (128 단위)
+  7. 정규화 (패딩 후 수행, stats shape = (gene_size, K))
+  8. zero_mask 생성
+  9. Stratified split (train/test) + 저장
+```
+
 ### 전처리 산출물
 
 | 파일 | Shape | 설명 |
 |------|-------|------|
 | `gene_pca_features.pkl` | DataFrame (2504, N_features) | 원본 PCA 피처 |
-| `train_data.pkl` | (x: N×26624×K, y: N) | 정규화된 학습 데이터 |
-| `test_data.pkl` | (x: N×26624×K, y: N) | 정규화된 테스트 데이터 |
-| `normalization_stats.pkl` | {mean, std}: (26624, K) fp32 | 역정규화용 통계량 |
+| `train_data.pkl` | (x: N×K×gene_size, y: N) | 패딩 → 정규화된 학습 데이터 |
+| `test_data.pkl` | (x: N×K×gene_size, y: N) | 패딩 → 정규화된 테스트 데이터 |
+| `normalization_stats.pkl` | {mean, std}: (gene_size, K) fp32 | 역정규화용 통계량 |
 | `label_hierarchy.pkl` | dict (8 fields) | pop/superpop 매핑 전체 |
-| `zero_mask.pt` | (26624, K) bool | 항상 0인 위치 마스크 |
+| `zero_mask.pt` | (gene_size, K) bool | 항상 0인 위치 마스크 |
 | `split_manifest.json` | dict | 재현성 보장용 split 기록 |
 
 ---
@@ -624,8 +646,9 @@ python src/evaluation/run_evaluation.py \
     --syn_dir outputs/default/synthetic_samples
 
 # Hyperparameter sweep (wandb)
-wandb sweep configs/sweep.yaml --project HybridGenoDiT
-wandb agent <sweep_id>
+# configs/sweep.yaml을 작성한 후 실행
+# wandb sweep configs/sweep.yaml --project HybridGenoDiT
+# wandb agent <sweep_id>
 ```
 
 ---
@@ -639,8 +662,14 @@ gene-synthesis-project/
 │
 ├── src/
 │   ├── preprocessing/
+│   │   ├── config.py               # 전처리 상수 (경로, PCA 후보, MAF 등)
+│   │   ├── vcf_parser.py           # VCF 파싱 (Rust 바인딩 지원)
+│   │   ├── gene_annotation.py      # RefGene 유전자 어노테이션
+│   │   ├── pca.py                  # Gene PCA (grid search, Marginal Gain Elbow)
+│   │   ├── tokenizer.py            # 토큰화 + alignment 패딩
+│   │   ├── labels.py               # 계층적 레이블, split, 정규화, 저장
 │   │   ├── merge_data.py           # VCF 병합 (22 chr 병렬)
-│   │   └── run_pipeline.py         # 전처리 오케스트레이터
+│   │   └── run_pipeline.py         # 전처리 오케스트레이터 (OOM-safe 2-pass)
 │   │
 │   ├── models/
 │   │   ├── hybrid_geno_dit.py      # HybridCNNDiTFiLM (전체 모델)
@@ -656,10 +685,10 @@ gene-synthesis-project/
 │   │   └── losses.py               # masked_mse, MMD, Min-SNR
 │   │
 │   ├── inference/
-│   │   └── generator.py            # EMA 로드, DDIM 생성, 역정규화
+│   │   └── generator.py            # EMA 로드, DDIM 생성, 역정규화 (stats 패딩 처리)
 │   │
 │   ├── evaluation/
-│   │   ├── run_evaluation.py       # 병렬 평가 실행기
+│   │   ├── run_evaluation.py       # 병렬 평가 실행기 (역정규화 포함)
 │   │   └── metrics.py              # 11개 지표 구현
 │   │
 │   ├── data/
@@ -717,7 +746,9 @@ Total per GPU:      ~2.1 GB  (49GB 중 4% 사용)
 | cosine schedule | Diffusion에서 linear 대비 학습 안정성 우수 |
 | DDIM 50-step | 500-step DDPM 대비 10x 가속, 품질 유지 |
 | AdaLN-Zero | α=0 초기화 → DiT가 identity로 시작 → 안정적 학습 |
-| Marginal Gain Elbow (K 선택) | 90% 절대 임계값보다 데이터 적응적 |
+| Marginal Gain Elbow (K 선택) | threshold=0.03, decay_ratio=0.5로 데이터 적응적 |
+| 패딩 → 정규화 순서 | 패딩 후 정규화하여 stats shape = (gene_size, K) 보장 |
+| 역정규화 padding 처리 | stats 크기 < gene_size일 때 자동 패딩 (mean=0, std=1) |
 | sqrt 비례 오버샘플링 | 균등(1:1)과 비례 사이의 균형 |
 | DUPI + NNAA 병행 | DUPI: 정량적 판정, NNAA: 기존 논문 비교 |
 
