@@ -277,7 +277,7 @@ def generate_samples(
         "total_samples": total_generated,
         "seed": seed,
         "oversample_minority": oversample_minority,
-        "per_population": {str(k): v for k, v in n_samples_per_pop.items()},
+        "per_population": {str(k): int(v) for k, v in n_samples_per_pop.items()},
         "config": {
             "max_timesteps": diffusion_cfg["max_timesteps"],
             "ddim_steps": ddim_steps,
@@ -292,7 +292,7 @@ def generate_samples(
 
     meta_path = os.path.join(output_dir, "generation_meta.json")
     with open(meta_path, "w") as f:
-        json.dump(meta, f, indent=2)
+        json.dump(meta, f, indent=2, default=lambda o: int(o) if isinstance(o, np.integer) else float(o) if isinstance(o, np.floating) else str(o))
 
     logger.info(f"Total: {total_generated} samples generated in {output_dir}")
     logger.info(f"Metadata saved to {meta_path}")

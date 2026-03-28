@@ -399,8 +399,10 @@ class GaussianDiffusion(nn.Module):
             else:
                 alpha_prev = torch.tensor(1.0, device=device)
 
-            # Predict x_0
-            pred_x0 = (x - (1 - alpha_t).sqrt() * eps) / alpha_t.sqrt()
+            # Predict x_0 (clamp alpha_t to avoid division-by-near-zero)
+            alpha_t_clamped = alpha_t.clamp(min=1e-6)
+            pred_x0 = (x - (1 - alpha_t).sqrt() * eps) / alpha_t_clamped.sqrt()
+            pred_x0 = pred_x0.clamp(-50, 50)  # training data range: [-44.7, 44.7]
             pred_x0 = self._apply_zero_mask(pred_x0)
 
             # DDIM update

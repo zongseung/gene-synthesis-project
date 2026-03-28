@@ -39,13 +39,15 @@ class HierarchicalPopulationEmbedding(nn.Module):
         if pop_to_superpop is None:
             raise ValueError("pop_to_superpop mapping is required")
 
-        mapping = torch.zeros(n_pops, dtype=torch.long)
+        # +1 for CFG null class (index = n_pops)
+        mapping = torch.zeros(n_pops + 1, dtype=torch.long)
         for pop_idx, superpop_idx in pop_to_superpop.items():
             mapping[int(pop_idx)] = int(superpop_idx)
+        mapping[n_pops] = n_superpops  # null pop -> null superpop
         self.register_buffer("pop_to_superpop_map", mapping)
 
-        self.pop_emb = nn.Embedding(n_pops, d_model)
-        self.superpop_emb = nn.Embedding(n_superpops, d_model)
+        self.pop_emb = nn.Embedding(n_pops + 1, d_model)
+        self.superpop_emb = nn.Embedding(n_superpops + 1, d_model)
 
         # Fuse concatenated pop + superpop embeddings into a single vector.
         self.fusion = nn.Sequential(

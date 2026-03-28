@@ -17,34 +17,35 @@ data:
 model:
   name: "HybridCNNDiTFiLM"
   # CNN
-  cnn_base_channels: 64
-  cnn_channel_mult: [1, 1, 2, 4]
-  cnn_kernel_size: 3
+  base_channels: 128
+  channel_mult: [1, 1, 2, 2, 4]
+  kernel_size: 3
   # DiT
-  dit_d_model: 256
-  dit_n_blocks: 4
-  dit_n_heads: 4
-  dit_mlp_ratio: 4.0
-  dit_dropout: 0.0
+  d_model: 512
+  n_dit_blocks: 12
+  n_heads: 8
+  mlp_ratio: 4.0
+  dropout: 0.0
   # Patch
   patch_size: 16
-  # FiLM
-  pop_emb_dim: 256
-  superpop_emb_dim: 256
-  film_type: "adaln_zero"
+  # Population
+  n_pops: 26
+  n_superpops: 5
 
 # ── Diffusion ──
 diffusion:
-  max_timesteps: 500
+  max_timesteps: 1000
   noise_schedule: "cosine"
   prediction_target: "epsilon"
-  guidance_type: "normal"
+  guidance_type: "classifier_free"
   guidance_weight: 3.0
+  cfg_dropout_rate: 0.1
+  sampling_timesteps: 100
 
 # ── 학습 ──
 training:
   epochs: 100                    # 조기종료 없이 전체 실행
-  batch_size: 32
+  batch_size: 16
   lr: 0.0002
   seed: 20260327
   weight_decay: 0.0001
