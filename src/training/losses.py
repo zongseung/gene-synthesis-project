@@ -104,6 +104,7 @@ def compute_training_loss(
     y: torch.Tensor,
     zero_mask: torch.Tensor | None,
     config: dict,
+    current_epoch: int = 0,
 ) -> dict[str, torch.Tensor]:
     """Orchestrate noise addition, model forward, and loss computation.
 
@@ -117,6 +118,7 @@ def compute_training_loss(
         y: (B,) population labels.
         zero_mask: (gene_size, K) bool mask or None.
         config: Nested config dict.
+        current_epoch: Zero-based epoch index for aux-loss warmup.
 
     Returns:
         Dict with 'loss' (total), 'mse' (unweighted), and optionally
@@ -132,11 +134,16 @@ def compute_training_loss(
     use_min_snr = config.get("training", {}).get("use_min_snr", True)
     cfg_training = config.get("diffusion", {}).get("guidance_type", "normal") != "normal"
 
+    # Pre-sample noise so we can reuse it for aux loss (avoid double forward)
+    noise = torch.randn_like(x)
+    x_t = diffusion.q_sample(x, t, noise)
+
     loss_dict = diffusion.p_losses(
         model=model,
         x_start=x,
         t=t,
         y=y,
+        noise=noise,
         use_min_snr=use_min_snr,
         cfg_training=cfg_training,
     )
@@ -147,25 +154,59 @@ def compute_training_loss(
         "mse": loss_dict["mse"],
     }
 
-    # Apply masked MSE if zero_mask is available and enforce_zeros is enabled
-    if zero_mask is not None and config.get("data", {}).get("enforce_zeros", True):
-        # The diffusion.p_losses already handles standard MSE.
-        # Masked MSE is used for logging / monitoring purposes.
-        # The enforce_zeros in the diffusion module handles zero masking
-        # during sampling; during training the loss weighting is sufficient.
-        pass
-
     # Auxiliary MMD loss (optional)
     aux_cfg = config.get("aux_loss", {})
     if aux_cfg.get("enabled", False):
-        lambda_mmd = aux_cfg.get("lambda_pca_dist", 0.01)
-        # MMD is computed between flattened batch features
-        real_flat = x.detach().reshape(batch_size, -1).float()
-        # We use the predicted x0 approximation for MMD
-        # This is a lightweight proxy computed from the loss dict
-        mmd_val = torch.tensor(0.0, device=device)
-        result["mmd"] = mmd_val
-        total_loss = total_loss + lambda_mmd * mmd_val
-        result["loss"] = total_loss
+        aux_type = aux_cfg.get("type", "mmd_rbf")
+        if aux_type != "mmd_rbf":
+            raise ValueError(f"Unsupported aux_loss.type: {aux_type}")
+
+        lambda_pca = aux_cfg.get("lambda_pca_dist", 0.01)
+        lambda_pop = aux_cfg.get("lambda_pop_structure", 0.0)
+        warmup_epochs = max(int(aux_cfg.get("warmup_epochs", 0)), 0)
+        if warmup_epochs > 0:
+            warmup_scale = min(1.0, float(current_epoch + 1) / warmup_epochs)
+        else:
+            warmup_scale = 1.0
+
+        # Reuse pred_noise from p_losses (same noise, same x_t, no double forward)
+        pred_noise = loss_dict["pred_noise"]
+        pred_x0 = diffusion._predict_x0_from_eps(x_t, t, pred_noise)
+        pred_x0 = pred_x0.clamp(-6, 6)
+
+        aux_total = torch.tensor(0.0, device=device, dtype=total_loss.dtype)
+
+        if lambda_pca > 0:
+            real_flat = x.reshape(batch_size, -1).float()
+            gen_flat = pred_x0.reshape(batch_size, -1).float()
+            pca_mmd = mmd_loss(real_flat, gen_flat, sigma=1.0)
+            result["mmd_pca"] = pca_mmd.detach()
+            aux_total = aux_total + lambda_pca * pca_mmd
+
+        if lambda_pop > 0:
+            unique_pops = y.unique()
+            pop_mmd_vals = []
+            for pop in unique_pops:
+                pop_mask = y == pop
+                if pop_mask.sum() < 2:
+                    continue
+                real_pop = x[pop_mask].reshape(pop_mask.sum(), -1).float()
+                gen_pop = pred_x0[pop_mask].reshape(pop_mask.sum(), -1).float()
+                pop_mmd_vals.append(mmd_loss(real_pop, gen_pop, sigma=1.0))
+
+            if pop_mmd_vals:
+                pop_mmd = torch.stack(pop_mmd_vals).mean()
+                result["mmd_pop"] = pop_mmd.detach()
+                aux_total = aux_total + lambda_pop * pop_mmd
+
+        if aux_total.item() > 0:
+            result["mmd"] = aux_total.detach()
+            result["aux_warmup_scale"] = torch.tensor(
+                warmup_scale,
+                device=device,
+                dtype=total_loss.dtype,
+            )
+            total_loss = total_loss + warmup_scale * aux_total
+            result["loss"] = total_loss
 
     return result

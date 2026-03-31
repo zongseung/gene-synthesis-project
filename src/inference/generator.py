@@ -175,6 +175,7 @@ def generate_samples(
         zero_mask=zero_mask,
         enforce_zeros=data_cfg.get("enforce_zeros", True),
         null_class=data_cfg.get("num_classes", 26),
+        schedule_type=diffusion_cfg.get("noise_schedule", "cosine"),
     ).to(device)
 
     # ── Determine samples per population ──
@@ -207,6 +208,7 @@ def generate_samples(
     guidance_type = diffusion_cfg.get("guidance_type", "normal")
     guidance_weight = diffusion_cfg.get("guidance_weight", 3.0)
     ddim_steps = diffusion_cfg.get("sampling_timesteps", 50)
+    ddim_eta = diffusion_cfg.get("ddim_eta", 0.0)
     batch_gen_size = 32  # Generate in batches for efficiency
 
     total_generated = 0
@@ -225,18 +227,17 @@ def generate_samples(
             shape = (current_batch, num_channels, gene_size)
             y = torch.full((current_batch,), pop_idx, device=device, dtype=torch.long)
 
-            # bf16 inference
-            with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                cfg_scale = guidance_weight if guidance_type == "classifier_free" else 0.0
-                samples = diffusion.sample_ddim(
-                    model=model,
-                    shape=shape,
-                    y=y,
-                    device=device,
-                    ddim_steps=ddim_steps,
-                    eta=0.0,
-                    guidance_scale=cfg_scale,
-                )
+            # fp32 inference — bf16 accumulation over 100 DDIM steps causes error
+            cfg_scale = guidance_weight if guidance_type == "classifier_free" else 0.0
+            samples = diffusion.sample_ddim(
+                model=model,
+                shape=shape,
+                y=y,
+                device=device,
+                ddim_steps=ddim_steps,
+                eta=ddim_eta,
+                guidance_scale=cfg_scale,
+            )
 
             # Convert to fp32 for post-processing and saving
             samples = samples.float().cpu()

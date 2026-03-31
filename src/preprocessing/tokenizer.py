@@ -69,9 +69,9 @@ def normalize_data(
     xstd = x_train.std(axis=0).astype(np.float32)
     xstd[xstd == 0.0] += 1
 
-    x_train_norm = ((x_train - xmean) / xstd).astype(np.float32)
-    x_val_norm = ((x_val - xmean) / xstd).astype(np.float32)
-    x_test_norm = ((x_test - xmean) / xstd).astype(np.float32)
+    x_train_norm = np.clip((x_train - xmean) / xstd, -5.0, 5.0).astype(np.float32)
+    x_val_norm = np.clip((x_val - xmean) / xstd, -5.0, 5.0).astype(np.float32)
+    x_test_norm = np.clip((x_test - xmean) / xstd, -5.0, 5.0).astype(np.float32)
 
     stats = {"mean": xmean, "std": xstd}
 

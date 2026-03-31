@@ -46,6 +46,7 @@ from src.data.dataloader import create_dataloaders
 from src.models import GaussianDiffusion, HybridCNNDiTFiLM
 from src.utils.config import load_config, parse_args_with_config
 from src.utils.ddp import cleanup_ddp, get_rank, get_world_size, is_main_process, setup_ddp
+from src.training.losses import compute_training_loss
 from src.utils.ema import EMAModel
 from src.utils.logger import ExperimentLogger
 
@@ -98,29 +99,35 @@ class CosineWarmupScheduler(torch.optim.lr_scheduler._LRScheduler):
 def validate(
     model: nn.Module,
     diffusion: GaussianDiffusion,
-    test_loader: DataLoader,
+    val_loader: DataLoader,
     device: torch.device,
     config: dict,
 ) -> float:
     """Compute validation reconstruction error.
 
     Runs the diffusion forward process at a fixed timestep and measures
-    the model's prediction error on the test set.
+    the model's prediction error on the validation set.
 
     Returns:
-        Mean reconstruction error (MSE) across the test set.
+        Mean reconstruction error (MSE) across the validation set.
     """
     model.eval()
     total_mse = 0.0
     total_samples = 0
 
-    for x, y in test_loader:
+    # Fixed timestep set for deterministic validation across epochs.
+    # Evaluate at 10 evenly-spaced timesteps covering the full schedule.
+    fixed_timesteps = torch.linspace(
+        0, diffusion.timesteps - 1, 10, dtype=torch.long, device=device
+    )
+
+    for x, y in val_loader:
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
         batch_size = x.shape[0]
 
-        # Sample random timesteps for each batch element
-        t = torch.randint(0, diffusion.timesteps, (batch_size,), device=device)
+        # Assign fixed timesteps deterministically (round-robin)
+        t = fixed_timesteps[torch.arange(batch_size, device=device) % len(fixed_timesteps)]
 
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
             loss_dict = diffusion.p_losses(
@@ -235,26 +242,26 @@ def train(config: dict) -> None:
 
     device = torch.device(f"cuda:{local_rank}")
 
-    # Seed for reproducibility
+    # Seed for reproducibility (per-rank diversification for DDP)
     seed = training_cfg.get("seed", 20260327)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-    np.random.seed(seed)
+    rank = get_rank() if not single_gpu else 0
+    torch.manual_seed(seed + rank)
+    torch.cuda.manual_seed_all(seed + rank)
+    np.random.seed(seed + rank)
 
     if is_main_process():
         logger.info(f"Training config: {config}")
         logger.info(f"Device: {device}, world_size: {world_size}")
 
     # ── Data ──
-    rank = get_rank() if not single_gpu else 0
-    train_loader, test_loader = create_dataloaders(
+    train_loader, val_loader = create_dataloaders(
         config, rank=rank, world_size=world_size
     )
 
     if is_main_process():
         logger.info(
             f"Train: {len(train_loader.dataset)} samples, "
-            f"Test: {len(test_loader.dataset)} samples"
+            f"Val: {len(val_loader.dataset)} samples"
         )
 
     # ── Load label hierarchy (pop_to_superpop mapping for model) ──
@@ -291,6 +298,7 @@ def train(config: dict) -> None:
         min_snr_gamma=diffusion_cfg.get("min_snr_gamma", 5.0),
         null_class=data_cfg.get("num_classes", 26),
         cfg_dropout_rate=diffusion_cfg.get("cfg_dropout_rate", 0.1),
+        schedule_type=diffusion_cfg.get("noise_schedule", "cosine"),
     ).to(device)
 
     # ── Optimizer (NO GradScaler for bf16) ──
@@ -348,24 +356,27 @@ def train(config: dict) -> None:
             x = x.to(device, non_blocking=True)  # (B, K, gene_size)
             y = y.to(device, non_blocking=True)   # (B,)
 
-            batch_size = x.shape[0]
-            t = torch.randint(0, diffusion.timesteps, (batch_size,), device=device)
-
             optimizer.zero_grad(set_to_none=True)
 
             # ── bf16 autocast (NO GradScaler) ──
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                loss_dict = diffusion.p_losses(
+                loss_dict = compute_training_loss(
                     model=model,
-                    x_start=x,
-                    t=t,
+                    diffusion=diffusion,
+                    x=x,
                     y=y,
-                    use_min_snr=True,
-                    cfg_training=(
-                        diffusion_cfg.get("guidance_type", "normal") != "normal"
-                    ),
+                    zero_mask=zero_mask,
+                    config=config,
+                    current_epoch=epoch,
                 )
                 loss = loss_dict["loss"]
+
+            # NaN detection before backward to avoid gradient corruption
+            if torch.isnan(loss):
+                raise RuntimeError(
+                    f"NaN loss at epoch {epoch}, step {step}. "
+                    f"lr={optimizer.param_groups[0]['lr']:.2e}"
+                )
 
             # bf16 backward -- NO scaler needed
             loss.backward()
@@ -375,14 +386,6 @@ def train(config: dict) -> None:
                 model.parameters(),
                 training_cfg.get("gradient_clipping", 1.0),
             )
-
-            # NaN detection
-            if torch.isnan(loss):
-                raise RuntimeError(
-                    f"NaN loss at epoch {epoch}, step {step}. "
-                    f"lr={optimizer.param_groups[0]['lr']:.2e}, "
-                    f"grad_norm={grad_norm:.4f}"
-                )
 
             optimizer.step()
             scheduler.step()
@@ -396,23 +399,33 @@ def train(config: dict) -> None:
 
             # Logging (rank 0 only, every 20 steps)
             if is_main_process() and step % 20 == 0:
-                wb_logger.log_metrics(
-                    global_step,
-                    {
-                        "train/loss": loss.item(),
-                        "train/mse": loss_dict["mse"].item(),
-                        "train/grad_norm": (
-                            grad_norm.item()
-                            if isinstance(grad_norm, torch.Tensor)
-                            else grad_norm
-                        ),
-                        "train/lr": scheduler.get_last_lr()[0],
-                        "train/epoch": epoch,
-                    },
-                )
+                metrics = {
+                    "train/loss": loss.item(),
+                    "train/mse": loss_dict["mse"].item(),
+                    "train/grad_norm": (
+                        grad_norm.item()
+                        if isinstance(grad_norm, torch.Tensor)
+                        else grad_norm
+                    ),
+                    "train/lr": scheduler.get_last_lr()[0],
+                    "train/epoch": epoch,
+                }
+                if "mmd" in loss_dict:
+                    metrics["train/mmd"] = loss_dict["mmd"].item()
+                if "mmd_pca" in loss_dict:
+                    metrics["train/mmd_pca"] = loss_dict["mmd_pca"].item()
+                if "mmd_pop" in loss_dict:
+                    metrics["train/mmd_pop"] = loss_dict["mmd_pop"].item()
+                if "aux_warmup_scale" in loss_dict:
+                    metrics["train/aux_warmup_scale"] = (
+                        loss_dict["aux_warmup_scale"].item()
+                    )
+                wb_logger.log_metrics(global_step, metrics)
 
-        # ── Validation (every epoch) ──
-        val_rec_error = validate(model, diffusion, test_loader, device, config)
+        # ── Validation (every epoch, using EMA weights) ──
+        ema.apply_shadow(base_model)
+        val_rec_error = validate(model, diffusion, val_loader, device, config)
+        ema.restore(base_model)
 
         if is_main_process():
             avg_loss = epoch_loss / max(epoch_steps, 1)

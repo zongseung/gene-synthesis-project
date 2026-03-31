@@ -39,6 +39,25 @@ def cosine_beta_schedule(
     return betas.clamp(0, 0.999).float()
 
 
+def linear_beta_schedule(
+    timesteps: int,
+    beta_start: float = 1e-4,
+    beta_end: float = 0.02,
+) -> torch.Tensor:
+    """
+    Linear noise schedule (Ho et al., 2020).
+
+    Args:
+        timesteps: Number of diffusion steps.
+        beta_start: Starting noise level.
+        beta_end: Ending noise level.
+
+    Returns:
+        betas: (T,) linearly spaced noise schedule.
+    """
+    return torch.linspace(beta_start, beta_end, timesteps, dtype=torch.float32)
+
+
 class GaussianDiffusion(nn.Module):
     """
     Gaussian diffusion process for training and sampling.
@@ -55,6 +74,7 @@ class GaussianDiffusion(nn.Module):
         min_snr_gamma: float = 5.0,
         null_class: int = 26,
         cfg_dropout_rate: float = 0.1,
+        schedule_type: str = "cosine",
     ):
         super().__init__()
         if timesteps < 1:
@@ -66,8 +86,13 @@ class GaussianDiffusion(nn.Module):
         self.null_class = null_class
         self.cfg_dropout_rate = cfg_dropout_rate
 
-        # --- Cosine noise schedule ---
-        betas = cosine_beta_schedule(timesteps)
+        # --- Noise schedule ---
+        if schedule_type == "linear":
+            betas = linear_beta_schedule(timesteps)
+        elif schedule_type == "cosine":
+            betas = cosine_beta_schedule(timesteps)
+        else:
+            raise ValueError(f"Unknown schedule_type: {schedule_type}")
         alphas = 1.0 - betas
         alphas_cumprod = torch.cumprod(alphas, dim=0)
         alphas_cumprod_prev = F.pad(alphas_cumprod[:-1], (1, 0), value=1.0)
@@ -230,8 +255,18 @@ class GaussianDiffusion(nn.Module):
 
         # Per-element MSE
         mse = F.mse_loss(pred_noise, noise, reduction="none")
-        # Mean over spatial/channel dimensions, keep batch
-        mse_per_sample = mse.mean(dim=list(range(1, mse.dim())))
+        reduce_dims = tuple(range(1, mse.dim()))
+
+        # Exclude padded / always-zero positions from both loss numerator
+        # and denominator so valid loci keep their original weight.
+        if self.enforce_zeros_flag and self.zero_mask is not None:
+            mask = (~self.zero_mask).to(mse.dtype).unsqueeze(0)  # (1, K, gene_size)
+            mse = mse * mask
+            valid_count = mask.sum(dim=reduce_dims).clamp(min=1)
+            mse_per_sample = mse.sum(dim=reduce_dims) / valid_count
+        else:
+            # Mean over spatial/channel dimensions, keep batch
+            mse_per_sample = mse.mean(dim=reduce_dims)
 
         if use_min_snr:
             weights = self._extract(self.min_snr_weights, t, (t.shape[0], 1))
@@ -243,6 +278,7 @@ class GaussianDiffusion(nn.Module):
         return {
             "loss": loss,
             "mse": mse_per_sample.mean().detach(),
+            "pred_noise": pred_noise,
         }
 
     # ---------------------------------------------------------------
@@ -402,7 +438,7 @@ class GaussianDiffusion(nn.Module):
             # Predict x_0 (clamp alpha_t to avoid division-by-near-zero)
             alpha_t_clamped = alpha_t.clamp(min=1e-6)
             pred_x0 = (x - (1 - alpha_t).sqrt() * eps) / alpha_t_clamped.sqrt()
-            pred_x0 = pred_x0.clamp(-50, 50)  # training data range: [-44.7, 44.7]
+            pred_x0 = pred_x0.clamp(-6, 6)  # training data clipped to [-5, 5]
             pred_x0 = self._apply_zero_mask(pred_x0)
 
             # DDIM update
