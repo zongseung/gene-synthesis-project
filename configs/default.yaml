@@ -21,11 +21,11 @@ model:
   channel_mult: [1, 1, 2, 2, 4]
   kernel_size: 3
   # DiT
-  d_model: 512
-  n_dit_blocks: 12
-  n_heads: 8
+  d_model: 768
+  n_dit_blocks: 16
+  n_heads: 12
   mlp_ratio: 4.0
-  dropout: 0.0
+  dropout: 0.1
   # Patch
   patch_size: 16
   # Population
@@ -35,16 +35,17 @@ model:
 # ── Diffusion ──
 diffusion:
   max_timesteps: 1000
-  noise_schedule: "cosine"
+  noise_schedule: "linear"
   prediction_target: "epsilon"
   guidance_type: "classifier_free"
-  guidance_weight: 3.0
+  guidance_weight: 1.0
   cfg_dropout_rate: 0.1
   sampling_timesteps: 100
+  ddim_eta: 0.5
 
 # ── 학습 ──
 training:
-  epochs: 100                    # 조기종료 없이 전체 실행
+  epochs: 500
   batch_size: 16
   lr: 0.0002
   seed: 20260327
@@ -52,6 +53,7 @@ training:
   optimizer: "adamw"
   gradient_clipping: 1.0
   warmup_steps: 100
+  ema_decay: 0.999
   precision: "bf16"              # bf16 부동소수점
   save_every: 20                 # checkpoint 저장 주기
 
@@ -69,7 +71,7 @@ distributed:
 
 # ── 보조 손실 ──
 aux_loss:
-  enabled: false
+  enabled: true
   lambda_pca_dist: 0.01
   lambda_pop_structure: 0.01
   type: "mmd_rbf"
