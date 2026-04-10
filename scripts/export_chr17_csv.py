@@ -10,11 +10,19 @@ and each worker queries its range via tabix (``vcf("17:start-end")``).
 Worker outputs are written as independent gzip members and concatenated
 into the final ``.tsv.gz`` in genomic order.
 
-Output: ``data/exports/chr17/chr17_raw.tsv.gz``
+Outputs::
 
-Columns::
+    data/exports/chr17/chr17_raw.tsv.gz          — all variants, no annotation
+    data/exports/chr17/chr17_gene_matched.tsv.gz  — variants matched to refGene genes
+
+Columns (raw)::
 
     chrom, pos, id, ref, alt, qual, filter, info,
+    <sample_id_1>, <sample_id_2>, ...
+
+Columns (gene_matched)::
+
+    gene_name, chrom, pos, id, ref, alt, qual, filter, info,
     <sample_id_1>, <sample_id_2>, ...
 
 Usage::
@@ -48,7 +56,9 @@ from src.preprocessing.config import (
     DATA_DIR,
     PER_CHROM_VCF_DIR,
     PER_CHROM_VCF_PATTERN,
+    REFGENE_PATH,
 )
+from src.preprocessing.gene_annotation import load_refgene
 
 logging.basicConfig(
     level=logging.INFO,
@@ -59,9 +69,19 @@ logger = logging.getLogger(__name__)
 CHROM = "17"
 EXPORT_DIR = Path(DATA_DIR) / "exports" / f"chr{CHROM}"
 
-# GRCh37 chr17 length — 1KG Phase 3 uses GRCh37. A small overrun is harmless
-# because tabix region queries clip to actual variant positions.
-CHR17_LEN = 81_195_210
+# GRCh37 chromosome lengths — 1KG Phase 3 uses GRCh37.
+# A small overrun is harmless because tabix region queries clip to actual
+# variant positions.
+CHROM_LENGTHS = {
+    "1": 249_250_621, "2": 243_199_373, "3": 198_022_430,
+    "4": 191_154_276, "5": 180_915_260, "6": 171_115_067,
+    "7": 159_138_663, "8": 146_364_022, "9": 141_213_431,
+    "10": 135_534_747, "11": 135_006_516, "12": 133_851_895,
+    "13": 115_169_878, "14": 107_349_540, "15": 102_531_392,
+    "16": 90_354_753, "17": 81_195_210, "18": 78_077_248,
+    "19": 59_128_983, "20": 63_025_520, "21": 48_129_895,
+    "22": 51_304_566,
+}
 
 
 def _worker(task: tuple) -> tuple[int, str, int]:
@@ -143,7 +163,8 @@ def main() -> None:
 
     # --- Plan chunks ------------------------------------------------------
     n_workers = max(1, args.workers)
-    chunk_size = CHR17_LEN // n_workers + 1
+    chrom_len = CHROM_LENGTHS[CHROM]
+    chunk_size = chrom_len // n_workers + 1
     limit_per_chunk = (
         (args.max_variants // n_workers + 1) if args.max_variants > 0 else 0
     )
@@ -151,7 +172,7 @@ def main() -> None:
     tasks = []
     for i in range(n_workers):
         start = i * chunk_size + 1
-        end = min((i + 1) * chunk_size, CHR17_LEN)
+        end = min((i + 1) * chunk_size, chrom_len)
         if start > end:
             continue
         tasks.append(
@@ -196,8 +217,51 @@ def main() -> None:
 
     size_mb = out.stat().st_size / 1e6
     logger.info(
-        f"Done: {total:,} variants × {n_samples:,} samples, "
+        f"Raw export done: {total:,} variants × {n_samples:,} samples, "
         f"{size_mb:.1f} MB gzip, {time.time() - t0:.0f}s total"
+    )
+
+    # --- Gene-matched export -----------------------------------------------
+    logger.info("Loading refGene annotations for chr17...")
+    gene_coords = load_refgene(REFGENE_PATH)
+    chr17_genes = gene_coords.get(CHROM, [])
+    logger.info(f"chr17 genes: {len(chr17_genes)}")
+
+    # Build interval list sorted by start for binary search
+    import bisect
+
+    gene_starts = [g["start"] for g in chr17_genes]
+    gene_ends = [g["end"] for g in chr17_genes]
+
+    out_matched = EXPORT_DIR / f"chr{CHROM}_gene_matched.tsv.gz"
+    logger.info(f"Writing gene-matched file: {out_matched}")
+
+    t1 = time.time()
+    matched_count = 0
+
+    with gzip.open(out, "rt") as fin, gzip.open(out_matched, "wt", compresslevel=6) as fout:
+        # Read and write header
+        raw_header = fin.readline().rstrip("\n")
+        fout.write(args.sep.join(["gene_name"] + raw_header.split(args.sep)) + "\n")
+
+        for line in fin:
+            fields = line.rstrip("\n").split(args.sep, 2)  # split only first 2 for pos
+            pos = int(fields[1])
+
+            # Find genes that overlap this position
+            # A gene overlaps if gene.start <= pos <= gene.end
+            right = bisect.bisect_right(gene_starts, pos)
+            for i in range(right - 1, -1, -1):
+                if gene_ends[i] < pos:
+                    break
+                if chr17_genes[i]["start"] <= pos <= chr17_genes[i]["end"]:
+                    fout.write(chr17_genes[i]["name"] + args.sep + line)
+                    matched_count += 1
+
+    matched_mb = out_matched.stat().st_size / 1e6
+    logger.info(
+        f"Gene-matched done: {matched_count:,} variant-gene pairs, "
+        f"{matched_mb:.1f} MB gzip, {time.time() - t1:.0f}s"
     )
 
 
