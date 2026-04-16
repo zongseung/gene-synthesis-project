@@ -8,18 +8,18 @@
 
 ---
 
-## 1. 현재 상태 (2026-04-16)
+## 1. 현재 상태 (2026-04-17)
 
 | 단계 | 상태 |
 |---|---|
 | Core 14 수집 | ✅ 14권 (chars_zh 1.20M / chars_ko 1.97M, ko coverage 90.2%) |
-| Core 25 확장 | ⏳ 대기 (11권 추가, [§W0](docs/ver2/11_implementation/work_order.md)) |
+| **Core 25 확장 (+12권)** | 🔥 **크롤 진행 중** (book 7/44/46/47/49/54/60/70/71/94/139/183, 병렬) |
 | Stage 1 clean + Stage 2 pack | ✅ 19,609 + 19,802 + 19,186 → packed 2,745 seqs (seq_len 2048) |
 | Tokenizer 확장 (§A.4) | ✅ Bllossom vocab 128,260 (+ `<ZH>/</ZH>/<KO>/</KO>`) |
 | corpus_v1.json (SHA-256 핀) | ✅ [`data/cpt_processed/corpus_v1.json`](data/cpt_processed/corpus_v1.json) |
 | **Stage 1 CPT pilot** | 🔥 진행 중 (cap 20.4M tokens, DDP 2-GPU, ~156 steps) |
 | Demo CLI (`hanmed chat`) | ✅ v0 skeleton (transformers backend), 실제 추론은 adapter 완성 후 |
-| Core 25 / 평가셋 / SFT | 🧭 M2 로드맵 |
+| 평가셋 / Wiki-ko replay / SFT | 🧭 M2 로드맵 |
 
 ## 2. 환경
 
@@ -38,21 +38,65 @@ uv pip install --python .venv/bin/python peft==0.13.2 wandb prompt_toolkit
 
 `docs/ver2/11_implementation/pipeline_data_flow.md` 가 정본. 아래는 재현 순서.
 
-### 3.1 데이터 수집 (Core 14 이미 완료)
+### 3.1 데이터 수집
+
+**수집 scope**: mediclassics 161종 중 **한국 한의학 핵심 25~26종** (§03.6). ver1 archive 는 161 전수 파싱이 목표였고 ver2 에서는 Core 25 로 축소.
 
 ```bash
-# Core 14 (현재 저장소가 이 상태)
+# Core 14 (이미 수집 완료)
 python3 src/data/crawler/mediclassics_orchestrator.py \
   --output data/raw/mediclassics_unified \
   --books 8,56,69,86,93,182,291,1,4,9,24,38,59,100
 
-# Core 25 확장 (선택, 11권 추가 — 수시간 소요)
+# Core 25 확장 (+12권 — 수시간 소요, GPU 와 무관한 네트워크 작업)
 python3 src/data/crawler/mediclassics_orchestrator.py \
   --output data/raw/mediclassics_unified \
   --books 7,44,46,47,49,54,60,70,71,94,139,183
 ```
 
 Resume 자동 (중단해도 `max(content_seq)+1` 부터 이어감).
+
+#### 수집 서적 목록 (실측, Core 26 기준)
+
+**Core 14 (완료)**
+
+| id | 한자 원제 | 국역 | 성격 |
+|---|---|---|---|
+| 1 | 四醫經驗方 | 사의경험방 | 조선 후기 경험방 |
+| 4 | 廣濟秘笈 | 광제비급 | 19c 전통의서 |
+| 8 | 東醫寶鑑 | 동의보감 | 허준, 조선 대표 |
+| 9 | 東醫四象新編 | 동의사상신편 | 사상의학 |
+| 24 | 本草精華 | 본초정화 | 본초학 |
+| 38 | 食療纂要 | 식료찬요 | 식이요법 |
+| 56 | 醫方類聚 | 의방유취 | 세종대 편찬 |
+| 59 | 醫宗損益 | 의종손익 | 황도연 |
+| 69 | 濟衆新編 | 제중신편 | 강명길 |
+| 86 | 鍼灸經驗方 | 침구경험방 | 허임, 침구 |
+| 93 | 鄕藥集成方 | 향약집성방 | 세종, 조선 향약 |
+| 100 | 外科心法要訣 | 외과심법요결 | 외과 |
+| 182 | 東醫壽世保元 | 동의수세보원 | 이제마 사상 |
+| 291 | 方藥合編 | 방약합편 | 황도연 19c |
+
+**Core 25 확장 (+12권, 크롤 진행 중 2026-04-17)**
+
+| id | 한자 원제 | 국역 | 성격 |
+|---|---|---|---|
+| 7 | 丹谷經驗方 | 단곡경험방 | 조선 경험방 |
+| 44 | 諺解救急方 | 언해구급방 | **한글** 구급서 |
+| 46 | 諺解痘瘡集要 | 언해두창집요 | **한글** 두창 |
+| 47 | 諺解胎産集要 | 언해태산집요 | **한글** 산과 |
+| 49 | 醫家秘訣 | 의가비결 | 조선 의가 |
+| 54 | 增補醫門寶鑑 | 증보의문보감 | 19c 종합 |
+| 60 | 宜彙 | 의휘 | 조선 |
+| 70 | (제목 미확인) | (제목 미확인) | 완료 후 `up_path_nm` 재확인 필요 |
+| 71 | 舟村新方 | 주촌신방 | 신찬오 필사본 |
+| 94 | 鄕藥採取月令 | 향약채취월령 | 세종대 향약 |
+| 139 | 景岳全書 | 경악전서 | ⚠ **중국 명대 장개빈** (조선에 수용됨) |
+| 183 | 東醫壽世保元性命論 | 동의수세보원성명론 | 이제마 사상 |
+
+**주의**:
+- `book_139 景岳全書`: 중국 명대 의서 — ver2 §03.6 "한국 한의학 핵심" scope 와 약간 벗어남. 조선 의가들이 널리 참조해 도메인 관련성은 있으나, 공개 adapter 포함 여부는 M2 결정.
+- `book_70`: 첫 record 에 권호만 있고 책 제목 미노출. 크롤 완료 후 `up_path_nm` 로 재확인 필요.
 
 ### 3.2 Tokenizer 확장 (W1)
 
@@ -229,11 +273,16 @@ korean-medicine-llm/
 
 | # | 작업 | 상태 |
 |---|---|---|
-| W0 | Core 25 확장 크롤 (Wiki-ko/CBETA/AIHub replay 수집 포함) | ⏳ |
-| W6 | CPT pilot 완주 + loss·ppl 리포트 | 🔥 |
+| W0 | Core 25 확장 크롤 (+12권) | 🔥 진행 중 |
+| W6 | CPT pilot 완주 + loss·ppl 리포트 | 🔥 진행 중 |
+| — | Core 25 크롤 완료 후 재처리: `extract_corpora` → `preprocess --stage 1+2` → `build_corpus_manifest` 재실행 | 🧭 |
+| — | Wiki-ko replay 수집 (§C.2 30%, `data/replay/wiki_ko_*.jsonl`) | 🧭 |
+| — | T5 KLUE-YNAT 100 stratified sampling 스크립트 (`scripts/build_t5_klue_subset.py`) | 🧭 |
 | — | §E ablation (cap 20M vs 60M vs 200M) | 🧭 |
-| — | §05 HanMed-Eval v0 curation (T1~T5, T4 redteam 20 + paraphrase 30 + 한문 10) | 🧭 |
+| — | §05 HanMed-Eval v0 curation (T1~T4 전문가 작성, T4 redteam 20 + paraphrase 30 + 한문 10) | 🧭 |
 | — | hanmed_cli 실제 adapter 로 REPL 테스트 | 🧭 |
+| — | CBETA / AI Hub (내부 adapter only) | 🧭 |
+| — | `data/dict/hanmed_terms.jsonl` NER seed ≥ 3,000 | 🧭 |
 
 세부 계획: [`docs/ver2/11_implementation/work_order.md`](docs/ver2/11_implementation/work_order.md).
 
