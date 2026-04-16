@@ -48,6 +48,7 @@ def cli(ctx: click.Context, verbose: bool) -> None:
 @click.option("--max-new-tokens", type=int, default=DEFAULTS.max_new_tokens)
 @click.option("--repetition-penalty", type=float, default=DEFAULTS.repetition_penalty)
 @click.option("--load-existing", is_flag=True, help="기존 session 을 이어서 시작")
+@click.option("--plain", is_flag=True, help="splash 배너·마스코트 생략 (pipe/redirect 용)")
 def chat_cmd(
     adapter: Path | None,
     mode: str,
@@ -62,6 +63,7 @@ def chat_cmd(
     max_new_tokens: int,
     repetition_penalty: float,
     load_existing: bool,
+    plain: bool,
 ) -> None:
     """REPL 시작."""
     if remote:
@@ -122,7 +124,7 @@ def chat_cmd(
     from hanmed_cli.chat import run_repl
 
     try:
-        rc = run_repl(be, session, sampling, adapter_label=adapter_label)
+        rc = run_repl(be, session, sampling, adapter_label=adapter_label, plain=plain)
     finally:
         # autosave
         try:

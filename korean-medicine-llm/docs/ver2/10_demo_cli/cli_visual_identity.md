@@ -126,6 +126,43 @@ DDDD   OOO   N   N   GGG    UUU   III
 
 R3.5 추천: **Banner A 채택**, Banner B 는 fallback.
 
+### R3.6 BANNER — `DONGUI` wordmark refined (epic serif-cap)
+
+**디자인 의도**: Banner B 의 block-letter 5-line figlet 이 "더 예쁘게 / 품위있게" 라는 사용자 피드백을 반영해 figlet `epic` font 로 재디자인. parenthesis cap 과 slab-serif 골격이 **고서 활자체** 느낌을 주어 서고·약장 톤에 부합한다. 이름(DONGUI)은 여전히 정면에서 읽히며 높이가 5→8 lines 로 늘어나 §10.11.5 의 최소 7 lines 요구를 충족한다.
+
+```text
+ ______   _______  _        _______          _________
+(  __  \ (  ___  )( (    /|(  ____ \|\     /|\__   __/
+| (  \  )| (   ) ||  \  ( || (    \/| )   ( |   ) (
+| |   ) || |   | ||   \ | || |      | |   | |   | |
+| |   | || |   | || (\ \) || | ____ | |   | |   | |
+| |   ) || |   | || | \   || | \_  )| |   | |   | |
+| (__/  )| (___) || )  \  || (___) || (___) |___) (___
+(______/ (_______)|/    )_)(_______)(_______)\_______/
+
+                  KOREAN MEDICINE AI
+```
+
+측정:
+
+- **width**: 54 columns (≤ 72 ✓)
+- **height**: 8 lines (7 ~ 14 ✓)
+- **문자 집합**: `' '`, `'('`, `')'`, `'/'`, `'\'`, `'_'`, `'|'` — §10.11.5 허용 집합 부분집합
+- **금지 문자**: 없음 (box drawing / Unicode block / full-width punctuation 모두 미사용)
+- **subtitle 정렬**: `(54 − 18) / 2 = 18` 공백 padding 으로 `KOREAN MEDICINE AI` 를 wordmark 하단 중앙에 배치
+
+장점:
+
+- parenthesis cap 으로 slab-serif/고서 느낌 부여 — `DONGUI` 존재감을 유지하면서도 block-letter 보다 정제됨
+- 5 → 8 lines 로 splash 비중이 자연스러워져 적정 proportion
+- 오직 7 종 ASCII 문자만 사용 → 모든 터미널 (macOS/iTerm2, Ubuntu, tmux) 에서 동일 렌더 보장
+
+단점:
+
+- 54 columns 로 폭이 Banner B 대비 넓음 — 좁은 SSH 세션 (< 60 col) 에서는 wrap 가능성
+
+**채택 결론 (R3.6)**: `src/hanmed_cli/prompts/branding.py` 의 `BANNER` 상수를 이 아트로 교체. Banner A (상징형) 는 reserved fallback 으로 유지.
+
 ## 10.11.7 ASCII 캐릭터 / 마스코트
 
 배너 아래에 작은 마스코트를 붙이면 CLI 가 덜 딱딱해진다. 다만 귀여움보다 **고전 서고 + 약재 보조자** 톤이 중요하다.
@@ -253,11 +290,11 @@ v0 는 ASCII-only 가 기본이지만, `rich` 를 쓰므로 색은 아주 절제
 
 ## 10.11.12 최종 결정
 
-v0 디자인 결정:
+v0 디자인 결정 (R3.5 사용자 수정):
 
 - **command**: `hanmed`
 - **display name**: `DONGUI`
-- **banner**: `Banner A`
+- **banner**: `Banner B` (DONGUI wordmark — 사용자 채택, R3.5)
 - **mascot**: `Mascot B`
 - **subtitle**: `KOREAN MEDICINE AI`
 - **prompt label**: `[dongui]`

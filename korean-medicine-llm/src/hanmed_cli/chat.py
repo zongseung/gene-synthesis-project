@@ -131,9 +131,10 @@ def run_repl(
     sampling: SamplingConfig,
     *,
     adapter_label: str,
+    plain: bool = False,
 ) -> int:
     """REPL main loop. 정상 종료 0, 에러 1."""
-    print_banner(PKG_VERSION, adapter_label)
+    print_banner(PKG_VERSION, adapter_label, plain=plain)
 
     conv = Conversation(backend.get_tokenizer(), session)
     pt_session = PromptSession(history=InMemoryHistory())
