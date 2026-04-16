@@ -1,0 +1,8 @@
+# HanMed-Eval T1 (번역) held-out SHA-256 hashes
+# R3 placeholder — 1 positive-control sample only. 나머지 29개는 M2 에서 curation 후 추가.
+# 해시 대상: NFC 정규화된 한문 원문 (preprocess.py::normalize 와 동일 규칙)
+# Gate G1: preprocess.py 가 CPT 입력 빌드 시 이 hash 에 매치되는 문장을 drop 해야 함
+#
+# positive-control 샘플: "東醫寶鑑者 我國醫學之大全也" (§04.5.2 bilingual block 예시에서 인용된 문장)
+# 예상 동작: extract_corpora 가 이 문장을 포함하는 record 를 찾으면 preprocess 단계에서 drop counter +1
+6e7bed18b7d569ddfabb49824cc2c68f619ae46fb6585f95e2fe90a9458521bb
