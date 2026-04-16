@@ -31,17 +31,31 @@ def pca_single_gene(
     gene_name: str,
     matrix: np.ndarray,
     n_components: int,
+    train_indices: np.ndarray | None = None,
 ) -> dict | None:
-    """Apply PCA to a single gene's variant matrix."""
+    """Apply PCA to a single gene's variant matrix.
+
+    If `train_indices` is provided, the PCA basis is fit on train rows only
+    and then used to transform the full matrix (preventing val/test leakage
+    into per-gene loadings). Otherwise falls back to fit_transform on the
+    whole matrix (legacy behavior; leaks val/test).
+    """
     n_vars = matrix.shape[1]
-    n_comp = min(n_components, n_vars, matrix.shape[0])
+    n_fit_samples = (
+        matrix.shape[0] if train_indices is None else int(len(train_indices))
+    )
+    n_comp = min(n_components, n_vars, n_fit_samples)
 
     if n_comp < 2:
         return None
 
     try:
         pca = PCA(n_components=n_comp)
-        transformed = pca.fit_transform(matrix)
+        if train_indices is None:
+            transformed = pca.fit_transform(matrix)
+        else:
+            pca.fit(matrix[train_indices])
+            transformed = pca.transform(matrix)
         explained = float(np.sum(pca.explained_variance_ratio_))
         per_component = pca.explained_variance_ratio_.tolist()
 
@@ -65,10 +79,17 @@ def _evaluate_pca_k_for_gene(
     gene_name: str,
     matrix: np.ndarray,
     k: int,
+    train_indices: np.ndarray | None = None,
 ) -> tuple[str, int, float, int]:
-    """Evaluate a single (gene, K) combination for PCA explained variance."""
+    """Evaluate a single (gene, K) combination for PCA explained variance.
+
+    Uses train rows only when `train_indices` is provided, so K selection is
+    not influenced by held-out val/test samples.
+    """
     n_vars = matrix.shape[1]
-    n_samples = matrix.shape[0]
+    n_samples = (
+        matrix.shape[0] if train_indices is None else int(len(train_indices))
+    )
     actual_k = min(k, n_vars, n_samples)
 
     if actual_k < 2:
@@ -76,7 +97,8 @@ def _evaluate_pca_k_for_gene(
 
     try:
         pca = PCA(n_components=actual_k)
-        pca.fit(matrix)
+        fit_matrix = matrix if train_indices is None else matrix[train_indices]
+        pca.fit(fit_matrix)
         explained = float(np.sum(pca.explained_variance_ratio_))
         return (gene_name, k, explained, actual_k)
     except Exception as e:
@@ -90,12 +112,16 @@ def grid_search_optimal_pca(
     marginal_threshold: float = MARGINAL_GAIN_THRESHOLD,
     decay_ratio: float = MARGINAL_GAIN_DECAY_RATIO,
     n_sample_genes: int = PCA_SAMPLE_GENES,
+    train_indices: np.ndarray | None = None,
 ) -> tuple[int, pd.DataFrame]:
     """Grid search for optimal PCA component count K.
 
     Strategy: Marginal Gain Elbow detection.
     - Condition 1: marginal_gain < threshold -> select previous K
     - Condition 2: gain < previous_gain * decay_ratio -> select previous K
+
+    `train_indices`, when provided, restricts each K evaluation to train rows
+    so the chosen K is not biased by val/test signal.
     """
     if candidates is None:
         candidates = PCA_CANDIDATES
@@ -116,7 +142,7 @@ def grid_search_optimal_pca(
     tasks = []
     for gene_name in sample_genes:
         for k in candidates:
-            tasks.append((gene_name, gene_matrices[gene_name], k))
+            tasks.append((gene_name, gene_matrices[gene_name], k, train_indices))
 
     logger.info(f"Total tasks: {len(tasks)} ({len(sample_genes)} genes x {len(candidates)} K values)")
 
@@ -204,6 +230,7 @@ def stream_vcf_and_pca(
     optimal_k: int,
     gene_coords: dict[str, list[dict]],
     chroms: list[int] | None = None,
+    train_indices: np.ndarray | None = None,
 ) -> tuple[dict[str, np.ndarray], list[str], pd.DataFrame]:
     """Stream chromosomes sequentially: parse → PCA → free variants.
 
@@ -215,6 +242,9 @@ def stream_vcf_and_pca(
         optimal_k: Number of PCA components.
         gene_coords: Per-chromosome gene boundaries from load_refgene().
         chroms: Chromosomes to process (default: all 22).
+        train_indices: Optional sample-row indices to fit PCA on. When set,
+            each gene's PCA basis is fit on these rows only; all 2504 samples
+            are then transformed into that basis (avoids val/test leakage).
     """
     if chroms is None:
         chroms = CHROMOSOMES
@@ -243,7 +273,12 @@ def stream_vcf_and_pca(
         n_genes_chr = len(gene_matrices)
 
         for gene_name in sorted(gene_matrices.keys()):
-            result = pca_single_gene(gene_name, gene_matrices[gene_name], optimal_k)
+            result = pca_single_gene(
+                gene_name,
+                gene_matrices[gene_name],
+                optimal_k,
+                train_indices=train_indices,
+            )
             if result is not None:
                 all_pca_features.update(result["features"])
                 stat_row = {

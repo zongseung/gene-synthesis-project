@@ -59,25 +59,18 @@ def create_hierarchical_labels(panel_path: str) -> dict:
     return labels
 
 
-def split_dataset_stratified(
-    tokenized: np.ndarray,
-    labels: dict,
-    sample_ids: list[str],
+def compute_split_indices(
+    pop_labels: np.ndarray,
     val_ratio: float = 0.1,
     test_ratio: float = 0.1,
     seed: int = PREPROCESS_SEED,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, dict]:
-    """Population-stratified train/val/test split (80/10/10)."""
-    pop_labels = labels["pop_labels"]
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Population-stratified 80/10/10 index split (no data tensor touched).
 
-    if len(tokenized) != len(pop_labels):
-        raise ValueError(
-            f"Sample count mismatch: tokenized={len(tokenized)}, "
-            f"labels={len(pop_labels)}"
-        )
-
-    idx = np.arange(len(tokenized))
-
+    Used by the preprocessing pipeline to determine train rows *before* gene
+    PCA runs, so PCA can fit on train-only matrices and avoid leakage.
+    """
+    idx = np.arange(len(pop_labels))
     trainval_idx, test_idx = train_test_split(
         idx,
         test_size=test_ratio,
@@ -85,7 +78,6 @@ def split_dataset_stratified(
         shuffle=True,
         stratify=pop_labels,
     )
-
     trainval_labels = pop_labels[trainval_idx]
     relative_val_ratio = val_ratio / (1.0 - test_ratio)
     train_idx, val_idx = train_test_split(
@@ -95,6 +87,39 @@ def split_dataset_stratified(
         shuffle=True,
         stratify=trainval_labels,
     )
+    return train_idx, val_idx, test_idx
+
+
+def split_dataset_stratified(
+    tokenized: np.ndarray,
+    labels: dict,
+    sample_ids: list[str],
+    val_ratio: float = 0.1,
+    test_ratio: float = 0.1,
+    seed: int = PREPROCESS_SEED,
+    precomputed_indices: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, dict]:
+    """Population-stratified train/val/test split (80/10/10).
+
+    If `precomputed_indices=(train_idx, val_idx, test_idx)` is provided (e.g.
+    the indices used to fit per-gene PCA on train-only), reuse them instead
+    of resplitting — guarantees tokenized rows are consistent with the PCA
+    train/val/test partition.
+    """
+    pop_labels = labels["pop_labels"]
+
+    if len(tokenized) != len(pop_labels):
+        raise ValueError(
+            f"Sample count mismatch: tokenized={len(tokenized)}, "
+            f"labels={len(pop_labels)}"
+        )
+
+    if precomputed_indices is not None:
+        train_idx, val_idx, test_idx = precomputed_indices
+    else:
+        train_idx, val_idx, test_idx = compute_split_indices(
+            pop_labels, val_ratio=val_ratio, test_ratio=test_ratio, seed=seed,
+        )
 
     x_train = tokenized[train_idx]
     x_val = tokenized[val_idx]
