@@ -40,21 +40,42 @@ uv pip install --python .venv/bin/python peft==0.13.2 wandb prompt_toolkit
 
 ### 3.1 데이터 수집
 
-**수집 scope**: mediclassics 161종 중 **한국 한의학 핵심 25~26종** (§03.6). ver1 archive 는 161 전수 파싱이 목표였고 ver2 에서는 Core 25 로 축소.
+**mediclassics.kr 전체 161종** 메타데이터를 `scripts/fetch_book_metadata.py` 로 실측 수집 → `data/stats/mediclassics_book_list.json` 저장. `scripts/classify_books.py` 로 분류 → `data/stats/book_list_161.md` (전수 테이블).
+
+#### 분류 · 수집 현황 (161 전수)
+
+| 분류 | 설명 — 왜 필요한가 | 전체 | 수집 | 우선순위 |
+|---|---|---|---|---|
+| **A. 한국 한의학 핵심** | 동의보감·사상의학·향약·한글번역 — 한국 고유 체계 + 국역 coverage 상위. 논문 기여 축 (병렬 CPT) 직결 | 10 | **9** | 🥇 필수 |
+| **B. 종합의서 · 경험방** | 조선 의가 경험방 + 처방 합편 — 한의학 register·본초·처방 용어 기반 | 39 | 12 | 🥈 권장 |
+| C. 중국·일본 고전 의서 | 황제내경·상한론·천금방·경악전서 등 조선이 수용. CBETA 20% 슬롯 대체 가능 | 33 | 1 | 🥉 선택 |
+| D. 본초·약재·식이 | 본초학·단방·식료 — 약재명 NER·어휘 보강 | 16 | 2 | 🥉 선택 |
+| E. 전문 분과 | 전염병(두창·온역) · 부인/소아 · 침구 · 외과 · 맥진 · 구급 — 분과별 coverage | 20 | 0 | 필요 시 |
+| F. 수의학·법의·의원 행정 | 마의방·내의원 식례 등 — 주변부, 도메인 경계 | 8 | 0 | 제외 가능 |
+| G. 비의학 조선 문헌 | 연행일기·고사신서·정약용 저술 — 비의학, 학습 오염 우려 | 5 | 0 | **제외** |
+| ? | 분류 룰 미해결, 제목 수기 확인 필요 | 30 | 2 | 개별 판정 |
+| **합계** | | **161** | **26** (16.1%) | |
+
+- 수집 완료: ✅ Core 14 / 진행 중: 🔥 Core 25 확장 +12권
+- 각 책별 상세 (한자 / 국역 / 분류 / 이유 / 수집상태) 전수: **[`data/stats/book_list_161.md`](data/stats/book_list_161.md)** (161 rows)
+
+#### 수집 명령 (Resume 자동 — `max(content_seq)+1` 이어감)
 
 ```bash
-# Core 14 (이미 수집 완료)
+# Core 14 (완료)
 python3 src/data/crawler/mediclassics_orchestrator.py \
   --output data/raw/mediclassics_unified \
   --books 8,56,69,86,93,182,291,1,4,9,24,38,59,100
 
-# Core 25 확장 (+12권 — 수시간 소요, GPU 와 무관한 네트워크 작업)
+# Core 25 확장 (+12권, 현재 진행 중)
 python3 src/data/crawler/mediclassics_orchestrator.py \
   --output data/raw/mediclassics_unified \
   --books 7,44,46,47,49,54,60,70,71,94,139,183
-```
 
-Resume 자동 (중단해도 `max(content_seq)+1` 부터 이어감).
+# (옵션) 161 메타 재수집
+.venv/bin/python scripts/fetch_book_metadata.py
+.venv/bin/python scripts/classify_books.py
+```
 
 #### 수집 서적 목록 (실측, Core 26 기준)
 
