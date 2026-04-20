@@ -1,6 +1,14 @@
-# HanMed-LLM
+<p align="center">
+  <img src="../hammed_icon/HanMed_1.png" alt="HanMed mascot — turtle apothecary" width="280">
+</p>
 
-**한의학 고전 해제 도우미** — Llama-3-Korean-Bllossom-8B 기반 LoRA CPT 어댑터 + vLLM 서빙 + 터미널 CLI.
+<h1 align="center">HanMed-LLM</h1>
+
+<p align="center">
+  <em>한의학 고전 해제 도우미 · Llama-3-Korean-Bllossom-8B 기반 LoRA CPT + vLLM 서빙 + 터미널 CLI</em>
+</p>
+
+---
 
 동의보감·향약집성방·의방유취 등 조선 의서를 학습해 저자·왕대·편찬 정보·주요 처방에 대한 **서지/해제 질문**에 답한다. 임상 진단·처방 권고 용도 아님.
 
