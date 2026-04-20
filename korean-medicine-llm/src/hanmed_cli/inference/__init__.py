@@ -23,6 +23,10 @@ def get_backend(name: str) -> Backend:
         from hanmed_cli.inference.vllm_backend import VLLMBackend
 
         return VLLMBackend()
+    if name == "remote_openai":
+        from hanmed_cli.inference.remote_openai import RemoteOpenAIBackend
+
+        return RemoteOpenAIBackend()
     if name == "auto":
         try:
             import vllm  # noqa: F401

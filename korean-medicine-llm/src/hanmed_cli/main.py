@@ -1,11 +1,13 @@
-"""Click CLI entry — §10.10.6 명세 따름.
+"""Click CLI entry — §10.10.6 + ver4 §03.02.
 
-    hanmed chat [--adapter ...] [--mode cpt|sft] [--session ...] [--backend ...] ...
-    hanmed sessions list|rm|export
+Bare `hanmed` → splash + remote REPL (docker vLLM 기동 중이라 가정).
+`hanmed --splash-only` → splash 출력 후 exit (backend 접속 X).
+`hanmed chat [...]` → 기존 local backend 경로 (학습·디버그용).
 """
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -14,18 +16,71 @@ import click
 from hanmed_cli import __version__ as PKG_VERSION
 from hanmed_cli.config import DEFAULTS
 from hanmed_cli.inference.base import SamplingConfig
-from hanmed_cli.render import print_error, print_info
+from hanmed_cli.render import print_banner, print_error, print_info
 from hanmed_cli.session import Session, ModelPin, SamplingState, list_sessions, load_session, remove_session
 
+# ver4 §03.02 default — vLLM OpenAI-compatible 엔드포인트
+_DEFAULT_ENDPOINT = os.environ.get("HANMED_ENDPOINT", "http://localhost:8000/v1")
+_DEFAULT_MODEL_NAME = os.environ.get("HANMED_MODEL", "hanmed-p-a-plus")
 
-@click.group()
+
+@click.group(invoke_without_command=True)
 @click.version_option(PKG_VERSION, prog_name="hanmed")
 @click.option("--verbose", "-v", is_flag=True, help="verbose 로그")
+@click.option("--splash-only", is_flag=True, help="splash 만 출력 후 exit (backend 로드 X)")
+@click.option("--plain", is_flag=True, help="splash 배너·마스코트 생략 (pipe/redirect 용)")
 @click.pass_context
-def cli(ctx: click.Context, verbose: bool) -> None:
-    """HanMed-LLM 인터랙티브 CLI (§10 ver2.2)."""
+def cli(ctx: click.Context, verbose: bool, splash_only: bool, plain: bool) -> None:
+    """HanMed-LLM 인터랙티브 CLI (§10 ver4)."""
     ctx.ensure_object(dict)
     ctx.obj["verbose"] = verbose
+
+    if ctx.invoked_subcommand is not None:
+        return
+
+    # bare `hanmed` — splash + (optional REPL via remote vLLM)
+    print_banner(PKG_VERSION, f"{_DEFAULT_MODEL_NAME} (remote)", plain=plain)
+
+    if splash_only:
+        return
+
+    from hanmed_cli.inference import get_backend
+    from hanmed_cli.chat import run_repl
+
+    be = get_backend("remote_openai")
+    try:
+        be.load(
+            base_model=_DEFAULT_MODEL_NAME,
+            tokenizer_dir="",
+            adapter_path=None,
+            endpoint=_DEFAULT_ENDPOINT,
+        )
+    except Exception as exc:
+        print_error(
+            f"backend 접속 실패 ({_DEFAULT_ENDPOINT}): {exc!r}\n"
+            f"  vLLM 서버 기동 확인: docker compose ps\n"
+            f"  또는: hanmed chat --help 로 local backend 사용"
+        )
+        sys.exit(2)
+
+    session = Session()
+    session.model = ModelPin(
+        base=_DEFAULT_MODEL_NAME, adapter=None, adapter_mode="P-CPT"
+    )
+    sampling = SamplingConfig()
+    try:
+        rc = run_repl(
+            be, session, sampling,
+            adapter_label=f"{_DEFAULT_MODEL_NAME} (remote)",
+            plain=plain,
+        )
+    finally:
+        try:
+            session.save(DEFAULTS.session_autosave_name)
+        except Exception:
+            pass
+        be.close()
+    sys.exit(rc)
 
 
 @cli.command("chat")

@@ -74,11 +74,14 @@ LORA_TARGET_MODULES: tuple[str, ...] = (
     "down_proj",
 )
 
-# §C.2 v0 기본 믹스 (HanMed 40%). replay 는 CLI 로 추가 주입.
+# ver4 §2.1.5 믹스 (P-A+ 설계): synth_facts 25 / bilingual 35 / zh 15 / ko 25.
+# synth_facts 는 packed seq 수가 raw 대비 적지만 interleave_datasets 가
+# probabilities 에 따라 oversample 하므로 여기서 복제할 필요 없음.
 DEFAULT_MIX = (
-    "hanmed_bilingual:0.05,"
-    "hanmed_zh_only:0.25,"
-    "hanmed_ko_only:0.10"
+    "hanmed_synth_facts:0.25,"
+    "hanmed_bilingual:0.35,"
+    "hanmed_zh_only:0.15,"
+    "hanmed_ko_only:0.25"
 )
 
 # 각 corpus 식별자 → packed jsonl 경로 (B.1 / B.2)
@@ -86,6 +89,7 @@ CORPUS_PATHS: dict[str, str] = {
     "hanmed_bilingual": "data/cpt_processed/hanmed_bilingual_packed_2048.jsonl",
     "hanmed_zh_only": "data/cpt_processed/hanmed_zh_only_packed_2048.jsonl",
     "hanmed_ko_only": "data/cpt_processed/hanmed_ko_only_packed_2048.jsonl",
+    "hanmed_synth_facts": "data/cpt_processed/hanmed_synth_facts_packed_2048.jsonl",
     # 이하 M2 수집 대기 — CLI 로 경로 override 가능
     "wiki_ko": "data/replay/wiki_ko_packed_2048.jsonl",
     "cbeta": "data/replay/cbeta_packed_2048.jsonl",
@@ -423,6 +427,10 @@ def build_model(
         lora_dropout=lora_dropout,
         bias="none",
         task_type=TaskType.CAUSAL_LM,
+        # ver4 §5.3 (1): tokenizer extension(vocab 128,256→128,260) + 4 special
+        # token 학습을 위해 embed_tokens / lm_head 를 full-train (LoRA 외부).
+        # Llama 계열은 model.embed_tokens / lm_head 로 suffix match 되어 안전.
+        modules_to_save=["embed_tokens", "lm_head"],
     )
     model = get_peft_model(model, lora_cfg)
     model.print_trainable_parameters()
@@ -449,28 +457,41 @@ def make_training_args(
 ):
     from transformers import TrainingArguments  # 지연 import
 
-    save_steps = max(total_steps // 4, 1)
     report_to = ["wandb"] if rank == 0 else "none"
 
-    # §C.7: eval 매 500 steps — pilot (total_steps ~156) 에서는 eval 3~4 회 수행되도록
-    # min(50, total_steps // 3) 로 조정.
-    eval_steps = max(1, min(50, total_steps // 3))
+    # ver4 §5.3 (4): save_steps / eval_steps 둘 다 50 으로 정렬.
+    # (기존: save=total_steps//4, eval=min(50, total_steps//3) → step 150 근처에서
+    #  교차해 best eval step 에 save 가 없던 버그)
+    save_steps = 50
+    eval_steps = 50
 
     return TrainingArguments(
         output_dir=output,
         per_device_train_batch_size=args.micro_bs,
         per_device_eval_batch_size=args.micro_bs,
         gradient_accumulation_steps=args.grad_accum,
+        # ver4 §5.3 (2): num_train_epochs=3 명시. max_steps 가 설정되어 있으면
+        # HF Trainer 는 max_steps 를 우선하나, epoch-aware 스케줄러(e.g. cosine)
+        # 와 재현성 manifest 를 위해 명시값을 주입한다.
+        num_train_epochs=args.epoch_variant,
         max_steps=total_steps,
         warmup_steps=warmup_steps,
         learning_rate=args.lr,
         weight_decay=0.0,
-        lr_scheduler_type="cosine",
+        # ver4 §5.3 (5): LR floor — cosine_with_min_lr + min_lr_rate=0.1
+        # (transformers ≥ 4.43 지원. min_lr_rate 는 lr_scheduler_kwargs 경유 전달.)
+        lr_scheduler_type="cosine_with_min_lr",
+        lr_scheduler_kwargs={"min_lr_rate": 0.1},
         logging_steps=10,
+        save_strategy="steps",
         eval_strategy="steps",
         eval_steps=eval_steps,
         save_steps=save_steps,
         save_total_limit=2,
+        # ver4 §5.3 (3): best model 선택 — eval_loss 최소값 채택.
+        load_best_model_at_end=True,
+        metric_for_best_model="eval_loss",
+        greater_is_better=False,
         bf16=True,
         optim="adamw_torch",
         seed=args.seed,

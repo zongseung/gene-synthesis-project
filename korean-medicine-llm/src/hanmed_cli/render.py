@@ -1,17 +1,22 @@
-"""§10.2 + §10.11 Render — DONGUI visual identity + streaming.
+"""§10.2 + §10.11 Render — v3 turtle mascot + chat-box layout + streaming.
 
 단일 책임:
-    - splash banner (Banner A + Mascot B + intro + slash hint)
+    - splash (mascot + header + divider)
     - prompt label / 상태 문구 ([you], [dongui], [dongui:error], [dongui:safe])
-    - streaming output (rich text 없이 sys.stdout.flush)
-    - 한문 block 감지 (contains_hanja — 향후 구문 강조용)
+    - streaming output (rich 없이 sys.stdout.flush)
+    - 한문 block 감지 (contains_hanja)
 
-색감 규칙 (§10.11.10):
-    - title        → soft amber   ("dark_orange3")
-    - mascot       → muted sage   ("dark_sea_green4")
-    - metadata     → dim parchment("grey70")
-    - refusal      → burnt orange ("dark_orange")
-    - 형광·네온 금지, TTY/non-TTY 모두 읽히게 절제.
+색감 (v3):
+    - title        → bold white
+    - subtitle     → dim grey (grey70)
+    - welcome      → soft amber (dark_orange3)
+    - divider      → grey58
+    - statusline   → grey58
+    - mascot       → 파일의 24-bit ANSI 그대로 (자체 컬러)
+    - prompt user  → muted sage (dark_sea_green4)
+    - assistant    → soft amber (dark_orange3)
+    - refusal      → burnt orange
+    - error        → red
 """
 
 from __future__ import annotations
@@ -30,6 +35,9 @@ _console = Console()
 # CJK Unified Ideographs
 _HANJA_LO, _HANJA_HI = "\u4e00", "\u9fff"
 
+# mascot 의 embedded ANSI 와 충돌 없이 reset 하려고 raw 상수.
+_R = "\x1b[0m"
+
 
 # --- Splash -----------------------------------------------------------
 
@@ -46,33 +54,42 @@ def print_banner(
     *,
     plain: bool = False,
 ) -> None:
-    """§10.11.8 최종 조합안 — banner + mascot + intro + slash hint.
+    """v3 splash: mascot 좌 + 3-line header 우 + 구분선 + status tag.
 
-    Args:
-        plain: True 면 ASCII art 생략 (pipe/redirect, --plain 옵션).
+    plain=True or non-TTY: 한 줄 요약만.
     """
     if plain or not _is_tty():
-        _console.print(
-            f"{B.DISPLAY_NAME} v{version} — {B.SUBTITLE}  [adapter: {adapter_label}]"
+        # rich markup 해석 방지 — raw stdout
+        sys.stdout.write(
+            f"{B.DISPLAY_NAME} v{version} — {B.CLI_SUBTITLE}  "
+            f"[adapter: {adapter_label}]\n"
         )
+        sys.stdout.flush()
         return
 
-    # Banner (soft amber)
-    _console.print(Text(B.BANNER, style="dark_orange3"), end="")
-    _console.print(Text(B.SUBTITLE_LINE, style="dark_orange3 bold"))
-    _console.print()
+    mascot = B.MASCOT_LINES
+    m_rows = len(mascot)
 
-    # Mascot (muted sage)
-    _console.print(Text(B.MASCOT, style="dark_sea_green4"), end="")
-    _console.print()
+    text_items = [B.CLI_TITLE, B.CLI_SUBTITLE, B.CLI_WELCOME]
+    text_styles = ["bold white", "grey70", "dark_orange3"]
+    top_pad = max(0, (m_rows - len(text_items)) // 2)
 
-    # Intro + adapter info + slash hint (dim parchment)
-    for line in B.INTRO_LINES:
-        _console.print(Text(f"  {line}", style="grey70"))
-    _console.print(Text(f"  adapter: {adapter_label}", style="grey70"))
-    _console.print(Text(f"  version: v{version}", style="grey70"))
-    _console.print()
-    _console.print(Text(f"  {B.SLASH_HINT}", style="grey58"))
+    gap = "   "
+    sys.stdout.write("\n")
+    for i in range(m_rows):
+        m = mascot[i] if i < m_rows else ""
+        idx = i - top_pad
+        if 0 <= idx < len(text_items):
+            # mascot raw ANSI + reset + gap, 그 뒤에 rich styled text + newline
+            sys.stdout.write(f"  {m}{_R}{gap}")
+            sys.stdout.flush()
+            _console.print(Text(text_items[idx], style=text_styles[idx]))
+        else:
+            sys.stdout.write(f"  {m}{_R}\n")
+    sys.stdout.write("\n")
+    sys.stdout.flush()
+    _console.print(Text(f"  {B.DIVIDER_UNICODE}", style="grey58"))
+    _console.print(Text(f"  {B.STATUSLINE_TAG}", style="grey58"))
     _console.print()
 
 
@@ -109,7 +126,6 @@ def stream_tokens(iterator: Iterable[str]) -> str:
     """토큰 chunk 를 flush 출력하면서 누적 문자열 반환.
 
     rich 의 color tag 렌더링은 streaming 중에는 애매하므로 plain print 사용.
-    (배너·라벨·색감은 한 번만 렌더 — 답변 본문 색감까지 rich 로 처리 안 함.)
     """
     chunks: list[str] = []
     for tok in iterator:
