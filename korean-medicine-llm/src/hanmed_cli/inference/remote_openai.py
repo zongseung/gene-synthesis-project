@@ -125,6 +125,9 @@ class RemoteOpenAIBackend(Backend):
             "temperature": cfg.temperature,
             "top_p": cfg.top_p,
             "max_tokens": cfg.max_new_tokens,
+            # ver4 §R1 (2026-04-21): min_tokens 강제 + freq/presence penalty 제거.
+            # 원 동기(synth template 조기 EOS)는 R1 mix 재설계로 해소됨. 남기면
+            # rare-token degeneracy spiral 유발 (vLLM min_tokens non-argmax-invariant).
             "stream": True,
         }
         if cfg.repetition_penalty and cfg.repetition_penalty != 1.0:

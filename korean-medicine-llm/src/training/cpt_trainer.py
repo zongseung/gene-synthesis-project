@@ -74,14 +74,29 @@ LORA_TARGET_MODULES: tuple[str, ...] = (
     "down_proj",
 )
 
-# ver4 §2.1.5 믹스 (P-A+ 설계): synth_facts 25 / bilingual 35 / zh 15 / ko 25.
-# synth_facts 는 packed seq 수가 raw 대비 적지만 interleave_datasets 가
-# probabilities 에 따라 oversample 하므로 여기서 복제할 필요 없음.
+# ver4 §A ablation — synth 제거 (template overfit). raw-only baseline.
+#
+# ver4 §R1 (2026-04-21) — mix 재설계. 근거:
+#   claudedocs/research_hanmed_cpt_methodology_20260421.md §0
+#   - 이전 mix(bilingual 0.45 / zh 0.20 / ko 0.35, general 0%) 에서 관측된
+#     3가지 실패: (F1) style-over-fact 환각, (F2) 도메인 트리거 시 KO→ZH
+#     언어 붕괴, (F3) rare-token degeneracy.
+#   - BianCang(460M, TCM) 은 general domain replay ~16% (72/460M) 로
+#     도메인 성능 +60pp 유지하며 기본 능력 보존 [arXiv 2411.11027 Table 1].
+#   - GeRe 는 LoRA 조건 1K 고정 general replay 로 F1 +6.5pp 입증
+#     [arXiv 2508.04676 Table III].
+#
+# 목표 불변식: general replay ≥ 0.15, KO 앵커(ko_only + wiki_ko) ≥ 0.50,
+# zh_only ≤ 0.10.
+#
+# 주의: wiki_ko packed jsonl 이 아직 미생성 (data/replay/wiki_ko_packed_2048.jsonl).
+# 학습 실행 전 replay corpus 수집·packing 필요. 없으면 build_datasets 가
+# FileNotFoundError 로 조기 실패.
 DEFAULT_MIX = (
-    "hanmed_synth_facts:0.25,"
-    "hanmed_bilingual:0.35,"
-    "hanmed_zh_only:0.15,"
-    "hanmed_ko_only:0.25"
+    "hanmed_ko_only:0.45,"
+    "hanmed_bilingual:0.30,"
+    "hanmed_zh_only:0.10,"
+    "wiki_ko:0.15"
 )
 
 # 각 corpus 식별자 → packed jsonl 경로 (B.1 / B.2)
@@ -90,8 +105,11 @@ CORPUS_PATHS: dict[str, str] = {
     "hanmed_zh_only": "data/cpt_processed/hanmed_zh_only_packed_2048.jsonl",
     "hanmed_ko_only": "data/cpt_processed/hanmed_ko_only_packed_2048.jsonl",
     "hanmed_synth_facts": "data/cpt_processed/hanmed_synth_facts_packed_2048.jsonl",
+    # ver4 §R1 (2026-04-21): wiki_ko 는 src/data/builder/build_wiki_ko.py 로
+    # 수집 후 preprocess.py 를 거쳐 cpt_processed/ 에 packed 로 생성됨 (hanmed
+    # 코퍼스와 동일한 디렉토리 · 동일 seq_len 2048).
+    "wiki_ko": "data/cpt_processed/wiki_ko_packed_2048.jsonl",
     # 이하 M2 수집 대기 — CLI 로 경로 override 가능
-    "wiki_ko": "data/replay/wiki_ko_packed_2048.jsonl",
     "cbeta": "data/replay/cbeta_packed_2048.jsonl",
     "aihub": "data/replay/aihub_ko_packed_2048.jsonl",
 }
@@ -174,9 +192,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         type=str,
         default=DEFAULT_MIX,
         help=(
-            "Comma-separated `corpus_id:prob` list. Default: HanMed 40% (v0). "
-            "합계는 자동 정규화되지만 v0 기본값은 이미 sum=0.40 이므로 정규화 후 "
-            "내부 비율은 유지된다."
+            "Comma-separated `corpus_id:prob` list. "
+            "R1 default (2026-04-21): ko_only 0.45 / bilingual 0.30 / zh_only 0.10 / wiki_ko 0.15. "
+            "불변식: general≥0.15, KO 앵커≥0.50, zh_only≤0.10. "
+            "합계는 자동 정규화되며 default 는 이미 sum=1.00."
         ),
     )
     p.add_argument(
@@ -418,25 +437,34 @@ def build_model(
         torch_dtype=torch.bfloat16,
     )
     # vocab 128,256 → 128,260 반영 (§A.4)
-    model.resize_token_embeddings(len(tok))
+    # mean_resizing=False: DDP 에서 rank 별 RNG 로 init 하면 embedding 값이
+    # 불일치 → `_verify_params_across_processes` broadcast 단계에서 hang.
+    # 새 4 토큰은 0-init 후 학습으로 맞춘다.
+    model.resize_token_embeddings(len(tok), mean_resizing=False)
 
     lora_cfg = LoraConfig(
         r=lora_rank,
         lora_alpha=lora_alpha,
-        target_modules=list(LORA_TARGET_MODULES),
+        # ver4 §5.3 재설계 (docs/ver4/05_new_token_training_methods.md B안):
+        # 기존 modules_to_save=["embed_tokens","lm_head"] 는 PEFT 의
+        # ModulesToSaveWrapper 가 rank 간 param iteration 불일치를 만들어
+        # DDP `_verify_params_across_processes` AllGather 에서 hang.
+        # PEFT 0.13.2 는 trainable_token_indices 미지원(0.14+), 업그레이드는
+        # transformers 5.5.4 호환 리스크가 커 회피.
+        # 대안: embed_tokens / lm_head 를 LoRA target 에 포함 (PEFT 0.8+ 지원).
+        # Chinese-LLaMA-Alpaca (arXiv:2304.08177) Stage 2 와 동형.
+        # 새 4 token 은 mean_resizing=False 로 0-init 된 뒤 LoRA delta (rank 32) 로 학습.
+        target_modules=list(LORA_TARGET_MODULES) + ["embed_tokens", "lm_head"],
         lora_dropout=lora_dropout,
         bias="none",
         task_type=TaskType.CAUSAL_LM,
-        # ver4 §5.3 (1): tokenizer extension(vocab 128,256→128,260) + 4 special
-        # token 학습을 위해 embed_tokens / lm_head 를 full-train (LoRA 외부).
-        # Llama 계열은 model.embed_tokens / lm_head 로 suffix match 되어 안전.
-        modules_to_save=["embed_tokens", "lm_head"],
     )
     model = get_peft_model(model, lora_cfg)
     model.print_trainable_parameters()
 
-    # §C.5 grad ckpt on
-    model.gradient_checkpointing_enable()
+    # §C.5 grad ckpt 는 TrainingArguments(gradient_checkpointing=True) 에서 단일 지점
+    # 관리 (use_reentrant=False). 여기서 중복 enable 하면 HF Trainer 가 prepare 직전
+    # 재토글하면서 PEFT 의 ModulesToSaveWrapper 와 타이밍 충돌 → DDP init hang.
     if hasattr(model, "enable_input_require_grads"):
         model.enable_input_require_grads()
 
@@ -497,10 +525,13 @@ def make_training_args(
         seed=args.seed,
         dataloader_num_workers=2,
         remove_unused_columns=False,
+        # grad ckpt 재복원. off 로 두면 LoRA-on-embed/lm_head + micro_bs=2 + seq 2048
+        # 조합에서 activation 이 A6000 48GB 한계 초과 (dropout forward OOM).
         gradient_checkpointing=True,
         gradient_checkpointing_kwargs={"use_reentrant": False},
         report_to=report_to,
         run_name=run_name,
+        # modules_to_save 제거 + LoRA-on-embed/lm_head 로 전환됨 → unused param 없음.
         ddp_find_unused_parameters=False,
     )
 

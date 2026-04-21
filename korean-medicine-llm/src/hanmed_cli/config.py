@@ -38,6 +38,9 @@ class Defaults:
     t4_paraphrase_held_out_target: float = 0.95
     t4_hanmun_target: float = 0.90
     footer: str = "— KIOM mediclassics.kr 기반 학습 (한의학고전DB)"
+    # ver4 §R1 (2026-04-21) — footer 자동부가 비활성. CPT 단계 환각 답변에
+    # 가짜 출처 권위가 붙는 문제. SFT + RAG citation grounding 재설계 후 재활성.
+    footer_enabled: bool = False
 
     # --- System prompt version ------------------------------------------
     system_prompt_version: str = "v0.1"

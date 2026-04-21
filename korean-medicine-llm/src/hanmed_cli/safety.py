@@ -86,13 +86,13 @@ def pre_check(user_input: str) -> PreCheckResult:
 
 def post_check(response: str) -> str:
     """Layer 2 — 모델 출력에 임상 지시 패턴 포함 시 disclaimer append.
-    끝에 footer 추가 (고정)."""
+    footer 는 DEFAULTS.footer_enabled 플래그로 게이팅 (R1 2026-04-21)."""
     out = response
     for pat in CLINICAL_DIRECTIVE_PATTERNS:
         if pat.search(out):
             out = out.rstrip() + DISCLAIMER
             break
-    # footer (§10.5.4 고정)
-    if DEFAULTS.footer not in out:
+    # footer (§10.5.4) — R1 기준 DEFAULTS.footer_enabled 로 게이팅.
+    if DEFAULTS.footer_enabled and DEFAULTS.footer not in out:
         out = out.rstrip() + "\n\n" + DEFAULTS.footer
     return out
