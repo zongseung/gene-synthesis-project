@@ -1,0 +1,1 @@
+../../scripts/cli_phaseA.sh

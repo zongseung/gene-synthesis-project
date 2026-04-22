@@ -1,0 +1,1 @@
+../../scripts/deploy_phaseA.sh

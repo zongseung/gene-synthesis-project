@@ -1,0 +1,1 @@
+../../../scripts/verify_packed_content.py

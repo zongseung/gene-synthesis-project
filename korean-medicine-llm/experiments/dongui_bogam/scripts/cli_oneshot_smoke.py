@@ -1,0 +1,1 @@
+../../../scripts/cli_oneshot_smoke.py
