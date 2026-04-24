@@ -20,8 +20,8 @@
 |---|---|---|---|---|---|
 | **v0.1 (ver4 P-A+)** | 2026-04 초 | CPT (LoRA r=32) | Bllossom-8B + 34권 mix | 20.4 M tok cap, 156 steps | 과거 운영 (`hanmed-p-a-plus` merged) |
 | **Phase A'** (ver4 §08) | 2026-04 중 | CPT 단권 | Bllossom-8B + book_008 | 5 M tok cap | 비교군 adapter (`cpt_bllossom_phaseA`) |
-| **ver5 v3.1 (SFT)** | **2026-04-22 현재 운영** | **Fresh SFT** (TRL) | Bllossom-8B + book_008 full | **34,039 QA** 쌍 | **서빙 중** (`hanmed_merged_ver5_v3_1`) |
-| ver6 r2 (Gemma) | 2026-04-23 계획 | SFT on Gemma-3 12B-IT | `models/gemma-3-12b-it` + book_008 | 19,023 쌍 (cov 89.72%) | zero-probe 실측 완료, 전환 준비 |
+| **ver5 v3.1 (SFT)** | **2026-04-22 현재 운영** | **Fresh SFT** (TRL, LoRA r=32) | **Bllossom-8B** + `phaseB_qa_diverse_v3_1.jsonl` | 21,475쌍 (train 18,254 / val 3,221), 1 epoch, LR 2e-5 | **서빙 중** (`hanmed_merged_ver5_v3_1`, Llama arch / vocab 128,260) |
+| ver6 r2 (Gemma) | 2026-04-23 계획 | SFT on Gemma-3 12B-IT | `models/gemma-3-12b-it` (로컬 23 GB) + book_008 | 19,023쌍 (cov 89.72%) | zero-probe 실측 완료, **본선 전환 전 상태** (실험 adapter: `experiments/dongui_bogam/outputs_ver6_gemma_v1/`) |
 
 전환 근거는 각 기획서에 정리돼 있다:
 
@@ -34,8 +34,8 @@
 |---|---|---|---|
 | 제품명 | DONGUI | DONGUI | DONGUI |
 | Shell 명령 | `hanmed` | `hanmed` | `hanmed` |
-| Base | [Bllossom-8B](https://huggingface.co/MLP-KTLim/llama-3-Korean-Bllossom-8B) | Bllossom-8B | [`google/gemma-3-12b-it`](https://huggingface.co/google/gemma-3-12b-it) |
-| Adapter | LoRA r=32, α=64, dropout 0.05 · 7 proj | LoRA r=32, α=64 · 7 proj (no embed) | LoRA r=32, α=64 · target TBD |
+| Base | [Bllossom-8B](https://huggingface.co/MLP-KTLim/llama-3-Korean-Bllossom-8B) | **Bllossom-8B (동일)** | [`google/gemma-3-12b-it`](https://huggingface.co/google/gemma-3-12b-it) ※ 현재 전환 **미완료** |
+| Adapter | LoRA r=32, α=64, dropout 0.05 · 7 proj | LoRA r=32 · 7 proj (embed 제외) | LoRA r=32, α=64 · target TBD |
 | Tokenizer 확장 | 128 256 → **128 260** (`<ZH>/</ZH>/<KO>/</KO>`) | 동일 (ver4 와 호환) | Gemma 262 144 vocab (미확장) |
 | Precision | bf16 | bf16 | bf16 |
 | Objective | Causal LM next-token (CPT) | TRL SFT (completion-only loss) | TRL SFT (완료 loss) |
@@ -58,8 +58,9 @@
            ▼                        ▼                          ▼
   ver4 CPT 경로            ver5 SFT 경로 (현 운영)       ver6 경로 (계획)
            │                        │                          │
-  extract_corpora          build_sft_full_corpus           동일 book_008
-  + prolog 삽입            (book_008 Q/A 34,039쌍)         + Gemma tokenizer
+  extract_corpora          build_sft_qa/diverse            동일 book_008
+  + prolog 삽입            → phaseB_qa_diverse_v3_1         + Gemma tokenizer
+                           (21,475쌍 = 18,254 + 3,221)
            │                        │                          │
   [data/cpt/{bi,zh,          [data/sft/                   [data/sft/
     ko,synth}.jsonl]           book008_full_sft.jsonl]     gemma_*.jsonl]
@@ -393,8 +394,14 @@ korean-medicine-llm/
 │   ├── cpt/                        # ver4 extract_corpora 산출
 │   ├── cpt_processed/              # ver4 preprocess Stage 1+2
 │   ├── sft/                        # ver5 SFT QA 코퍼스
-│   │   ├── book008_full_sft.jsonl          # 34,039쌍 (full)
+│   │   ├── book008_full_sft.jsonl          # 34,039쌍 (book_008 full raw → Q/A)
 │   │   ├── book008_full_sft_sample.jsonl   # 20쌍 (smoke)
+│   │   ├── phaseB_qa_full_corpus.jsonl     # Phase B 전체 corpus
+│   │   ├── phaseB_qa_diverse_v3.jsonl      # v3 diverse
+│   │   ├── phaseB_qa_diverse_v3_1.jsonl    # ★ ver5 v3.1 실제 학습 입력 (21,475쌍)
+│   │   ├── phaseB_qa_complex_v4.jsonl      # complex reasoning 증강
+│   │   ├── complex_seeds.yaml              # complex QA 템플릿 시드
+│   │   ├── entity_whitelist{,_v6}.yaml     # audit_sft_diversity 검증용
 │   │   └── *.stats.json / *.validation.json
 │   ├── facts/core_factsheet.yaml   # 26권 fact sheet
 │   ├── tokenizer/hanmed_bllossom_ext/   # 128 260 vocab

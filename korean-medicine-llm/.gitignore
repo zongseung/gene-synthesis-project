@@ -58,6 +58,8 @@ experiments/**/wandb/
 experiments/**/logs/
 experiments/**/checkpoints/
 experiments/**/runs/
+experiments/**/cpt/
+experiments/**/cpt_processed/
 
 # ───────────── Logs & debug ─────────────
 *.log
