@@ -43,7 +43,9 @@ class Defaults:
     footer_enabled: bool = False
 
     # --- System prompt version ------------------------------------------
-    system_prompt_version: str = "v0.1"
+    # v3_1: ver5 v3.1 학습에 쓴 system prompt 와 완전 일치 — out_of_scope
+    # 거부 행동이 학습 시 본 prompt 와 같을 때 제대로 활성화되므로 변경 금지.
+    system_prompt_version: str = "v3_1"
 
     # --- Timezone (§10.10.5) -------------------------------------------
     timezone_storage: str = "UTC"

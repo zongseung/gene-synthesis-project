@@ -93,8 +93,8 @@ def cli(ctx: click.Context, verbose: bool, splash_only: bool, plain: bool) -> No
 @click.option("--base-model", type=str, default=DEFAULTS.base_model)
 @click.option("--tokenizer", "tokenizer_dir", type=str, default=DEFAULTS.tokenizer_ext_dir,
               help="extended tokenizer 경로")
-@click.option("--backend", type=click.Choice(["transformers", "vllm", "auto"]), default="transformers",
-              help="v0 권장: transformers (§10.4 표)")
+@click.option("--backend", type=click.Choice(["transformers", "vllm", "remote_openai", "auto"]), default="transformers",
+              help="v0 권장: transformers. remote_openai 은 vLLM OpenAI API 를 HANMED_ENDPOINT 로 호출.")
 @click.option("--remote", type=str, default=None,
               help="v1 reserved — v0 에서는 사용 불가")
 @click.option("--system-prompt-version", type=str, default=DEFAULTS.system_prompt_version)
@@ -157,6 +157,13 @@ def chat_cmd(
         repetition_penalty=repetition_penalty,
     )
 
+    # splash — bare `hanmed` 와 동일한 위치(backend load 전)에서 한 번만 출력.
+    # run_repl 은 더 이상 splash 를 찍지 않는다 (중복 방지).
+    adapter_label_splash = (
+        f"HanMed-{mode.upper()} ({adapter.name})" if adapter else "(base only)"
+    )
+    print_banner(PKG_VERSION, adapter_label_splash, plain=plain)
+
     # backend 로드 (지연 import — CLI --help 빠르게 유지)
     from hanmed_cli.inference import get_backend
 
@@ -172,14 +179,10 @@ def chat_cmd(
         print_error(f"backend load 실패: {exc!r}")
         sys.exit(1)
 
-    adapter_label = (
-        f"HanMed-{mode.upper()} ({adapter.name})" if adapter else "(base only)"
-    )
-
     from hanmed_cli.chat import run_repl
 
     try:
-        rc = run_repl(be, session, sampling, adapter_label=adapter_label, plain=plain)
+        rc = run_repl(be, session, sampling, adapter_label=adapter_label_splash, plain=plain)
     finally:
         # autosave
         try:

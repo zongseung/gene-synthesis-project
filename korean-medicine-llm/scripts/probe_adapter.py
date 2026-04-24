@@ -6,9 +6,14 @@ CPT continuation 을 측정한다. 두 경로가 동일 파라미터 메모리 �
 토크나이저를 공유하므로 이중 로드(GPU0/GPU1) 대비 수치적으로 공정한 A/B 가 된다.
 
 SFT 이전이므로 "질문-답변" 포맷 기대 금지. CPT 는 continuation.
+
+Usage:
+    PYTHONHASHSEED=0 .venv/bin/python scripts/probe_adapter.py              # R0 기본
+    PYTHONHASHSEED=0 .venv/bin/python scripts/probe_adapter.py --adapter outputs/cpt_bllossom_R1/adapter
 """
 from __future__ import annotations
 
+import argparse
 import os
 import sys
 import torch
@@ -20,7 +25,7 @@ from peft import PeftModel  # noqa: E402
 
 BASE = "MLP-KTLim/llama-3-Korean-Bllossom-8B"
 TOK_DIR = "data/tokenizer/hanmed_bllossom_ext"
-ADAPTER = "outputs/cpt_bllossom/adapter"
+DEFAULT_ADAPTER = "outputs/cpt_bllossom/adapter"
 DEVICE = "cuda:0"
 
 PROMPTS = [
@@ -40,12 +45,12 @@ GEN = dict(
 )
 
 
-def load_model_with_adapter(device: str):
-    print(f"[load base + adapter → {device}]", flush=True)
+def load_model_with_adapter(device: str, adapter_path: str):
+    print(f"[load base + adapter({adapter_path}) → {device}]", flush=True)
     tok = AutoTokenizer.from_pretrained(TOK_DIR)
     m = AutoModelForCausalLM.from_pretrained(BASE, dtype=torch.bfloat16).to(device)
     m.resize_token_embeddings(len(tok), mean_resizing=False)
-    m = PeftModel.from_pretrained(m, ADAPTER)
+    m = PeftModel.from_pretrained(m, adapter_path)
     m.eval()
     return m, tok
 
@@ -58,9 +63,14 @@ def gen(model, tok, prompt: str, device: str) -> str:
 
 
 def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--adapter", default=DEFAULT_ADAPTER, help="PEFT adapter 디렉토리")
+    args = ap.parse_args()
+
     torch.manual_seed(42)
-    model, tok = load_model_with_adapter(DEVICE)
+    model, tok = load_model_with_adapter(DEVICE, args.adapter)
     print("\n" + "=" * 78)
+    print(f"ADAPTER = {args.adapter}")
     for i, p in enumerate(PROMPTS, 1):
         print(f"\n--- [{i}/{len(PROMPTS)}] prompt: {p!r}")
         # BASE: adapter 일시 비활성화 (동일 weight · 동일 tokenizer)

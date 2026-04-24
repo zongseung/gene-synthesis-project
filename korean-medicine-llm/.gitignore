@@ -1,0 +1,92 @@
+# ───────────── Python ─────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+build/
+dist/
+.eggs/
+.Python
+
+# ───────────── Virtualenv ─────────────
+.venv/
+venv/
+env/
+ENV/
+
+# ───────────── Tooling caches ─────────────
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyre/
+.pytype/
+.ipynb_checkpoints/
+.hypothesis/
+.tox/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# ───────────── Editor / OS ─────────────
+.DS_Store
+Thumbs.db
+.idea/
+*.swp
+*.swo
+
+# ───────────── Claude Code local settings ─────────────
+.claude/
+
+# ───────────── Training artifacts (huge) ─────────────
+outputs/
+models/
+wandb/
+logs/
+data/
+_workspace/
+checkpoints/
+runs/
+
+# ───────────── Experiment artifacts ─────────────
+experiments/**/outputs/
+experiments/**/outputs_*/
+experiments/**/.cache/
+experiments/**/wandb/
+experiments/**/logs/
+experiments/**/checkpoints/
+experiments/**/runs/
+
+# ───────────── Logs & debug ─────────────
+*.log
+tea_debug.log
+
+# ───────────── Large binary formats (model weights, datasets) ─────────────
+*.pt
+*.pth
+*.bin
+*.safetensors
+*.ckpt
+*.onnx
+*.gguf
+*.h5
+*.hdf5
+*.npz
+*.npy
+*.parquet
+*.arrow
+*.pkl
+*.pickle
+
+# ───────────── Secrets / local env ─────────────
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# ───────────── HuggingFace cache (if symlinked in) ─────────────
+.cache/
+huggingface/

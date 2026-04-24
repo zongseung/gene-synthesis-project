@@ -48,7 +48,7 @@ experiments/dongui_bogam/
 │   │   ├── preprocess.py               # stage1 clean + stage2 pack (--record-sep 추가)
 │   │   ├── build_wiki_ko.py            # wiki_ko replay corpus 빌더
 │   │   └── tokenizer_extend.py         # 4 special token (<ZH>/<KO>/<JA>/<EN>)
-│   └── training/cpt_trainer.py         # CPT trainer (LoRA + CORPUS_PATHS)
+│   └── training/sft_trainer.py         # SFT mainline (Bllossom/Gemma preset, --mode cpt 는 root trainer 로 위임)
 ├── docs/                               # 기획서·진단 문서 (symlinks)
 │   ├── 08_real_data_antihalluc_plan.md # 본 실험의 기획서 (ver4 §08)
 │   ├── 02_plan_v4.md                   # ver4 마스터 플랜

@@ -29,9 +29,9 @@ LABEL_SAFE = f"[{DISPLAY_NAME.lower()}:safe]"
 
 
 # ── Header text ───────────────────────────────────────────────
-CLI_TITLE = "HanMed CLI v0.1"
-CLI_SUBTITLE = "DONGUI AI"
-CLI_WELCOME = f"Welcome to {DISPLAY_NAME} · /help, /save, /reset, /exit"
+CLI_TITLE = "HanMed · 동의보감 v3.1"
+CLI_SUBTITLE = "Dongui Bogam assistant · Bllossom-8B + LoRA SFT"
+CLI_WELCOME = "동의보감 전용 · 진단·처방 불가  ·  /help /exit"
 
 
 # ── Mascot (24-bit truecolor ANSI, alpha-aware) ───────────────

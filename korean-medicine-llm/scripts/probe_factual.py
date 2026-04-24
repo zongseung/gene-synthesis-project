@@ -134,6 +134,10 @@ def generate_once(tok, model, stops, device, question: str, system: str, max_new
             eos_token_id=stops,
             pad_token_id=tok.pad_token_id,
             repetition_penalty=rep_penalty,
+            # round_2 supervisor A1: F3 loop 템플릿 반복 완화.
+            # 6-gram 이상 중복 차단 — "이 같은 연관 속에서 허준과(와) 『동의보감』"
+            # 같은 문장 전체 복붙 방지.
+            no_repeat_ngram_size=6,
         )
     latency = time.time() - t0
 

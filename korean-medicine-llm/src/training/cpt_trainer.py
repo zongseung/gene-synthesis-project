@@ -109,6 +109,13 @@ CORPUS_PATHS: dict[str, str] = {
     # 수집 후 preprocess.py 를 거쳐 cpt_processed/ 에 packed 로 생성됨 (hanmed
     # 코퍼스와 동일한 디렉토리 · 동일 seq_len 2048).
     "wiki_ko": "data/cpt_processed/wiki_ko_packed_2048.jsonl",
+    # ver4 §08 (2026-04-23) Phase A' — book_008 전용 shards.
+    # scripts/build_book008_splits.py + preprocess.py --record-sep none 으로 생성.
+    "book008_bilingual": "data/cpt_processed/book008_bilingual_packed_2048.jsonl",
+    "book008_ko_only": "data/cpt_processed/book008_ko_only_packed_2048.jsonl",
+    "book008_real_facts_identity": "data/cpt_processed/book008_real_facts_identity_packed_2048.jsonl",
+    "book008_real_facts_context": "data/cpt_processed/book008_real_facts_context_packed_2048.jsonl",
+    "book008_prolog": "data/cpt_processed/book008_prolog_packed_2048.jsonl",
     # 이하 M2 수집 대기 — CLI 로 경로 override 가능
     "cbeta": "data/replay/cbeta_packed_2048.jsonl",
     "aihub": "data/replay/aihub_ko_packed_2048.jsonl",

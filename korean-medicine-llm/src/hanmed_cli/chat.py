@@ -11,13 +11,11 @@ from dataclasses import asdict
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import InMemoryHistory
 
-from hanmed_cli import __version__ as PKG_VERSION
 from hanmed_cli.config import DEFAULTS
 from hanmed_cli.conversation import Conversation
 from hanmed_cli.inference.base import Backend, SamplingConfig
 from hanmed_cli.render import (
     print_assistant_prefix,
-    print_banner,
     print_error,
     print_info,
     print_refusal,
@@ -133,9 +131,11 @@ def run_repl(
     adapter_label: str,
     plain: bool = False,
 ) -> int:
-    """REPL main loop. 정상 종료 0, 에러 1."""
-    print_banner(PKG_VERSION, adapter_label, plain=plain)
+    """REPL main loop. 정상 종료 0, 에러 1.
 
+    splash/banner 는 호출자 책임 (중복 렌더 방지). main.py 의 bare `hanmed`
+    entry 와 `hanmed chat` entry 각각 backend load 전에 한 번만 출력한다.
+    """
     conv = Conversation(backend.get_tokenizer(), session)
     pt_session = PromptSession(history=InMemoryHistory())
 
