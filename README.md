@@ -86,124 +86,287 @@ FiLM: output = γ · input + β
 
 ## Model Architecture
 
-### 전체 흐름도
+### Default config (baseline)
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                        HybridCNNDiTFiLM (~6.8M params)                      │
-│                                                                             │
-│  Input: (B, K, 24576) + pop_label (B,) + timestep (B,)                     │
-│  ─────────────────────────────────────────────────────────                  │
-│                                                                             │
-│  ┌──────────────┐   ┌───────────────────────┐   ┌──────────────────────┐   │
-│  │  Timestep     │   │ Hierarchical Pop Emb  │   │ Unified FiLM         │   │
-│  │  Embedding    │   │                       │   │ Generator            │   │
-│  │              │   │  pop_emb(26, d)       │   │                      │   │
-│  │  sinusoidal  │   │  + superpop_emb(5, d) │   │  cond → per-block    │   │
-│  │  → MLP       │   │  → fusion MLP         │   │  (γ,β) for CNN       │   │
-│  │  → (B, d)    │   │  → (B, d)             │   │  (γ,β,α) for DiT    │   │
-│  └──────┬───────┘   └──────────┬────────────┘   └──────────┬───────────┘   │
-│         │                      │                            │               │
-│         └──────────┬───────────┘                            │               │
-│                    │ cond = t_emb + pop_emb                 │               │
-│                    └────────────────────────────────────────►│               │
-│                                                                             │
-│  ┌─────────────────────────────────────────────────────────────────────┐    │
-│  │                    CNN Stem Encoder + FiLM                          │    │
-│  │                                                                     │    │
-│  │  (B, K, 24576) ──FiLMConv──► (B, C, 24576)  ─── skip₁             │    │
-│  │                  ──FiLMConv+↓2──► (B, C, 12288)  ─── skip₂        │    │
-│  │                  ──FiLMConv+↓2──► (B, 2C, 6144)  ─── skip₃        │    │
-│  │                  ──FiLMConv+↓2──► (B, 4C, 3072)                    │    │
-│  └──────────────────────────┬──────────────────────────────────────────┘    │
-│                             │                                               │
-│  ┌──────────────────────────▼──────────────────────────────────────────┐    │
-│  │                    Patchify + Position Embedding                     │    │
-│  │                                                                     │    │
-│  │  (B, 4C, 3072) → Conv1d(kernel=16, stride=16) → (B, 192, d_model) │    │
-│  │  + learnable positional embedding                                   │    │
-│  └──────────────────────────┬──────────────────────────────────────────┘    │
-│                             │                                               │
-│  ┌──────────────────────────▼──────────────────────────────────────────┐    │
-│  │                    DiT Core (4 blocks, AdaLN-Zero)                  │    │
-│  │                                                                     │    │
-│  │  Block l:                                                           │    │
-│  │    h = LayerNorm(x)                                                 │    │
-│  │    h = γ₁ · h + β₁           ← FiLM modulation                    │    │
-│  │    h = MultiHeadSelfAttn(h)                                         │    │
-│  │    x = x + α₁ · h            ← α₁ init=0 (identity start)         │    │
-│  │                                                                     │    │
-│  │    h = LayerNorm(x)                                                 │    │
-│  │    h = γ₂ · h + β₂           ← FiLM modulation                    │    │
-│  │    h = FFN(h)                                                       │    │
-│  │    x = x + α₂ · h            ← α₂ init=0 (identity start)         │    │
-│  │                                                                     │    │
-│  │  × 4 blocks                                                         │    │
-│  └──────────────────────────┬──────────────────────────────────────────┘    │
-│                             │                                               │
-│  ┌──────────────────────────▼──────────────────────────────────────────┐    │
-│  │                    Un-Patchify                                       │    │
-│  │                                                                     │    │
-│  │  (B, 192, d_model) → Linear → reshape → (B, 4C, 3072)             │    │
-│  └──────────────────────────┬──────────────────────────────────────────┘    │
-│                             │                                               │
-│  ┌──────────────────────────▼──────────────────────────────────────────┐    │
-│  │                    CNN Decoder + FiLM + Skip Connections             │    │
-│  │                                                                     │    │
-│  │  (B, 4C, 3072)  ──FiLMDeconv+↑2+skip₃──► (B, 2C, 6144)           │    │
-│  │                  ──FiLMDeconv+↑2+skip₂──► (B, C, 12288)           │    │
-│  │                  ──FiLMDeconv+↑2+skip₁──► (B, C, 24576)           │    │
-│  │                  ──Conv1d(1×1)──► (B, K, 24576)                    │    │
-│  └──────────────────────────┬──────────────────────────────────────────┘    │
-│                             │                                               │
-│  ┌──────────────────────────▼──────────────────────────────────────────┐    │
-│  │  enforce_zeros: output × (~zero_mask)                               │    │
-│  └──────────────────────────┬──────────────────────────────────────────┘    │
-│                             │                                               │
-│  Output: predicted noise ε (B, K, 24576)                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
+| 항목 | 값 | 근거 (코드) |
+|------|----|-------------|
+| `in_channels (K)` | 8 | `hybrid_geno_dit.py:47-49` |
+| `gene_size` | 26624 | `hybrid_geno_dit.py:50` |
+| `base_channels` | 64 | `hybrid_geno_dit.py:51` |
+| `channel_mult` | (1, 1, 2, 4) | `hybrid_geno_dit.py:52` |
+| `n_downsamples` | 3 = `len(channel_mult) - 1` | `hybrid_geno_dit.py:76` |
+| `latent_size` | 26624 / 8 = 3328 | `hybrid_geno_dit.py:77` |
+| `latent_channels (4C)` | 256 | `hybrid_geno_dit.py:72` |
+| `d_model` | 256 | `hybrid_geno_dit.py:54` |
+| `n_dit_blocks` | 4 | `hybrid_geno_dit.py:55` |
+| `n_heads` | 4 | `hybrid_geno_dit.py:56` |
+| `mlp_ratio` | 4.0 | `hybrid_geno_dit.py:57` |
+| `patch_size` | 16 → `n_tokens = 208` | `hybrid_geno_dit.py:59`, `dit.py:36` |
+| `n_pops (+null)` | 26 (+1 = 27, CFG null) | `hybrid_geno_dit.py:60`, `conditioning.py:43` |
+| `n_superpops (+null)` | 5 (+1 = 6) | `hybrid_geno_dit.py:61`, `conditioning.py:46-50` |
+
+### 최상위 데이터 흐름 (`HybridCNNDiTFiLM.forward`)
+
+```mermaid
+flowchart TD
+    subgraph INPUT["INPUT"]
+        X["x : (B, 8, 26624)<br/>noisy Gene-PCA tensor"]
+        T["t : (B,)<br/>diffusion timestep"]
+        Y["y : (B,)<br/>pop_label ∈ [0,25] ∪ {26 = CFG null}"]
+    end
+
+    subgraph COND["CONDITIONING PATH"]
+        PE["HierarchicalPopulationEmbedding<br/>pop_emb ⊕ superpop_emb → fusion MLP<br/>→ (B, 256)"]
+        FG["UnifiedFiLMGenerator<br/>time_mlp(t) ⊕ pop_emb → cond_mlp<br/>→ (cnn_enc, cnn_dec, dit) FiLM params"]
+    end
+
+    subgraph ENC["CNN ENCODER  (local LD)"]
+        E1["FiLMConvBlock #1<br/>8 → 64,   L: 26624 → 13312"]
+        E2["FiLMConvBlock #2<br/>64 → 64,  L: 13312 → 6656"]
+        E3["FiLMConvBlock #3<br/>64 → 128, L: 6656 → 3328"]
+        E4["FiLMConvBlock #4 (no ↓)<br/>128 → 256, L: 3328"]
+    end
+
+    subgraph DITCORE["DiT CORE  (long-range gene interactions)"]
+        P["PatchEmbed1D<br/>(B,256,3328) → reshape + Linear<br/>→ (B, 208, 256) + learned pos_emb"]
+        D["DiTCore × 4 blocks<br/>AdaLN-Zero self-attn + MLP"]
+        U["UnPatchify1D<br/>(B, 208, 256) → Linear + reshape<br/>→ (B, 256, 3328)"]
+    end
+
+    subgraph DEC["CNN DECODER  (reconstruction + skips)"]
+        D1["FiLMDeconvBlock #1<br/>256 → 128 + skip₄"]
+        D2["FiLMDeconvBlock #2<br/>128 → 64  + skip₃"]
+        D3["FiLMDeconvBlock #3<br/>64  → 64  + skip₂"]
+        D4["FiLMDeconvBlock #4 (no ↑)<br/>64  → 64  + skip₁"]
+        FC["Conv1d 1×1<br/>64 → 8"]
+    end
+
+    subgraph OUT["OUTPUT"]
+        Z["enforce_zeros<br/>output × (~zero_mask)"]
+        OUTX["ε̂ : (B, 8, 26624)"]
+    end
+
+    X --> E1 --> E2 --> E3 --> E4 --> P --> D --> U --> D1 --> D2 --> D3 --> D4 --> FC --> Z --> OUTX
+
+    T --> FG
+    Y --> PE --> FG
+
+    FG -. γ,β .-> E1
+    FG -. γ,β .-> E2
+    FG -. γ,β .-> E3
+    FG -. γ,β .-> E4
+    FG -. γ,β,α × 6 .-> D
+    FG -. γ,β .-> D1
+    FG -. γ,β .-> D2
+    FG -. γ,β .-> D3
+    FG -. γ,β .-> D4
+
+    E1 -. skip₁ .-> D4
+    E2 -. skip₂ .-> D3
+    E3 -. skip₃ .-> D2
+    E4 -. skip₄ .-> D1
+
+    classDef cond fill:#fde68a,stroke:#b45309,color:#000
+    classDef enc  fill:#bfdbfe,stroke:#1e40af,color:#000
+    classDef dit  fill:#ddd6fe,stroke:#5b21b6,color:#000
+    classDef dec  fill:#bbf7d0,stroke:#166534,color:#000
+    classDef io   fill:#f3f4f6,stroke:#374151,color:#000
+
+    class PE,FG cond
+    class E1,E2,E3,E4 enc
+    class P,D,U dit
+    class D1,D2,D3,D4,FC dec
+    class X,T,Y,Z,OUTX io
 ```
 
-### Conditioning Path (FiLM 생성 경로)
+> 참고: 인코더는 블록 0–2가 stride-2 downsample을 수행하고 마지막 블록(#4)은 채널만 확장한다 (`cnn.py:167-173`). 디코더는 이 구조를 대칭적으로 반전해 앞 3개 블록이 ConvTranspose1d로 2배 upsample하고 마지막 블록은 길이를 유지한다 (`cnn.py:219-231`).
 
+### Conditioning Path (`HierarchicalPopulationEmbedding` + `UnifiedFiLMGenerator`)
+
+```mermaid
+flowchart LR
+    Y["pop_label y (B,)<br/>0..25 (+26 = null for CFG)"]
+    T["timestep t (B,)"]
+
+    subgraph HPE["HierarchicalPopulationEmbedding"]
+        PMAP["pop_to_superpop_map<br/>(n_pops+1,) long buffer"]
+        PEMB["nn.Embedding(27, 256)"]
+        SEMB["nn.Embedding(6, 256)"]
+        CAT1["concat → (B, 512)"]
+        FUSE["Linear 512→256 · SiLU · Linear 256→256"]
+        POUT["pop_emb (B, 256)"]
+    end
+
+    subgraph TME["Timestep path"]
+        SINE["sinusoidal timestep_embedding<br/>dim=256, max_period=10000"]
+        TMLP["Linear 256→256 · SiLU · Linear 256→256"]
+        TOUT["t_emb (B, 256)"]
+    end
+
+    subgraph UFG["UnifiedFiLMGenerator"]
+        CAT2["concat [pop_emb, t_emb] → (B, 512)"]
+        CMLP["cond_mlp<br/>Linear 512→256 · SiLU · Linear 256→256<br/>→ cond (B, 256)"]
+
+        subgraph CNN_ENC_FILM["cnn_enc_films (ModuleList × 4)"]
+            LE1["Linear 256 → 2·64"]
+            LE2["Linear 256 → 2·64"]
+            LE3["Linear 256 → 2·128"]
+            LE4["Linear 256 → 2·256"]
+        end
+
+        subgraph CNN_DEC_FILM["cnn_dec_films (ModuleList × 4)"]
+            LD1["Linear 256 → 2·128"]
+            LD2["Linear 256 → 2·64"]
+            LD3["Linear 256 → 2·64"]
+            LD4["Linear 256 → 2·64"]
+        end
+
+        subgraph DIT_FILM["dit_films (ModuleList × 4, AdaLN-Zero)"]
+            DF["SiLU → zero_module(Linear 256 → 6·256)<br/>per block → (B, 1536)"]
+        end
+    end
+
+    Y --> PEMB --> CAT1
+    Y --> PMAP --> SEMB --> CAT1 --> FUSE --> POUT
+    T --> SINE --> TMLP --> TOUT
+
+    POUT --> CAT2
+    TOUT --> CAT2 --> CMLP
+
+    CMLP -. cond .-> LE1 & LE2 & LE3 & LE4
+    CMLP -. cond .-> LD1 & LD2 & LD3 & LD4
+    CMLP -. cond .-> DF
+
+    LE1 -->|"chunk(2) → γ,β"| EO1["→ Encoder block 1"]
+    LE2 --> EO2["→ Encoder block 2"]
+    LE3 --> EO3["→ Encoder block 3"]
+    LE4 --> EO4["→ Encoder block 4"]
+
+    LD1 --> DO1["→ Decoder block 1"]
+    LD2 --> DO2["→ Decoder block 2"]
+    LD3 --> DO3["→ Decoder block 3"]
+    LD4 --> DO4["→ Decoder block 4"]
+
+    DF -->|"chunk(6) → γ₁,β₁,α₁,γ₂,β₂,α₂"| DITO["→ DiT blocks × 4"]
+
+    classDef hpe fill:#fde68a,stroke:#92400e,color:#000
+    classDef tme fill:#fecaca,stroke:#991b1b,color:#000
+    classDef ufg fill:#ddd6fe,stroke:#5b21b6,color:#000
+    class PMAP,PEMB,SEMB,CAT1,FUSE,POUT hpe
+    class SINE,TMLP,TOUT tme
+    class CAT2,CMLP,LE1,LE2,LE3,LE4,LD1,LD2,LD3,LD4,DF ufg
 ```
-pop_label (0~25)
-     │
-     ▼
-┌─────────────────────────────────────────────┐
-│  HierarchicalPopulationEmbedding             │
-│                                              │
-│  pop_emb = Embedding(26, 256)  ← 인구군 고유 │
-│  superpop_emb = Embedding(5, 256) ← 공유 기반 │
-│                                              │
-│  pop_to_superpop 매핑:                       │
-│    ASW(1) → AFR(0), CEU(4) → EUR(3), ...    │
-│                                              │
-│  pop_cond = MLP(cat(pop_emb, superpop_emb)) │
-└─────────────────┬───────────────────────────┘
-                  │
-timestep (0~499)  │
-     │            │
-     ▼            ▼
-  sinusoidal → MLP → t_emb
-                  │
-                  ▼
-          cond = t_emb + pop_cond
-                  │
-                  ▼
-┌─────────────────────────────────────────────┐
-│  UnifiedFiLMGenerator                        │
-│                                              │
-│  cond → Linear → (γ₁,β₁) for CNN enc blk 1 │
-│       → Linear → (γ₂,β₂) for CNN enc blk 2 │
-│       → Linear → (γ₃,β₃) for CNN enc blk 3 │
-│       → Linear → (γ₄,β₄) for CNN enc blk 4 │
-│       → Linear → (γ,β,α)×2 for DiT blk 1   │   ← α init=0
-│       → Linear → (γ,β,α)×2 for DiT blk 2   │
-│       → Linear → (γ,β,α)×2 for DiT blk 3   │
-│       → Linear → (γ,β,α)×2 for DiT blk 4   │
-│       → Linear → (γ,β) for CNN dec blk 1~4  │
-└─────────────────────────────────────────────┘
+
+### 블록 내부 구조
+
+#### `FiLMConvBlock` — 인코더 블록 (`cnn.py:18-74`)
+
+```mermaid
+flowchart TD
+    X["x (B, C_in, L)"]
+    G["γ (B, C_out)"]
+    B["β (B, C_out)"]
+
+    SP["skip_proj: Conv1d 1×1 (C_in≠C_out) else Identity"]
+    C1["Conv1d k=3, pad=1   C_in → C_out"]
+    N1["GroupNorm(min(32, C_out), C_out)"]
+    FILM["FiLM: γ.unsqueeze(-1) · h + β.unsqueeze(-1)"]
+    A1["SiLU"]
+    C2["Conv1d k=3   C_out → C_out"]
+    N2["GroupNorm"]
+    A2["SiLU"]
+    ADD((+))
+    DS["downsample: Conv1d k=2, s=2  (if not last)  else Identity"]
+
+    X --> C1 --> N1 --> FILM --> A1 --> C2 --> N2 --> A2 --> ADD
+    X --> SP --> ADD
+    G --> FILM
+    B --> FILM
+
+    ADD -->|"skip (pre-downsample)"| SKIPOUT["skip → decoder"]
+    ADD --> DS --> OUT["out (B, C_out, L' = L/2 or L)"]
+
+    classDef film fill:#fde68a,stroke:#92400e,color:#000
+    class FILM film
+```
+
+#### `DiTBlock` — AdaLN-Zero 블록 (`dit.py:94-162`)
+
+```mermaid
+flowchart TD
+    X["x (B, N=208, d=256)"]
+    FP["film_params (B, 1536)"]
+    CHK["chunk(6, dim=-1)<br/>→ γ₁,β₁,α₁,γ₂,β₂,α₂  each (B,1,256)"]
+
+    subgraph ATTN["Self-Attention branch"]
+        N1["LayerNorm(elementwise_affine=False)"]
+        M1["h = γ₁·h + β₁"]
+        MHA["MultiheadAttention<br/>d=256, heads=4, batch_first"]
+        G1["x + α₁·h   (α₁ ≈ 0 at init)"]
+    end
+
+    subgraph MLP["FFN branch"]
+        N2["LayerNorm(elementwise_affine=False)"]
+        M2["h = γ₂·h + β₂"]
+        F1["Linear 256 → 1024"]
+        GE["GELU"]
+        DR1["Dropout"]
+        F2["Linear 1024 → 256"]
+        DR2["Dropout"]
+        G2["x + α₂·h   (α₂ ≈ 0 at init)"]
+    end
+
+    X --> N1 --> M1 --> MHA --> G1
+    X -. residual .-> G1
+    FP --> CHK
+    CHK -. γ₁,β₁ .-> M1
+    CHK -. α₁ .-> G1
+
+    G1 --> N2 --> M2 --> F1 --> GE --> DR1 --> F2 --> DR2 --> G2
+    G1 -. residual .-> G2
+    CHK -. γ₂,β₂ .-> M2
+    CHK -. α₂ .-> G2
+
+    G2 --> OUT["(B, 208, 256)"]
+
+    classDef ada fill:#ddd6fe,stroke:#5b21b6,color:#000
+    class N1,M1,G1,N2,M2,G2 ada
+```
+
+`UnifiedFiLMGenerator.dit_films`가 `zero_module(Linear)`로 감싸져 있어 (`conditioning.py:131-139`) 학습 초기에 `γ=β=α=0`. LayerNorm도 `elementwise_affine=False`이므로 AdaLN-Zero의 정의에 따라 DiT는 **identity**로 시작하고, CNN 피처 위에서 점진적으로 장거리 보정을 학습한다.
+
+#### `FiLMDeconvBlock` — 디코더 블록 (`cnn.py:77-142`)
+
+```mermaid
+flowchart TD
+    X["x (B, C_in, L)"]
+    SK["skip (B, skip_ch, L_skip)"]
+    G["γ (B, C_out)"]
+    B["β (B, C_out)"]
+
+    UP["ConvTranspose1d k=2, s=2  (or Identity on last block)"]
+    PAD["F.pad (length align)"]
+    CAT["concat [h, skip] → (B, C_in+skip_ch, L_skip)"]
+    SP["skip_proj: Conv1d 1×1 (concat_ch ≠ C_out)"]
+    C1["Conv1d k=3   (C_in+skip_ch) → C_out"]
+    N1["GroupNorm"]
+    FILM["FiLM   γ · h + β"]
+    A1["SiLU"]
+    C2["Conv1d k=3   C_out → C_out"]
+    N2["GroupNorm"]
+    A2["SiLU"]
+    ADD((+))
+
+    X --> UP --> PAD --> CAT
+    SK --> CAT
+    CAT --> C1 --> N1 --> FILM --> A1 --> C2 --> N2 --> A2 --> ADD
+    CAT --> SP --> ADD
+    G --> FILM
+    B --> FILM
+    ADD --> OUT["out (B, C_out, L_skip)"]
+
+    classDef film fill:#fde68a,stroke:#92400e,color:#000
+    class FILM film
 ```
 
 ### 위치별 FiLM의 역할
@@ -247,12 +410,12 @@ Noise Schedule: cosine (Nichol & Dhariwal), 500 timesteps
 
 | 모듈 | 파라미터 수 | 비고 |
 |------|-----------|------|
-| Hierarchical Pop Embedding | ~0.07M | pop(26) + superpop(5) + fusion MLP |
-| Unified FiLM Generator | ~0.5M | per-block linear layers |
-| CNN Encoder (4 blocks) | ~1.2M | stride-2 downsample × 3 |
-| Patchify + Position Embedding | ~0.3M | patch_size=16, 192 tokens |
-| DiT Core (4 blocks, d=256) | ~3.2M | self-attention + FFN |
-| CNN Decoder (4 blocks) | ~1.5M | transposed conv + skip connections |
+| Hierarchical Pop Embedding | ~0.07M | pop(27) + superpop(6) + fusion MLP (null class 포함) |
+| Unified FiLM Generator | ~0.5M | `time_mlp` + `cond_mlp` + per-block linear (enc 4 · dec 4 · dit 4) |
+| CNN Encoder (4 blocks) | ~1.2M | stride-2 downsample × 3, 마지막 블록은 채널 확장만 |
+| Patchify + Position Embedding | ~0.3M | patch_size=16 → 208 tokens |
+| DiT Core (4 blocks, d=256) | ~3.2M | self-attention + FFN, AdaLN-Zero |
+| CNN Decoder (4 blocks) | ~1.5M | ConvTranspose1d × 3 + skip connections + final 1×1 conv |
 | **Total** | **~6.8M** | bf16: ~14MB VRAM |
 
 ---
