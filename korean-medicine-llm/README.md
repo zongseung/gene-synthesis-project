@@ -14,23 +14,38 @@
 
 ---
 
+## 0. 현재 상태 & 버전 히스토리
+
+| 버전 | 날짜 | Paradigm | Base / Adapter | 데이터 scope | 상태 |
+|---|---|---|---|---|---|
+| **v0.1 (ver4 P-A+)** | 2026-04 초 | CPT (LoRA r=32) | Bllossom-8B + 34권 mix | 20.4 M tok cap, 156 steps | 과거 운영 (`hanmed-p-a-plus` merged) |
+| **Phase A'** (ver4 §08) | 2026-04 중 | CPT 단권 | Bllossom-8B + book_008 | 5 M tok cap | 비교군 adapter (`cpt_bllossom_phaseA`) |
+| **ver5 v3.1 (SFT)** | **2026-04-22 현재 운영** | **Fresh SFT** (TRL) | Bllossom-8B + book_008 full | **34,039 QA** 쌍 | **서빙 중** (`hanmed_merged_ver5_v3_1`) |
+| ver6 r2 (Gemma) | 2026-04-23 계획 | SFT on Gemma-3 12B-IT | `models/gemma-3-12b-it` + book_008 | 19,023 쌍 (cov 89.72%) | zero-probe 실측 완료, 전환 준비 |
+
+전환 근거는 각 기획서에 정리돼 있다:
+
+- ver4 → ver5: **CPT 한계 3중 확증** (질문 표현 fragility / safety refusal 0% / 재실행 비결정성) — [`docs/ver5/01_experimental_evidence.md`](docs/ver5/01_experimental_evidence.md)
+- ver5 → ver6: **SFT 환각(F1) · 반복(F3) 공동 원인** (답변 템플릿 42% 동질성 · 임상 QA 0건 · 허위 citation · LoRA `embed_tokens` 포함) — [`docs/ver6/00_halluc_repetition_fix_plan.md`](docs/ver6/00_halluc_repetition_fix_plan.md)
+
 ## 1. 모델 개요
 
-| 구분 | 값 |
-|---|---|
-| 제품명 | DONGUI (Shell 명령: `hanmed`) |
-| 버전 | v0.1 (ver4 P-A+ CPT) |
-| Base | [MLP-KTLim/llama-3-Korean-Bllossom-8B](https://huggingface.co/MLP-KTLim/llama-3-Korean-Bllossom-8B) (Llama-3 8B 한국어 추가학습본) |
-| Adapter | LoRA r=32, α=64, dropout 0.05 · 7 projection (q/k/v/o + gate/up/down) |
-| Extended tokenizer | Bllossom vocab 128 256 → **128 260** (+ `<ZH>/</ZH>/<KO>/</KO>`) |
-| Precision | bf16 (GradScaler 미사용) |
-| Context window | 8 192 tokens (base) / 4 096 serving (latency 최적) |
-| Objective | Causal LM next-token prediction (self-supervised DAPT + P-A+ knowledge injection) |
-| Served model name | `hanmed-p-a-plus` (OpenAI API compatible) |
+| 구분 | ver4 (v0.1) | **ver5 v3.1 (current)** | ver6 r2 (planned) |
+|---|---|---|---|
+| 제품명 | DONGUI | DONGUI | DONGUI |
+| Shell 명령 | `hanmed` | `hanmed` | `hanmed` |
+| Base | [Bllossom-8B](https://huggingface.co/MLP-KTLim/llama-3-Korean-Bllossom-8B) | Bllossom-8B | [`google/gemma-3-12b-it`](https://huggingface.co/google/gemma-3-12b-it) |
+| Adapter | LoRA r=32, α=64, dropout 0.05 · 7 proj | LoRA r=32, α=64 · 7 proj (no embed) | LoRA r=32, α=64 · target TBD |
+| Tokenizer 확장 | 128 256 → **128 260** (`<ZH>/</ZH>/<KO>/</KO>`) | 동일 (ver4 와 호환) | Gemma 262 144 vocab (미확장) |
+| Precision | bf16 | bf16 | bf16 |
+| Objective | Causal LM next-token (CPT) | TRL SFT (completion-only loss) | TRL SFT (완료 loss) |
+| Context (base/서빙) | 8 192 / **4 096** | 8 192 / **4 096** | 8 192 / 4 096 |
+| Served model name | `hanmed-p-a-plus` | `hanmed-sft-ver5-v3-1` | `hanmed-gemma-ver6` |
+| Merged weight 경로 | `outputs/hanmed_merged_v0.1` | `outputs/hanmed_merged_ver5_v3_1` | TBD |
 
 ## 2. 모델 작동 흐름
 
-### 2.1 전체 파이프라인
+### 2.1 전체 파이프라인 (ver4 CPT / ver5 SFT 공통)
 
 ```
 [mediclassics.kr 26권 1KG 원문]
@@ -39,24 +54,37 @@
 [data/raw/mediclassics_unified/book_*/vol_*.jsonl]
     한문 + 국역 + (영역) 3중 병렬 레코드
            │
-           ▼  extract_corpora (prolog 삽입 · 투명 메타)
-[data/cpt/{bilingual, zh_only, ko_only, synth_facts}.jsonl]
-           │
-           ▼  preprocess Stage 1 (clean) + Stage 2 (pack)
-[data/cpt_processed/*_packed_2048.jsonl]
-    book 경계 고정 · <ZH>…</ZH> 해시 gate · BOS/EOS pack
-           │
-           ▼  cpt_trainer (DDP 2-GPU, bf16, LoRA)
-[outputs/cpt_bllossom/best_model/]   ← P-A+ CPT adapter
-           │
-           ▼  build_merged_model (peft.merge_and_unload)
-[outputs/hanmed_merged_v0.1/]        ← merged HF safetensors
-           │
-           ▼  docker compose (vLLM OpenAI server)
-[http://localhost:8000/v1/completions]
-           │
-           ▼  httpx SSE stream
-[hanmed CLI]   ← 사용자 터미널
+           │────────────────────────┬──────────────────────────┐
+           ▼                        ▼                          ▼
+  ver4 CPT 경로            ver5 SFT 경로 (현 운영)       ver6 경로 (계획)
+           │                        │                          │
+  extract_corpora          build_sft_full_corpus           동일 book_008
+  + prolog 삽입            (book_008 Q/A 34,039쌍)         + Gemma tokenizer
+           │                        │                          │
+  [data/cpt/{bi,zh,          [data/sft/                   [data/sft/
+    ko,synth}.jsonl]           book008_full_sft.jsonl]     gemma_*.jsonl]
+           │                        │                          │
+  preprocess (clean/pack)    audit_sft_diversity +        audit_sft_diversity
+  book 경계 assertion        augment_sft_v7 (refusal)     (동일)
+           │                        │                          │
+  cpt_trainer (DDP 2-GPU)    sft_trainer (TRL,            sft_trainer
+   ver4 §2.1 mix             completion-only loss)         (Gemma preset)
+   (synth25/bi35/zh15/ko25)  3 epoch, LR 2e-5
+           │                        │                          │
+  [outputs/cpt_bllossom/]    [outputs/cpt_bllossom_       [outputs/ver6_*/]
+                              ver5_v3_1/adapter]
+           │                        │                          │
+           └─────────┬──────────────┴──────────────────────────┘
+                     ▼  scripts/build_merged_model.py (peft.merge_and_unload)
+           [outputs/hanmed_merged_*/]   ← merged HF safetensors + ext tokenizer
+                     │
+                     ▼  docker/docker-compose{.phaseA,.merged,.gemma}.yml (vLLM)
+                     │
+           [http://localhost:8000/v1/completions]
+                     │
+                     ▼  httpx SSE stream
+                     │
+                  [hanmed CLI]
 ```
 
 ### 2.2 단계별 역할
@@ -248,14 +276,30 @@ REPL 슬래시 명령: `/help /exit /reset /save <n> /load <n> /temp <f> /max <n
 
 ## 8. 서빙 배포
 
+### 8.1 Docker Compose 변형 5종
+
+용도별로 별개의 compose 파일을 둔다 (서빙 경로/모델/포트만 다르며 Dockerfile 은 공통 `Dockerfile.vllm`).
+
+| 파일 | 모델 경로 | 모드 | 용도 |
+|---|---|---|---|
+| `docker-compose.yml` | `outputs/adapter_current` (symlink) | **LoRA direct** | 매 이터레이션 어댑터 hot-swap (`ln -sfn cpt_bllossom_R{n}/adapter ..`) |
+| `docker-compose.merged.yml` | `outputs/hanmed_merged_v0.1` | merged | ver4 P-A+ 정식 배포 (selectable model name `hanmed-p-a-plus`) |
+| `docker-compose.phaseA.yml` | `outputs/cpt_bllossom_phaseA/adapter` | LoRA direct | Phase A' 실험군 빠른 검증 |
+| `docker-compose.phaseA.merged.yml` | `outputs/hanmed_merged_phaseA` | merged | Phase A' 안정 서빙 |
+| `docker-compose.gemma.yml` | `models/gemma-3-12b-it` | 무학습 base | ver6 zero-training probe (`google/gemma-3-12b-it`) |
+
+> **현재 서빙**: ver5 SFT v3.1 merged (`outputs/hanmed_merged_ver5_v3_1`) — `docker-compose.merged.yml` 을 `--model` override 해 기동하거나, 전용 compose 를 `ver5_v3_1` 경로로 패치해 사용한다.
+
+### 8.2 배포 절차 (ver5 예시)
+
 ```bash
 # 1. adapter → merged 모델
-.venv/bin/python scripts/build_merged_model.py \
-  --adapter outputs/cpt_bllossom/best_model \
-  --output outputs/hanmed_merged_v0.1
+PYTHONHASHSEED=0 .venv/bin/python scripts/build_merged_model.py \
+  --adapter outputs/cpt_bllossom_ver5_v3_1/adapter \
+  --output  outputs/hanmed_merged_ver5_v3_1
 
-# 2. Docker Compose 기동
-cd docker && docker compose up -d --build
+# 2. Docker Compose 기동 (merged)
+cd docker && docker compose -f docker-compose.merged.yml up -d --build
 
 # 3. 헬스 확인
 curl -sf http://localhost:8000/health
@@ -264,11 +308,11 @@ curl -s http://localhost:8000/v1/models | jq '.data[0]'
 # 4. 샘플 질의
 curl -s http://localhost:8000/v1/completions \
   -H 'Content-Type: application/json' \
-  -d '{"model":"hanmed-p-a-plus","prompt":"동의보감 저자는 ","max_tokens":64,"temperature":0}' \
+  -d '{"model":"hanmed-sft-ver5-v3-1","prompt":"동의보감 저자는 ","max_tokens":64,"temperature":0}' \
   | jq -r '.choices[0].text'
 ```
 
-세부 배포 스펙: [`docs/ver4/03_serving_and_cli/`](docs/ver4/03_serving_and_cli/)
+ver4 CPT 배포 스펙: [`docs/ver4/03_serving_and_cli/`](docs/ver4/03_serving_and_cli/) · ver6 Gemma 전환 계획: [`docs/ver6/00_halluc_repetition_fix_plan.md`](docs/ver6/00_halluc_repetition_fix_plan.md)
 
 ## 9. 재현성
 
@@ -287,44 +331,116 @@ curl -s http://localhost:8000/v1/completions \
 korean-medicine-llm/
 ├── README.md                # 이 파일 (모델 스펙)
 ├── pyproject.toml           # hanmed CLI 엔트리 포인트
-├── docs/                    # 상세 기획서
-│   ├── ver4/                # 현 운영 버전 (P-A+ CPT)
+├── uv.lock                  # uv 환경 lockfile
+│
+├── docs/                    # 상세 기획서 (버전별 · self-contained)
+│   ├── 01_overview ~ 09_roadmap/   # 주제별 원자 문서 (r0)
+│   ├── ver2/, ver3/                # 초기 라운드 기록 (역사)
+│   ├── ver4/                       # CPT P-A+ (v0.1 과거 운영)
 │   │   ├── 01_validation_report.md
 │   │   ├── 02_plan_v4.md
-│   │   ├── 03_serving_and_cli/   # vLLM + Docker + hanmed entry
-│   │   └── 04_dead_code_audit.md
-│   ├── 10_cli_visual_identity/   # CLI 디자인 spec (거북 mascot v3)
-│   └── ver2, ver3/          # 이전 라운드 기록 (역사)
+│   │   ├── 03_serving_and_cli/
+│   │   ├── 04_dead_code_audit.md
+│   │   └── 08_real_data_antihalluc_plan.md  # Phase A' 기획
+│   ├── ver5/                       # SFT 전환 (현 운영)
+│   │   ├── README.md
+│   │   ├── 01_experimental_evidence.md  # CPT 한계 3중 확증
+│   │   ├── 02_sft_design.md
+│   │   ├── 03_data_pipeline.md
+│   │   ├── 04_trainer_spec.md           # TRL SFTTrainer
+│   │   ├── 05_evaluation.md
+│   │   ├── 06_safety.md
+│   │   ├── 07_roadmap.md
+│   │   ├── 08_sft_build_plan.md
+│   │   └── 09_v4_complex_reasoning_plan.md
+│   ├── ver6/                       # Gemma-3 12B 전환 계획
+│   │   ├── 00_halluc_repetition_fix_plan.md
+│   │   └── appendix_bllossom_fallback.md
+│   ├── 10_cli_visual_identity/     # 거북 mascot spec + png2ascii 툴
+│   └── research_hanmed_cpt_methodology_20260421.md
+│
 ├── src/
 │   ├── data/
 │   │   ├── crawler/mediclassics_orchestrator.py
-│   │   ├── builder/{extract_corpora, preprocess, tokenizer_extend}.py
+│   │   ├── builder/{extract_corpora, preprocess, tokenizer_extend, build_wiki_ko}.py
 │   │   └── synth/expand_facts.py
-│   ├── training/cpt_trainer.py     # DDP CPT 트레이너
+│   ├── training/
+│   │   ├── cpt_trainer.py          # ver4 DDP CPT
+│   │   └── sft_trainer.py          # ver5+ TRL SFTTrainer (Bllossom/Gemma preset)
 │   ├── hanmed_cli/
 │   │   ├── main.py chat.py render.py conversation.py
 │   │   ├── safety.py session.py config.py
 │   │   ├── inference/{base, transformers_backend, remote_openai}.py
 │   │   └── prompts/{branding.py, system_v0.1.md, turtle_24col.ansi}
 │   └── utils/seed.py               # 결정성 보장
-├── scripts/
-│   ├── build_factsheet_draft.py    # KIOM raw_text → factsheet
-│   ├── build_merged_model.py       # adapter → merged HF model
-│   ├── entity_delta.py             # 저자 빈도 snapshot/diff
-│   ├── probe_factual.py            # T1 factual probe (base vs adapter)
-│   └── verify_synth_facts.py       # synth corpus 검증
+│
+├── scripts/                        # 각 단계별 operator CLI
+│   ├── (build) build_sft_qa.py / build_sft_full_corpus.py / build_sft_diverse.py /
+│   │          build_sft_clinical.py / build_sft_complex.py / build_book008_splits.py
+│   ├── (audit) audit_sft_diversity.py / augment_sft_v7.py / _v7_refusal_variants.py
+│   ├── (verify) verify_synth_facts.py / verify_sft_against_raw.py /
+│   │            verify_packed_content.py / tokenizer_verify.py / tokenizer_compare.py
+│   ├── (probe) probe_factual.py / probe_adapter.py / probe_ver6_quick.py /
+│   │           probe_ver7_{quick,data_grounded,pregnancy,prescription}.py /
+│   │           gemma_zero_probe.py / gemma_zero_probe_transformers.py
+│   ├── (deploy) build_merged_model.py / deploy_phaseA.sh / cli_phaseA.sh /
+│   │            cli_mock.py / cli_oneshot_smoke.py
+│   ├── (meta)   fetch_book_metadata.py / build_factsheet_draft.py /
+│   │            classify_books.py / entity_delta.py
+│
 ├── data/
 │   ├── raw/mediclassics_unified/   # 26권 크롤 결과
-│   ├── cpt/                        # extract_corpora 산출
-│   ├── cpt_processed/              # preprocess Stage 1+2
+│   ├── cpt/                        # ver4 extract_corpora 산출
+│   ├── cpt_processed/              # ver4 preprocess Stage 1+2
+│   ├── sft/                        # ver5 SFT QA 코퍼스
+│   │   ├── book008_full_sft.jsonl          # 34,039쌍 (full)
+│   │   ├── book008_full_sft_sample.jsonl   # 20쌍 (smoke)
+│   │   └── *.stats.json / *.validation.json
 │   ├── facts/core_factsheet.yaml   # 26권 fact sheet
-│   ├── tokenizer/hanmed_bllossom_ext/
+│   ├── tokenizer/hanmed_bllossom_ext/   # 128 260 vocab
 │   └── stats/                      # 통계 + factsheet build trace
-├── eval/hashes/                    # contamination 해시 레지스트리
-├── docker/                         # vLLM 서빙
+│
+├── eval/
+│   ├── README.md
+│   ├── hashes/                     # contamination 해시 레지스트리
+│   └── hanmed_eval_v0/             # probe 입력 번들
+│       ├── phaseA_eval_input.jsonl        # 43쌍 (Phase A' 검증용)
+│       ├── phaseB_complex_probe.jsonl     # 23쌍 (ver5 complex reasoning)
+│       ├── probe_v4_final_input.jsonl     # 4쌍 (ver4 final gate)
+│       └── T1_content.jsonl               # 10쌍 (factual recall)
+│
+├── experiments/
+│   └── dongui_bogam/               # book_008 단권 실험 (symlink 집합)
+│       ├── README.md
+│       ├── raw/ cpt/ cpt_processed/ scripts/ src/ docs/ harness/ logs/
+│       ├── outputs/                        # → outputs/cpt_bllossom_phaseA
+│       ├── outputs_ver5_book008_full/      # ver5 v1 산출
+│       ├── outputs_ver5_book008_full_smoke/# ver5 smoke 산출
+│       ├── outputs_ver6_gemma_v1/          # ver6 Gemma 첫 산출
+│       └── outputs_ver7_gemma_patched/     # ver6 후속 패치
+│
+├── docker/                         # vLLM 서빙 (compose 5종 → §8.1 참조)
 │   ├── Dockerfile.vllm
-│   └── docker-compose.yml
-└── outputs/cpt_bllossom/           # 학습 산출 (adapter + checkpoints)
+│   ├── docker-compose.yml                     # LoRA direct hot-swap
+│   ├── docker-compose.merged.yml              # ver4 P-A+ merged
+│   ├── docker-compose.phaseA.yml              # Phase A' LoRA direct
+│   ├── docker-compose.phaseA.merged.yml       # Phase A' merged
+│   └── docker-compose.gemma.yml               # ver6 Gemma-3 12B probe
+│
+├── models/                         # HF 로컬 weights cache (gitignored)
+│   └── gemma-3-12b-it/             # ver6 base (23 GB, 5 shards)
+│
+└── outputs/                        # 학습 산출 (gitignored)
+    ├── cpt_bllossom/                   # ver4 v0.1 adapter + checkpoints
+    ├── cpt_bllossom_phaseA/            # Phase A' adapter
+    ├── cpt_bllossom_R1/                # ver4 R1 재학습
+    ├── cpt_bllossom.synth_run/         # synth 실험
+    ├── cpt_bllossom_ver5{,_v2,_v3,_v3_1,_v4_sanity}/  # ver5 SFT 이터레이션
+    ├── hanmed_merged_v0.1(.synth)/     # ver4 merged
+    ├── hanmed_merged_R1/               # ver4 R1 merged
+    ├── hanmed_merged_ver5_v3_1/        # ★ 현 서빙 merged
+    ├── adapter_current/                # LoRA direct hot-swap symlink
+    └── probes/                         # probe 실행 로그
 ```
 
 ## 11. 라이선스
@@ -342,9 +458,29 @@ korean-medicine-llm/
 
 ## 13. 문서 인덱스
 
-- 현 운영 버전: [`docs/ver4/README.md`](docs/ver4/README.md)
-- 검증 보고: [`docs/ver4/01_validation_report.md`](docs/ver4/01_validation_report.md)
-- 학습 기획: [`docs/ver4/02_plan_v4.md`](docs/ver4/02_plan_v4.md)
-- 서빙 배포: [`docs/ver4/03_serving_and_cli/README.md`](docs/ver4/03_serving_and_cli/README.md)
-- CLI 디자인: [`docs/10_cli_visual_identity/03_claude_code_style.md`](docs/10_cli_visual_identity/03_claude_code_style.md)
+### 현재 운영 (ver5 SFT)
+- 개요: [`docs/ver5/README.md`](docs/ver5/README.md)
+- CPT 한계 실증: [`docs/ver5/01_experimental_evidence.md`](docs/ver5/01_experimental_evidence.md)
+- SFT 설계: [`docs/ver5/02_sft_design.md`](docs/ver5/02_sft_design.md)
+- SFT 데이터 파이프라인: [`docs/ver5/03_data_pipeline.md`](docs/ver5/03_data_pipeline.md)
+- TRL Trainer 스펙: [`docs/ver5/04_trainer_spec.md`](docs/ver5/04_trainer_spec.md)
+- 평가 프로토콜: [`docs/ver5/05_evaluation.md`](docs/ver5/05_evaluation.md)
+- Safety refusal 설계: [`docs/ver5/06_safety.md`](docs/ver5/06_safety.md)
+- Phase C 로드맵: [`docs/ver5/07_roadmap.md`](docs/ver5/07_roadmap.md)
+- SFT 구축 플랜: [`docs/ver5/08_sft_build_plan.md`](docs/ver5/08_sft_build_plan.md) · Complex reasoning: [`docs/ver5/09_v4_complex_reasoning_plan.md`](docs/ver5/09_v4_complex_reasoning_plan.md)
+
+### 차기 계획 (ver6 Gemma)
+- 환각·반복 공동 해소 기획: [`docs/ver6/00_halluc_repetition_fix_plan.md`](docs/ver6/00_halluc_repetition_fix_plan.md)
+- Bllossom fallback 부록: [`docs/ver6/appendix_bllossom_fallback.md`](docs/ver6/appendix_bllossom_fallback.md)
+
+### 과거 라운드 (참고)
+- ver4 P-A+ CPT: [`docs/ver4/README.md`](docs/ver4/README.md) · 검증 [`01_validation_report.md`](docs/ver4/01_validation_report.md) · 학습 [`02_plan_v4.md`](docs/ver4/02_plan_v4.md) · 서빙 [`03_serving_and_cli/README.md`](docs/ver4/03_serving_and_cli/README.md) · dead-code [`04_dead_code_audit.md`](docs/ver4/04_dead_code_audit.md) · Phase A' [`08_real_data_antihalluc_plan.md`](docs/ver4/08_real_data_antihalluc_plan.md)
+- CPT 방법론 연구노트: [`docs/research_hanmed_cpt_methodology_20260421.md`](docs/research_hanmed_cpt_methodology_20260421.md)
 - 이전 라운드: `docs/ver2/`, `docs/ver3/`
+
+### CLI & 시각 아이덴티티
+- Claude Code 스타일: [`docs/10_cli_visual_identity/03_claude_code_style.md`](docs/10_cli_visual_identity/03_claude_code_style.md)
+- 거북 mascot draft: [`docs/10_cli_visual_identity/01_turtle_apothecary_draft.md`](docs/10_cli_visual_identity/01_turtle_apothecary_draft.md) · 채팅박스 레이아웃: [`02_chatbox_layout.md`](docs/10_cli_visual_identity/02_chatbox_layout.md)
+
+### 실험
+- book_008 단권 실험 (Phase A'/B): [`experiments/dongui_bogam/README.md`](experiments/dongui_bogam/README.md)
