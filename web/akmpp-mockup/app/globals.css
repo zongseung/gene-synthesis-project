@@ -1,0 +1,179 @@
+@import "tailwindcss";
+
+@theme inline {
+  /* INK & HANJI palette — derived from PPT (#F0E9D8 / #1A1612 / #B83025 / #6E6353) */
+  --color-background: #f0e9d8;
+  --color-background-2: #ebe2cc;
+  --color-surface: #faf6ea;
+  --color-surface-2: #ede4cd;
+  --color-surface-3: #ddd2b6;
+  --color-border: #c9bfa4;
+  --color-border-strong: #6e6353;
+  --color-ink: #1a1612;
+  --color-ink-soft: #3a332a;
+  --color-cinnabar: #b83025;
+  --color-cinnabar-soft: rgba(184, 48, 37, 0.12);
+  --color-cinnabar-strong: #8e2118;
+  --color-moss: #5b6b3d;
+  --color-moss-soft: rgba(91, 107, 61, 0.12);
+  --color-gold: #a07b22;
+  --color-celadon: #6a8a83;
+
+  /* legacy aliases used across components */
+  --color-primary: #b83025;
+  --color-primary-soft: rgba(184, 48, 37, 0.12);
+  --color-accent: #6e6353;
+  --color-accent-soft: rgba(110, 99, 83, 0.14);
+  --color-success: #5b6b3d;
+  --color-warning: #a07b22;
+  --color-danger: #8e2118;
+  --color-foreground: #1a1612;
+  --color-foreground-strong: #0a0807;
+  --color-muted: #6e6353;
+  --color-muted-2: #9a8e78;
+
+  --font-serif: "Noto Serif KR", "Source Han Serif K", "Nanum Myeongjo",
+    "Apple SD Gothic Neo", "Pretendard Variable", Georgia, "Times New Roman", serif;
+  --font-sans: "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont,
+    "system-ui", "Apple SD Gothic Neo", "Noto Sans KR", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --font-han: "Noto Serif KR", "Source Han Serif K", "Nanum Myeongjo", serif;
+}
+
+* {
+  border-color: var(--color-border);
+}
+
+html,
+body {
+  background: var(--color-background);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Hanji paper texture — warm fiber noise */
+body {
+  background-color: #f0e9d8;
+  background-image:
+    radial-gradient(at 18% 12%, rgba(184, 48, 37, 0.05) 0px, transparent 55%),
+    radial-gradient(at 82% 88%, rgba(110, 99, 83, 0.07) 0px, transparent 55%),
+    repeating-linear-gradient(
+      102deg,
+      rgba(110, 99, 83, 0.025) 0,
+      rgba(110, 99, 83, 0.025) 1px,
+      transparent 1px,
+      transparent 7px
+    ),
+    repeating-linear-gradient(
+      18deg,
+      rgba(110, 99, 83, 0.018) 0,
+      rgba(110, 99, 83, 0.018) 1px,
+      transparent 1px,
+      transparent 11px
+    );
+  background-attachment: fixed;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(110, 99, 83, 0.3);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(110, 99, 83, 0.55);
+}
+
+@keyframes pulse-flow {
+  0% {
+    stroke-dashoffset: 0;
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 1;
+  }
+  100% {
+    stroke-dashoffset: -20;
+    opacity: 0.4;
+  }
+}
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes seal-glow {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(184, 48, 37, 0.35);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(184, 48, 37, 0);
+  }
+}
+
+.animate-fade-up {
+  animation: fade-up 0.5s ease-out both;
+}
+
+.animate-glow {
+  animation: seal-glow 2.5s ease-in-out infinite;
+}
+
+.font-mono {
+  font-family: var(--font-mono);
+}
+
+.font-serif {
+  font-family: var(--font-serif);
+}
+
+.font-han {
+  font-family: var(--font-han);
+  font-weight: 500;
+}
+
+/* Catalog label — "DOC · 01 / 10" style from PPT */
+.label-doc {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--color-muted);
+}
+
+/* Hand-stamped seal — 朱印 */
+.seal {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-cinnabar);
+  color: #faf6ea;
+  font-family: var(--font-han);
+  font-weight: 700;
+  border-radius: 2px;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.18),
+    0 0 0 1px rgba(184, 48, 37, 0.4),
+    0 1px 2px rgba(26, 22, 18, 0.25);
+  letter-spacing: -0.05em;
+}
+
+/* thin ink rule — 가는 먹선 */
+.rule-ink {
+  border-color: var(--color-ink);
+  border-width: 1px;
+}
