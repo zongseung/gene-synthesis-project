@@ -1,8 +1,23 @@
-# HybridGenoDiT
+# HiPoDiT
 
-**Population-Conditional Synthetic Genotype Generation via Hybrid CNN-DiT with Hierarchical FiLM Conditioning**
+**Hi**erarchical **Po**pulation-conditional **Di**ffusion **T**ransformer for synthetic genotype generation.
 
-1000 Genomes Phase 3 데이터(2,504 samples, 26 populations, 5 superpopulations)를 활용하여 인구군별 조건부 합성 유전형을 생성하는 Diffusion 모델.
+1000 Genomes Phase 3 데이터(2,504 samples, 26 populations, 5 superpopulations)를 활용하여 인구군별 조건부 합성 유전형을 생성하는 Diffusion 모델. 평가단에는 Jeong et al. (2023, IEEE TIFS) DUPI 프레임워크를 그대로 구현해 정량적 utility/privacy 동시 검증을 제공한다.
+
+| 항목 | 값 |
+| --- | --- |
+| 모델 파라미터 | **196.8 M** (bf16) |
+| 아키텍처 | Hybrid CNN encoder ⊕ DiT core ⊕ CNN decoder + Hierarchical FiLM |
+| Diffusion | linear schedule · 1,000 timesteps · DDIM 100-step · CFG |
+| 데이터 | 1KG Phase 3 · 2,504 samples · 26 pops · 5 superpops · gene_size 24,576 |
+| 평가 | Fidelity / Structure / Utility / **DUPI** (Privacy + Utility Index) / Robustness |
+| 코드 배포 | `src/evaluation/dupi.py` 는 stand-alone — 외부에서 vendoring 가능 |
+
+문서:
+
+* 합성 모델 자체 — 본 README
+* DUPI 평가 모듈 — [`src/evaluation/README.md`](src/evaluation/README.md)
+* 페이퍼 인용 정보 — [`CITATION.cff`](CITATION.cff)
 
 ---
 
@@ -33,7 +48,7 @@
 
 ### 해결: FiLM 기반 계층적 인구군 조건화
 
-HybridGenoDiT는 세 가지 핵심 메커니즘으로 이 문제를 해결한다:
+HiPoDiT는 세 가지 핵심 메커니즘으로 이 문제를 해결한다:
 
 #### 1. 계층적 인구군 임베딩 (Hierarchical Population Embedding)
 
@@ -86,67 +101,71 @@ FiLM: output = γ · input + β
 
 ## Model Architecture
 
-### Default config (baseline)
+### Default config (baseline `configs/default.yaml`)
 
-| 항목 | 값 | 근거 (코드) |
+| 항목 | 값 | 근거 |
 |------|----|-------------|
-| `in_channels (K)` | 8 | `hybrid_geno_dit.py:47-49` |
-| `gene_size` | 26624 | `hybrid_geno_dit.py:50` |
-| `base_channels` | 64 | `hybrid_geno_dit.py:51` |
-| `channel_mult` | (1, 1, 2, 4) | `hybrid_geno_dit.py:52` |
-| `n_downsamples` | 3 = `len(channel_mult) - 1` | `hybrid_geno_dit.py:76` |
-| `latent_size` | 26624 / 8 = 3328 | `hybrid_geno_dit.py:77` |
-| `latent_channels (4C)` | 256 | `hybrid_geno_dit.py:72` |
-| `d_model` | 256 | `hybrid_geno_dit.py:54` |
-| `n_dit_blocks` | 4 | `hybrid_geno_dit.py:55` |
-| `n_heads` | 4 | `hybrid_geno_dit.py:56` |
-| `mlp_ratio` | 4.0 | `hybrid_geno_dit.py:57` |
-| `patch_size` | 16 → `n_tokens = 208` | `hybrid_geno_dit.py:59`, `dit.py:36` |
-| `n_pops (+null)` | 26 (+1 = 27, CFG null) | `hybrid_geno_dit.py:60`, `conditioning.py:43` |
-| `n_superpops (+null)` | 5 (+1 = 6) | `hybrid_geno_dit.py:61`, `conditioning.py:46-50` |
+| `in_channels (K)` | 8 | `data.num_channels` |
+| `gene_size` | 24,576 | `data.gene_size` |
+| `base_channels` | 128 | `model.base_channels` |
+| `channel_mult` | (1, 1, 2, 2, 4) — **5 blocks** | `model.channel_mult` |
+| `n_downsamples` | 4 = `len(channel_mult) - 1` | encoder 마지막 블록은 채널만 확장 |
+| `latent_size` | 24576 / 2⁴ = **1,536** | |
+| `latent_channels (4C)` | **512** | `base_channels × channel_mult[-1]` |
+| `d_model` | **768** | `model.d_model` |
+| `n_dit_blocks` | **16** | `model.n_dit_blocks` |
+| `n_heads` | **12** | `model.n_heads` |
+| `mlp_ratio` | 4.0 | `model.mlp_ratio` |
+| `patch_size` | 16 → `n_tokens = 96` | latent 1,536 / 16 |
+| `n_pops (+null)` | 26 (+1 = 27, CFG null) | `model.n_pops` |
+| `n_superpops (+null)` | 5 (+1 = 6) | `model.n_superpops` |
+| `dropout` | 0.1 | `model.dropout` |
+| **Total parameters** | **196,801,672 (~197 M)** | bf16 ≈ 376 MB weight |
 
 ### 최상위 데이터 흐름 (`HybridCNNDiTFiLM.forward`)
 
 ```mermaid
 flowchart TD
     subgraph INPUT["INPUT"]
-        X["x : (B, 8, 26624)<br/>noisy Gene-PCA tensor"]
+        X["x : (B, 8, 24576)<br/>noisy Gene-PCA tensor"]
         T["t : (B,)<br/>diffusion timestep"]
         Y["y : (B,)<br/>pop_label ∈ [0,25] ∪ {26 = CFG null}"]
     end
 
     subgraph COND["CONDITIONING PATH"]
-        PE["HierarchicalPopulationEmbedding<br/>pop_emb ⊕ superpop_emb → fusion MLP<br/>→ (B, 256)"]
-        FG["UnifiedFiLMGenerator<br/>time_mlp(t) ⊕ pop_emb → cond_mlp<br/>→ (cnn_enc, cnn_dec, dit) FiLM params"]
+        PE["HierarchicalPopulationEmbedding<br/>pop_emb ⊕ superpop_emb → fusion MLP<br/>→ (B, 768)"]
+        FG["UnifiedFiLMGenerator<br/>time_mlp(t) ⊕ pop_emb → cond_mlp<br/>→ FiLM params for enc/dit/dec"]
     end
 
-    subgraph ENC["CNN ENCODER  (local LD)"]
-        E1["FiLMConvBlock #1<br/>8 → 64,   L: 26624 → 13312"]
-        E2["FiLMConvBlock #2<br/>64 → 64,  L: 13312 → 6656"]
-        E3["FiLMConvBlock #3<br/>64 → 128, L: 6656 → 3328"]
-        E4["FiLMConvBlock #4 (no ↓)<br/>128 → 256, L: 3328"]
+    subgraph ENC["CNN ENCODER  (local LD, 5 blocks)"]
+        E1["FiLMConvBlock #1<br/>8 → 128,   L: 24576 → 12288"]
+        E2["FiLMConvBlock #2<br/>128 → 128, L: 12288 → 6144"]
+        E3["FiLMConvBlock #3<br/>128 → 256, L: 6144 → 3072"]
+        E4["FiLMConvBlock #4<br/>256 → 256, L: 3072 → 1536"]
+        E5["FiLMConvBlock #5 (no ↓)<br/>256 → 512, L: 1536"]
     end
 
     subgraph DITCORE["DiT CORE  (long-range gene interactions)"]
-        P["PatchEmbed1D<br/>(B,256,3328) → reshape + Linear<br/>→ (B, 208, 256) + learned pos_emb"]
-        D["DiTCore × 4 blocks<br/>AdaLN-Zero self-attn + MLP"]
-        U["UnPatchify1D<br/>(B, 208, 256) → Linear + reshape<br/>→ (B, 256, 3328)"]
+        P["PatchEmbed1D<br/>(B, 512, 1536) → Linear<br/>→ (B, 96, 768) + learned pos_emb"]
+        D["DiTCore × 16 blocks<br/>AdaLN-Zero self-attn + MLP<br/>d=768, heads=12, mlp_ratio=4"]
+        U["UnPatchify1D<br/>(B, 96, 768) → Linear<br/>→ (B, 512, 1536)"]
     end
 
     subgraph DEC["CNN DECODER  (reconstruction + skips)"]
-        D1["FiLMDeconvBlock #1<br/>256 → 128 + skip₄"]
-        D2["FiLMDeconvBlock #2<br/>128 → 64  + skip₃"]
-        D3["FiLMDeconvBlock #3<br/>64  → 64  + skip₂"]
-        D4["FiLMDeconvBlock #4 (no ↑)<br/>64  → 64  + skip₁"]
-        FC["Conv1d 1×1<br/>64 → 8"]
+        D1["FiLMDeconvBlock #1<br/>512 → 256 + skip₅"]
+        D2["FiLMDeconvBlock #2<br/>256 → 256 + skip₄"]
+        D3["FiLMDeconvBlock #3<br/>256 → 128 + skip₃"]
+        D4["FiLMDeconvBlock #4<br/>128 → 128 + skip₂"]
+        D5["FiLMDeconvBlock #5 (no ↑)<br/>128 → 128 + skip₁"]
+        FC["Conv1d 1×1<br/>128 → 8"]
     end
 
     subgraph OUT["OUTPUT"]
         Z["enforce_zeros<br/>output × (~zero_mask)"]
-        OUTX["ε̂ : (B, 8, 26624)"]
+        OUTX["ε̂ : (B, 8, 24576)"]
     end
 
-    X --> E1 --> E2 --> E3 --> E4 --> P --> D --> U --> D1 --> D2 --> D3 --> D4 --> FC --> Z --> OUTX
+    X --> E1 --> E2 --> E3 --> E4 --> E5 --> P --> D --> U --> D1 --> D2 --> D3 --> D4 --> D5 --> FC --> Z --> OUTX
 
     T --> FG
     Y --> PE --> FG
@@ -155,16 +174,19 @@ flowchart TD
     FG -. γ,β .-> E2
     FG -. γ,β .-> E3
     FG -. γ,β .-> E4
+    FG -. γ,β .-> E5
     FG -. γ,β,α × 6 .-> D
     FG -. γ,β .-> D1
     FG -. γ,β .-> D2
     FG -. γ,β .-> D3
     FG -. γ,β .-> D4
+    FG -. γ,β .-> D5
 
-    E1 -. skip₁ .-> D4
-    E2 -. skip₂ .-> D3
-    E3 -. skip₃ .-> D2
-    E4 -. skip₄ .-> D1
+    E1 -. skip₁ .-> D5
+    E2 -. skip₂ .-> D4
+    E3 -. skip₃ .-> D3
+    E4 -. skip₄ .-> D2
+    E5 -. skip₅ .-> D1
 
     classDef cond fill:#fde68a,stroke:#b45309,color:#000
     classDef enc  fill:#bfdbfe,stroke:#1e40af,color:#000
@@ -173,13 +195,13 @@ flowchart TD
     classDef io   fill:#f3f4f6,stroke:#374151,color:#000
 
     class PE,FG cond
-    class E1,E2,E3,E4 enc
+    class E1,E2,E3,E4,E5 enc
     class P,D,U dit
-    class D1,D2,D3,D4,FC dec
+    class D1,D2,D3,D4,D5,FC dec
     class X,T,Y,Z,OUTX io
 ```
 
-> 참고: 인코더는 블록 0–2가 stride-2 downsample을 수행하고 마지막 블록(#4)은 채널만 확장한다 (`cnn.py:167-173`). 디코더는 이 구조를 대칭적으로 반전해 앞 3개 블록이 ConvTranspose1d로 2배 upsample하고 마지막 블록은 길이를 유지한다 (`cnn.py:219-231`).
+> **참고**: 인코더는 블록 1–4가 stride-2 downsample을 수행하고 마지막 블록(#5)은 채널만 확장한다. 디코더는 이 구조를 대칭으로 반전해 앞 4개 블록이 ConvTranspose1d로 2배 upsample하고 마지막 블록은 길이를 유지한다. 인코더가 4번 다운샘플하므로 latent 길이는 24576 / 16 = **1,536**, patch_size 16 으로 토큰 수는 **96** 이다.
 
 ### Conditioning Path (`HierarchicalPopulationEmbedding` + `UnifiedFiLMGenerator`)
 
@@ -190,39 +212,41 @@ flowchart LR
 
     subgraph HPE["HierarchicalPopulationEmbedding"]
         PMAP["pop_to_superpop_map<br/>(n_pops+1,) long buffer"]
-        PEMB["nn.Embedding(27, 256)"]
-        SEMB["nn.Embedding(6, 256)"]
-        CAT1["concat → (B, 512)"]
-        FUSE["Linear 512→256 · SiLU · Linear 256→256"]
-        POUT["pop_emb (B, 256)"]
+        PEMB["nn.Embedding(27, 768)"]
+        SEMB["nn.Embedding(6, 768)"]
+        CAT1["concat → (B, 1536)"]
+        FUSE["Linear 1536→768 · SiLU · Linear 768→768"]
+        POUT["pop_emb (B, 768)"]
     end
 
     subgraph TME["Timestep path"]
-        SINE["sinusoidal timestep_embedding<br/>dim=256, max_period=10000"]
-        TMLP["Linear 256→256 · SiLU · Linear 256→256"]
-        TOUT["t_emb (B, 256)"]
+        SINE["sinusoidal timestep_embedding<br/>dim=768, max_period=10000"]
+        TMLP["Linear 768→768 · SiLU · Linear 768→768"]
+        TOUT["t_emb (B, 768)"]
     end
 
     subgraph UFG["UnifiedFiLMGenerator"]
-        CAT2["concat [pop_emb, t_emb] → (B, 512)"]
-        CMLP["cond_mlp<br/>Linear 512→256 · SiLU · Linear 256→256<br/>→ cond (B, 256)"]
+        CAT2["concat [pop_emb, t_emb] → (B, 1536)"]
+        CMLP["cond_mlp<br/>Linear 1536→768 · SiLU · Linear 768→768<br/>→ cond (B, 768)"]
 
-        subgraph CNN_ENC_FILM["cnn_enc_films (ModuleList × 4)"]
-            LE1["Linear 256 → 2·64"]
-            LE2["Linear 256 → 2·64"]
-            LE3["Linear 256 → 2·128"]
-            LE4["Linear 256 → 2·256"]
+        subgraph CNN_ENC_FILM["cnn_enc_films (ModuleList × 5)"]
+            LE1["Linear 768 → 2·128"]
+            LE2["Linear 768 → 2·128"]
+            LE3["Linear 768 → 2·256"]
+            LE4["Linear 768 → 2·256"]
+            LE5["Linear 768 → 2·512"]
         end
 
-        subgraph CNN_DEC_FILM["cnn_dec_films (ModuleList × 4)"]
-            LD1["Linear 256 → 2·128"]
-            LD2["Linear 256 → 2·64"]
-            LD3["Linear 256 → 2·64"]
-            LD4["Linear 256 → 2·64"]
+        subgraph CNN_DEC_FILM["cnn_dec_films (ModuleList × 5)"]
+            LD1["Linear 768 → 2·256"]
+            LD2["Linear 768 → 2·256"]
+            LD3["Linear 768 → 2·128"]
+            LD4["Linear 768 → 2·128"]
+            LD5["Linear 768 → 2·128"]
         end
 
-        subgraph DIT_FILM["dit_films (ModuleList × 4, AdaLN-Zero)"]
-            DF["SiLU → zero_module(Linear 256 → 6·256)<br/>per block → (B, 1536)"]
+        subgraph DIT_FILM["dit_films (ModuleList × 16, AdaLN-Zero)"]
+            DF["SiLU → zero_module(Linear 768 → 6·768)<br/>per block → (B, 4608)"]
         end
     end
 
@@ -233,28 +257,24 @@ flowchart LR
     POUT --> CAT2
     TOUT --> CAT2 --> CMLP
 
-    CMLP -. cond .-> LE1 & LE2 & LE3 & LE4
-    CMLP -. cond .-> LD1 & LD2 & LD3 & LD4
+    CMLP -. cond .-> LE1 & LE2 & LE3 & LE4 & LE5
+    CMLP -. cond .-> LD1 & LD2 & LD3 & LD4 & LD5
     CMLP -. cond .-> DF
 
-    LE1 -->|"chunk(2) → γ,β"| EO1["→ Encoder block 1"]
-    LE2 --> EO2["→ Encoder block 2"]
-    LE3 --> EO3["→ Encoder block 3"]
-    LE4 --> EO4["→ Encoder block 4"]
+    LE1 -->|"chunk(2) → γ,β"| EO["→ Encoder × 5"]
+    LE5 --> EO
 
-    LD1 --> DO1["→ Decoder block 1"]
-    LD2 --> DO2["→ Decoder block 2"]
-    LD3 --> DO3["→ Decoder block 3"]
-    LD4 --> DO4["→ Decoder block 4"]
+    LD1 --> DO["→ Decoder × 5"]
+    LD5 --> DO
 
-    DF -->|"chunk(6) → γ₁,β₁,α₁,γ₂,β₂,α₂"| DITO["→ DiT blocks × 4"]
+    DF -->|"chunk(6) → γ₁,β₁,α₁,γ₂,β₂,α₂"| DITO["→ DiT blocks × 16"]
 
     classDef hpe fill:#fde68a,stroke:#92400e,color:#000
     classDef tme fill:#fecaca,stroke:#991b1b,color:#000
     classDef ufg fill:#ddd6fe,stroke:#5b21b6,color:#000
     class PMAP,PEMB,SEMB,CAT1,FUSE,POUT hpe
     class SINE,TMLP,TOUT tme
-    class CAT2,CMLP,LE1,LE2,LE3,LE4,LD1,LD2,LD3,LD4,DF ufg
+    class CAT2,CMLP,LE1,LE2,LE3,LE4,LE5,LD1,LD2,LD3,LD4,LD5,DF ufg
 ```
 
 ### 블록 내부 구조
@@ -294,25 +314,25 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    X["x (B, N=208, d=256)"]
-    FP["film_params (B, 1536)"]
-    CHK["chunk(6, dim=-1)<br/>→ γ₁,β₁,α₁,γ₂,β₂,α₂  each (B,1,256)"]
+    X["x (B, N=96, d=768)"]
+    FP["film_params (B, 4608)"]
+    CHK["chunk(6, dim=-1)<br/>→ γ₁,β₁,α₁,γ₂,β₂,α₂  each (B,1,768)"]
 
     subgraph ATTN["Self-Attention branch"]
         N1["LayerNorm(elementwise_affine=False)"]
         M1["h = γ₁·h + β₁"]
-        MHA["MultiheadAttention<br/>d=256, heads=4, batch_first"]
+        MHA["MultiheadAttention<br/>d=768, heads=12, batch_first"]
         G1["x + α₁·h   (α₁ ≈ 0 at init)"]
     end
 
     subgraph MLP["FFN branch"]
         N2["LayerNorm(elementwise_affine=False)"]
         M2["h = γ₂·h + β₂"]
-        F1["Linear 256 → 1024"]
+        F1["Linear 768 → 3072"]
         GE["GELU"]
-        DR1["Dropout"]
-        F2["Linear 1024 → 256"]
-        DR2["Dropout"]
+        DR1["Dropout(0.1)"]
+        F2["Linear 3072 → 768"]
+        DR2["Dropout(0.1)"]
         G2["x + α₂·h   (α₂ ≈ 0 at init)"]
     end
 
@@ -327,7 +347,7 @@ flowchart TD
     CHK -. γ₂,β₂ .-> M2
     CHK -. α₂ .-> G2
 
-    G2 --> OUT["(B, 208, 256)"]
+    G2 --> OUT["(B, 96, 768)"]
 
     classDef ada fill:#ddd6fe,stroke:#5b21b6,color:#000
     class N1,M1,G1,N2,M2,G2 ada
@@ -392,31 +412,57 @@ flowchart TD
 
 ### Diffusion Process
 
+```mermaid
+flowchart LR
+    subgraph FWD["FORWARD (training)"]
+        X0["x₀<br/>real Gene-PCA<br/>(B, 8, 24576)"]
+        NS["q(xₜ | x₀)<br/>linear schedule<br/>1,000 timesteps"]
+        XT["xₜ"]
+        EPS["ε_pred<br/>HiPoDiT(xₜ, t, y)"]
+        LOSS["L = masked_MSE(ε_pred, ε_true)<br/>× min_snr_weight(t)<br/>× (~zero_mask)"]
+    end
+
+    subgraph REV["REVERSE (sampling)"]
+        Z["x_T ~ 𝒩(0, I)"]
+        DDIM["DDIM × 100 steps<br/>η = 0.5"]
+        CFG["CFG: ε = (1+w)·ε_cond − w·ε_uncond<br/>guidance_weight w (sweepable)"]
+        Z0["enforce_zeros each step"]
+        DEN["denormalize(x₀, stats)"]
+        OUT["synthetic x₀<br/>(B, 8, 24576)"]
+    end
+
+    X0 --> NS --> XT --> EPS --> LOSS
+    Z --> DDIM --> CFG --> Z0 --> DEN --> OUT
+
+    classDef fwd fill:#bfdbfe,stroke:#1e40af,color:#000
+    classDef rev fill:#bbf7d0,stroke:#166534,color:#000
+    class X0,NS,XT,EPS,LOSS fwd
+    class Z,DDIM,CFG,Z0,DEN,OUT rev
 ```
-Forward (학습):
-  x₀ (원본) ──noise schedule──► xₜ (노이즈 추가) ──model──► ε_pred (노이즈 예측)
-  Loss = weighted_MSE(ε_pred, ε_true) × min_snr_weight(t) × (~zero_mask)
 
-Reverse (생성):
-  xₜ ~ N(0,1) ──DDIM 50 steps──► x₀ (합성 유전형)
-  매 step: enforce_zeros(xₜ, zero_mask)
-  생성 후: denormalize(x₀, stats) → 원래 PCA 스케일 복원
-  CFG: ε = (1+w)·ε_cond - w·ε_uncond   (w=3.0)
+| 항목 | 값 | 출처 |
+|---|---|---|
+| `max_timesteps` | 1,000 | `diffusion.max_timesteps` |
+| `noise_schedule` | linear | `diffusion.noise_schedule` |
+| `prediction_target` | ε (epsilon) | `diffusion.prediction_target` |
+| `sampling_timesteps` | 100 (DDIM) | `diffusion.sampling_timesteps` |
+| `ddim_eta` | 0.5 | `diffusion.ddim_eta` |
+| `guidance_type` | classifier-free | `diffusion.guidance_type` |
+| `guidance_weight` | 1.0 (default; sweep with `scripts/guidance_sweep.py`) | `diffusion.guidance_weight` |
+| `cfg_dropout_rate` | 0.1 (training-time null sample rate) | `diffusion.cfg_dropout_rate` |
 
-Noise Schedule: cosine (Nichol & Dhariwal), 500 timesteps
-```
-
-### 파라미터 규모
+### 파라미터 규모 (실측, 196.8 M)
 
 | 모듈 | 파라미터 수 | 비고 |
 |------|-----------|------|
-| Hierarchical Pop Embedding | ~0.07M | pop(27) + superpop(6) + fusion MLP (null class 포함) |
-| Unified FiLM Generator | ~0.5M | `time_mlp` + `cond_mlp` + per-block linear (enc 4 · dec 4 · dit 4) |
-| CNN Encoder (4 blocks) | ~1.2M | stride-2 downsample × 3, 마지막 블록은 채널 확장만 |
-| Patchify + Position Embedding | ~0.3M | patch_size=16 → 208 tokens |
-| DiT Core (4 blocks, d=256) | ~3.2M | self-attention + FFN, AdaLN-Zero |
-| CNN Decoder (4 blocks) | ~1.5M | ConvTranspose1d × 3 + skip connections + final 1×1 conv |
-| **Total** | **~6.8M** | bf16: ~14MB VRAM |
+| `pop_embedding` (Hierarchical) | 1,796,352 (1.80 M) | Embedding(27, 768) + Embedding(6, 768) + fusion MLP |
+| `film_gen` (Unified FiLM Generator) | 62,995,712 (63.00 M) | `time_mlp` + `cond_mlp` + per-block linear (enc 5 · dec 5 · dit 16) |
+| `encoder` (CNN, 5 blocks) | 2,520,192 (2.52 M) | stride-2 downsample × 4, 마지막 블록은 채널 확장만 |
+| `patchify` + position embedding | 6,365,952 (6.37 M) | patch_size 16 → 96 tokens, learnable pos_emb |
+| `dit` (16 blocks, d=768, h=12) | 113,358,336 (113.36 M) | self-attention + FFN + AdaLN-Zero × 16 |
+| `unpatchify` | 6,299,648 (6.30 M) | Linear projection back to (512, 1536) |
+| `decoder` (CNN, 5 blocks) | 3,465,480 (3.47 M) | ConvTranspose1d × 4 + skip connections + final 1×1 conv |
+| **Total** | **196,801,672 (~197 M)** | bf16 weight ≈ **376 MB** |
 
 ---
 
@@ -424,29 +470,72 @@ Noise Schedule: cosine (Nichol & Dhariwal), 500 timesteps
 
 ### 개요
 
-평가는 5개 카테고리, **11개 핵심 지표**로 구성된다. 모든 지표는 Gene PCA 공간에서 직접 계산 가능하며, `ProcessPoolExecutor`로 병렬 실행한다.
+평가는 5개 카테고리로 구성된다. 본 저장소에서 구현·테스트된 핵심 지표는 **Privacy / Utility 측 DUPI 프레임워크** + 보조 분포 거리 (Gaussian W2, MMD-RBF, coverage) 이며, 모든 정의는 [`src/evaluation/`](src/evaluation/README.md) 하위에 분리되어 있다 (외부 vendoring 가능).
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                     Evaluation Pipeline                          │
-│                                                                  │
-│  Real Test Data (pkl)     Synthetic Samples (.pt)               │
-│       │                         │                                │
-│       └────────────┬────────────┘                                │
-│                    │                                             │
-│    ┌───────────────┼───────────────────────────────────┐        │
-│    │               │                                    │        │
-│    ▼               ▼               ▼          ▼        ▼        │
-│ Fidelity      Structure       Utility     Privacy   Robustness  │
-│ (AF corr,     (PCA overlap,   (Recovery,  (NNAA,    (pop-size   │
-│  Wasserstein)  Sliced-WD)      Augment)    DUPI,     vs quality │
-│                                             MIA)      |r|)      │
-│    │               │               │          │        │        │
-│    └───────────────┴───────────────┴──────────┴────────┘        │
-│                              │                                   │
-│                    summary_metrics.json                          │
-│                    per_population_metrics.csv                    │
-└─────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    subgraph IN["INPUT"]
+        R["Real test pkl<br/>(N×K×G)"]
+        S["Synthetic .pt<br/>sample_pop*_*.pt"]
+        H["label_hierarchy.pkl"]
+    end
+
+    subgraph PRE["PROJECTION"]
+        SUB["flatten_subsample_genes<br/>n_genes=2000, seed=42"]
+        PCA["PCA(2)<br/>fit on real → transform syn"]
+    end
+
+    subgraph DUPI["DUPI · Jeong et al. 2023"]
+        DS["dupi_score<br/>Eq. (11)"]
+        BM["kth_dupi_benchmark<br/>Eq. (10)"]
+        UI["ui_pi_from_dupi<br/>Eqs. (12)-(13)"]
+    end
+
+    subgraph DIST["DISTRIBUTION DISTANCES"]
+        W2["gaussian_w2_distance"]
+        MMD["mmd_rbf"]
+        CD["centroid_distance"]
+        COV["same_class_coverage"]
+    end
+
+    subgraph CLS["PER-SUPERPOP BREAKDOWN"]
+        CR["centroid_rows<br/>(real, synthetic) × 5 pops"]
+        CM["class_metric_rows<br/>DUPI / UI / PI / W2 / MMD / coverage"]
+    end
+
+    subgraph OUT["OUTPUTS"]
+        SUM["summary_metrics.json"]
+        CMC["class_metrics.csv"]
+        CC["centroids.csv"]
+        PCC["pca_coordinates.csv"]
+    end
+
+    R --> SUB
+    S --> SUB
+    H --> SUB
+    SUB --> PCA --> DS --> BM --> UI
+    PCA --> W2 & MMD & CD & COV
+    PCA --> CR & CM
+    UI --> SUM
+    W2 --> SUM
+    MMD --> SUM
+    CD --> SUM
+    CR --> CC
+    CM --> CMC
+    PCA --> PCC
+
+    classDef in fill:#f3f4f6,stroke:#374151,color:#000
+    classDef proj fill:#bfdbfe,stroke:#1e40af,color:#000
+    classDef dupi fill:#ddd6fe,stroke:#5b21b6,color:#000
+    classDef dist fill:#bbf7d0,stroke:#166534,color:#000
+    classDef cls fill:#fde68a,stroke:#b45309,color:#000
+    classDef out fill:#fecaca,stroke:#991b1b,color:#000
+    class R,S,H in
+    class SUB,PCA proj
+    class DS,BM,UI dupi
+    class W2,MMD,CD,COV dist
+    class CR,CM cls
+    class SUM,CMC,CC,PCC out
 ```
 
 ### 1. Fidelity (충실도)
@@ -575,9 +664,11 @@ Noise Schedule: cosine (Nichol & Dhariwal), 500 timesteps
 
 #### 4.2 DUPI (Data Utility and Privacy Index)
 
-> Jeong, D., Kim, J. H. T., & Im, J. (2023). *"Synthetic Data -- What, Why and How?"*
-> IEEE Transactions on Information Forensics and Security.
+> Jeong, D., Kim, J. H. T., & Im, J. (2023). *"A New Global Measure to Simultaneously Evaluate Data Utility and Privacy Risk"*
+> *IEEE Transactions on Information Forensics and Security*, **18**, pp. 715–729.
 > DOI: [10.1109/TIFS.2022.3228753](https://doi.org/10.1109/TIFS.2022.3228753)
+>
+> 구현: [`src/evaluation/dupi.py`](src/evaluation/dupi.py) · 단위 테스트 + 논문 수치 재현: [`tests/test_dupi.py`](tests/test_dupi.py) (29 tests)
 
 NNAA와 달리 **이론적 벤치마크(DUPI₀)**가 존재하여 정량적 판정이 가능한 지표이다.
 
@@ -718,6 +809,48 @@ FiLM 기반 계층적 임베딩의 핵심 가설을 검증하는 지표이다.
 
 ---
 
+## Evaluation Results — 실측 (`gw_0p5` baseline)
+
+`scripts/guidance_sweep.py` 로 guidance weight 0.5 에서 학습된 모델의 합성 표본 2,504 개 vs 실제 hold-out 251 개 평가. 산출 디렉터리: `outputs/guidance_sweep_best_full/gw_0p5/evaluation_metrics/`.
+
+### Global metrics (`summary_metrics.json`)
+
+| Metric | Observed | Reference / Target |
+|---|---|---|
+| n_real / n_synthetic | 251 / 2,504 | 10× augmentation |
+| n_features_before_pca | 16,000 | 2,000 genes × 8 channels |
+| PCA explained variance | 7.92 % / 2.87 % (PC1 / PC2) | — |
+| **DUPI** (k=1) | **0.530** | benchmark `m/(n+m−1)` = 0.909 |
+| DUPI abs error | 0.379 | smaller = closer to balance |
+| **Privacy Index** (τ=5) | **0.943** | ≈ 0.867 = optimal |
+| Utility Index (τ=5) | 0.706 | ≈ 0.867 = optimal |
+| U × P | 0.666 | ≤ 0.751 (Theorem 5 bound) |
+| Centroid distance | 1.351 | smaller = better |
+| Gaussian W2 | 10.93 | smaller = better |
+| MMD-RBF (biased) | 0.00136 | smaller = better |
+
+### Per-superpopulation breakdown (`class_metrics.csv`)
+
+| Pop | n_real | n_syn | DUPI | PI | UI | centroid_dist | W2 | MMD |
+|---|---|---|---|---|---|---|---|---|
+| AFR | 67 | 661 | 0.701 | 0.915 | 0.795 | 1.79 | 8.15 | 0.085 |
+| AMR | 34 | 347 | 0.853 | 0.882 | 0.849 | 1.58 | 3.71 | 0.013 |
+| EAS | 50 | 504 | 0.260 | **0.977** | 0.451 | 5.04 | 27.4 | 0.730 |
+| EUR | 51 | 503 | 0.294 | **0.973** | 0.495 | 3.52 | 13.2 | 0.401 |
+| SAS | 49 | 489 | 0.571 | 0.937 | 0.731 | 3.31 | 12.7 | 0.272 |
+
+전 superpop 에서 **PI ≥ 0.88** — 어느 인구집단도 nearest-neighbor memorization 흔적 없음. EAS / EUR 은 PI 가 0.97+ 로 매우 높지만 동시에 UI 가 0.5 미만으로 떨어지는데, 이는 합성 표본이 real 분포에서 멀리 떨어진 결과 (centroid drift 4–5 PC unit) 이며 *privacy 우수* 라기보다 *utility 손실의 부산물* 로 읽어야 한다.
+
+### Privacy 시각화
+
+`outputs/guidance_sweep_best_full/gw_0p5/privacy_per_superpop.png` 가 두 패널로 위 표를 시각화한다 — (1) DUPI vs 동일분포 benchmark 막대그래프, (2) Privacy / Utility Index 막대그래프 (PI ≥ 0.88 임계선 포함).
+
+### 1줄 요약 (논문 기재용)
+
+> Across 251 held-out real and 2,504 synthetic samples in PCA(2) space, DUPI = 0.530 (k = 1) — well below the equal-distribution benchmark 0.909 — yielding a global **privacy_index of 0.943** with no superpopulation falling below 0.88, indicating no nearest-neighbor memorization while preserving moderate utility (UI = 0.706).
+
+---
+
 ## Data
 
 ```
@@ -727,26 +860,50 @@ data/
 └── integrated_call_samples_v3.20130502.ALL.panel   (sample→pop→superpop mapping)
 ```
 
-### 전처리 파이프라인 흐름
+### 전처리 파이프라인 흐름 (OOM-safe 2-pass)
 
+```mermaid
+flowchart TD
+    VCF["ALL.autosomes.phase3.genotypes.vcf.gz<br/>(13.9 GB, chr1–22)"]
+    PANEL["1KG sample panel<br/>(2,504 samples · 26 pops · 5 superpops)"]
+
+    subgraph PASS1["PASS 1 — K determination"]
+        P1A["VCF parse: chr1, chr11, chr22 only<br/>MAF ≥ 0.01 filter"]
+        P1B["Gene annotation (RefGene)"]
+        P1C["PCA grid search<br/>K candidates: [4, 6, 8, 10, 12, 16]<br/>Marginal Gain Elbow"]
+        P1D["release memory"]
+    end
+
+    subgraph PASS2["PASS 2 — full streaming transform"]
+        P2A["VCF parse: chr1..22 sequentially"]
+        P2B["Gene PCA(K) transform<br/>variant released after fit"]
+        P2C["accumulate gene_pca_features"]
+    end
+
+    subgraph FIN["FINALIZATION"]
+        F1["Hierarchical labels<br/>pop ↔ superpop mapping"]
+        F2["Tokenize + alignment pad<br/>multiple of 128"]
+        F3["Normalize (post-pad)<br/>stats shape = (gene_size, K)"]
+        F4["zero_mask generation"]
+        F5["Stratified split (train / test)<br/>seed = 20260327"]
+    end
+
+    OUT["data/processed/<br/>gene_pca_features.pkl<br/>train_data.pkl · test_data.pkl<br/>normalization_stats.pkl<br/>label_hierarchy.pkl<br/>zero_mask.pt<br/>split_manifest.json"]
+
+    VCF --> P1A --> P1B --> P1C --> P1D
+    PANEL --> P1A
+    P1D --> P2A --> P2B --> P2C
+    P2C --> F1 --> F2 --> F3 --> F4 --> F5 --> OUT
+
+    classDef p1 fill:#bfdbfe,stroke:#1e40af,color:#000
+    classDef p2 fill:#bbf7d0,stroke:#166534,color:#000
+    classDef fin fill:#fde68a,stroke:#b45309,color:#000
+    class P1A,P1B,P1C,P1D p1
+    class P2A,P2B,P2C p2
+    class F1,F2,F3,F4,F5 fin
 ```
-OOM-safe 2-pass approach:
 
-Pass 1: chr1,11,22 파싱 → PCA grid search → 최적 K 결정 → 메모리 해제
-Pass 2: 22 chr 순차 스트리밍 → PCA 변환 → variant 즉시 해제
-Peak RAM ≈ 1 chromosome (~3-5GB for chr1) + 누적 PCA features (~2GB)
-
-전처리 순서:
-  1. VCF 파싱 (MAF >= 0.01 필터링)
-  2. Gene annotation (RefGene 기반 유전자 매핑)
-  3. PCA grid search (K 후보: [4,6,8,10,12,16], Marginal Gain Elbow)
-  4. 전체 VCF → Gene PCA 스트리밍 변환
-  5. 계층적 레이블 생성 (pop → superpop)
-  6. 토큰화 + alignment 패딩 (128 단위)
-  7. 정규화 (패딩 후 수행, stats shape = (gene_size, K))
-  8. zero_mask 생성
-  9. Stratified split (train/test) + 저장
-```
+> **Peak RAM 추정** ≈ 1 chromosome (~3–5 GB for chr1) + 누적 PCA features (~2 GB).
 
 ### 전처리 산출물
 
@@ -803,14 +960,28 @@ python src/inference/generator.py \
     --model_path outputs/default/best_model.pth \
     --output_dir outputs/default/synthetic_samples
 
-# Phase 5: 평가 (11개 지표 병렬)
-python src/evaluation/run_evaluation.py \
-    --config configs/default.yaml \
+# Phase 5: 평가 (DUPI + 분포 거리, PCA(2) 공간)
+python scripts/evaluate_synthetic_metrics.py \
+    --syn-dir outputs/default/synthetic_samples \
+    --out-dir outputs/default/evaluation_metrics \
+    --dupi-k 1 \
+    --tau 5.0
+
+# Phase 6: PCA real vs synthetic 시각화
+python src/evaluation/pca_compare.py \
     --syn_dir outputs/default/synthetic_samples
+
+# Phase 7: Guidance weight 스윕 (CFG w 탐색)
+python scripts/guidance_sweep.py \
+    --weights 0.5 1.0 2.0 4.0 7.0 \
+    --base-dir outputs/guidance_sweep
+
+# Tests (DUPI 단위 + 논문 수치 재현 29개)
+pytest tests/test_dupi.py -v
 
 # Hyperparameter sweep (wandb)
 # configs/sweep.yaml을 작성한 후 실행
-# wandb sweep configs/sweep.yaml --project HybridGenoDiT
+# wandb sweep configs/sweep.yaml --project HiPoDiT
 # wandb agent <sweep_id>
 ```
 
@@ -850,9 +1021,14 @@ gene-synthesis-project/
 │   ├── inference/
 │   │   └── generator.py            # EMA 로드, DDIM 생성, 역정규화 (stats 패딩 처리)
 │   │
-│   ├── evaluation/
-│   │   ├── run_evaluation.py       # 병렬 평가 실행기 (역정규화 포함)
-│   │   └── metrics.py              # 11개 지표 구현
+│   ├── evaluation/                 # ── 평가 모듈 ──
+│   │   ├── README.md               # DUPI 모듈 전용 문서 (citation, API, paper recon)
+│   │   ├── __init__.py             # 공개 API re-export
+│   │   ├── dupi.py                 # DUPI · UI · PI (Eqs. 8/10-13, citable core)
+│   │   ├── distribution_metrics.py # Gaussian W2, MMD-RBF, coverage, centroid
+│   │   ├── synthetic_pipeline.py   # evaluate() + EvaluationReport dataclass
+│   │   ├── _io.py                  # 프로젝트-특화 IO + 캐싱 (project-coupled)
+│   │   └── pca_compare.py          # Real vs Syn PCA scatter plot 생성
 │   │
 │   ├── data/
 │   │   ├── dataset.py              # GenotypeDataset (pkl → tensor)
@@ -862,21 +1038,42 @@ gene-synthesis-project/
 │   └── utils/
 │       ├── config.py               # YAML 로드, CLI override, 검증
 │       ├── ddp.py                  # DDP setup/cleanup
-│       ├── ema.py                  # EMA (decay 0.9999)
-│       ├── logger.py               # wandb 래퍼 (rank 0 only)
+│       ├── ema.py                  # EMA (decay 0.999, configs/default.yaml)
+│       ├── logger.py               # wandb 래퍼 (rank 0 only, project=HiPoDiT)
 │       └── checkpoint.py           # .pth 저장/로드, top-k 관리
 │
-├── data/                            # (git 추적 안 함)
+├── scripts/
+│   ├── evaluate_synthetic_metrics.py # DUPI + 분포 거리 CLI shim
+│   ├── guidance_sweep.py             # CFG w 스윕 + 평가 자동화
+│   ├── plot_pca.py                   # 3-panel Real / Syn / Overlay PCA 그림
+│   └── export_chr17_csv.py           # chr17 CSV 익스포트 유틸
+│
+├── tests/
+│   └── test_dupi.py                  # 29 tests (invariants + 논문 수치 재현)
+│
+├── data/                              # (git 추적 안 함)
 │   ├── ALL.autosomes.phase3.genotypes.vcf.gz
-│   └── processed/                   # 전처리 산출물
+│   └── processed/                     # 전처리 산출물
 │
-├── outputs/                         # (git 추적 안 함)
-│   └── default/
-│       ├── best_model.pth
-│       ├── synthetic_samples/
-│       └── evaluation/
+├── outputs/                           # (git 추적 안 함)
+│   ├── default/
+│   │   ├── best_model.pth
+│   │   ├── synthetic_samples/
+│   │   └── evaluation_metrics/
+│   └── guidance_sweep_best_full/
+│       ├── guidance_sweep_summary.csv
+│       └── gw_0p5/
+│           ├── pca_real_vs_synthetic.png
+│           ├── privacy_per_superpop.png
+│           ├── synthetic_samples/
+│           └── evaluation_metrics/
+│               ├── summary_metrics.json
+│               ├── class_metrics.csv
+│               ├── centroids.csv
+│               └── pca_coordinates.csv
 │
-└── docs/                            # 상세 기획서 (01~10)
+├── CITATION.cff                       # 인용 메타데이터 (GitHub 자동 인식)
+└── docs/                              # 상세 기획서 (01~10)
 ```
 
 ---
@@ -889,14 +1086,19 @@ gene-synthesis-project/
 | RAM | 64GB+ 권장 | 전체 데이터셋 in-memory |
 | Storage | 50GB+ | VCF(14GB) + 산출물 + 체크포인트 |
 
-**VRAM 사용량** (baseline config):
+**VRAM 사용량 추정** (baseline config, 197 M params, batch=16, bf16):
 ```
-Model parameters:   ~6.8M × 2B (bf16)  ≈  14 MB
-Optimizer states:   ~6.8M × 8B (Adam)  ≈  54 MB
-Activations:        batch=32            ≈  ~2 GB
-──────────────────────────────────────────────────
-Total per GPU:      ~2.1 GB  (49GB 중 4% 사용)
+Model weights (bf16):       197 M × 2 B               ≈   376 MB
+Gradients (bf16):           197 M × 2 B               ≈   376 MB
+Optimizer states (AdamW):   197 M × 8 B (m + v fp32)  ≈ 1,576 MB
+EMA weights:                197 M × 2 B (bf16)        ≈   376 MB
+Activations (b=16, gene=24576, mixed-prec)            ≈ 4–6 GB
+─────────────────────────────────────────────────────────────
+Total per GPU                                          ≈ 7–9 GB
+                                            (48 GB 중 약 15–19 % 사용)
 ```
+
+> bf16 + DDP 2-GPU 기준. Activation 비용은 input length / DiT 토큰 수에 따라 변동.
 
 ---
 
@@ -905,9 +1107,9 @@ Total per GPU:      ~2.1 GB  (49GB 중 4% 사용)
 | 결정 | 근거 |
 |------|------|
 | bf16 (not fp16) | Ampere CC 8.6 네이티브 지원, exponent 8bit → GradScaler 불필요 |
-| DDP (not FSDP) | 6.8M params는 단일 GPU에 충분, DDP가 단순하고 효율적 |
-| cosine schedule | Diffusion에서 linear 대비 학습 안정성 우수 |
-| DDIM 50-step | 500-step DDPM 대비 10x 가속, 품질 유지 |
+| DDP (not FSDP) | 197M params는 단일 GPU(48 GB) 안에 들어가므로 DDP 가 더 단순·효율적 |
+| linear schedule · 1,000 timesteps | DiT 류 large-scale diffusion 의 표준; cosine 보다 후반부 noise 가 균형적 |
+| DDIM 100-step (η = 0.5) | 1,000-step DDPM 대비 10× 가속 + 부분 stochasticity 로 다양성 유지 |
 | AdaLN-Zero | α=0 초기화 → DiT가 identity로 시작 → 안정적 학습 |
 | Marginal Gain Elbow (K 선택) | threshold=0.03, decay_ratio=0.5로 데이터 적응적 |
 | 패딩 → 정규화 순서 | 패딩 후 정규화하여 stats shape = (gene_size, K) 보장 |
@@ -917,18 +1119,78 @@ Total per GPU:      ~2.1 GB  (49GB 중 4% 사용)
 
 ---
 
+## Tests
+
+```bash
+pytest tests/test_dupi.py -v
+```
+
+29 tests · runs in < 1 s. Categories:
+
+* `TestDupiBenchmark` — Eq. (10) closed-form, [0,1] range, invalid-`k` raises
+* `TestDupiScore` — bounded range, identical-distribution convergence, far / overlap / too-few-samples extremes
+* `TestUiPi` — Eqs. (12)–(13) edge cases, atan-sigmoid symmetry, invalid-input raises
+* `TestDistributionMetrics` — W2 / MMD / coverage non-negativity + zero-on-identical
+* `TestPaperReproduction` — **논문에 인쇄된 수치를 그대로 재현**:
+    - Wine 예시 (p. 722): DUPI=0.25, DUPI₀=0.5, τ=5 → (UI, PI) = (0.652, 0.954)
+    - 최적점: g=0.5 → UI=PI=0.867
+    - Theorem 5 상한: UI · PI ≤ (arctan(τ/2)/arctan(τ))²
+    - S1 시뮬레이션: m=n=600, MVN_5(0, I) 30 reps 평균이 benchmark `m/(2n−1)` ±0.02 이내
+    - Eq. (8) `kneighbors` self-exclusion identity
+
+---
+
+## Software registration status
+
+| 항목 | 상태 |
+| --- | --- |
+| `LICENSE` | 미배치 (`CITATION.cff` 에 MIT 명시 — 별도 파일 추가 필요) |
+| `CITATION.cff` | 추가됨 (GitHub 자동 인식, Jeong et al. 2023 + 본 SW 동시 인용) |
+| GitHub release / Zenodo DOI | 미설정 (release 시 Zenodo 연동 권장) |
+| PyPI | 미배포 (`src/evaluation/dupi.py` 는 stand-alone 이라 분리 PyPI 배포 가능) |
+| 한국저작권위원회 SW 등록 | 미신청 (개인 ₩30,000 / 법인 ₩70,000 · 처리 ~30일) |
+
+원저자(Jeong, Kim, Im 2023) 의 공식 구현 공개 흔적 없음 — 본 모듈이 사실상 최초 공개 레퍼런스 구현일 가능성 높음.
+
+---
+
 ## References
 
-- Nichol, A. Q., & Dhariwal, P. (2021). Improved Denoising Diffusion Probabilistic Models. *ICML*.
-- Peebles, W., & Xie, S. (2023). Scalable Diffusion Models with Transformers (DiT). *ICCV*.
-- Perez, E., et al. (2018). FiLM: Visual Reasoning with a General Conditioning Layer. *AAAI*.
-- Jeong, D., Kim, J. H. T., & Im, J. (2023). Synthetic Data -- What, Why and How? *IEEE TIFS*.
-- Hang, T., et al. (2023). Efficient Diffusion Training via Min-SNR Weighting Strategy. *ICCV*.
-- Song, J., Meng, C., & Ermon, S. (2020). Denoising Diffusion Implicit Models (DDIM). *ICLR*.
-- The 1000 Genomes Project Consortium (2015). A global reference for human genetic variation. *Nature*.
+* Nichol, A. Q., & Dhariwal, P. (2021). Improved Denoising Diffusion Probabilistic Models. *ICML*.
+* Peebles, W., & Xie, S. (2023). Scalable Diffusion Models with Transformers (DiT). *ICCV*.
+* Perez, E., et al. (2018). FiLM: Visual Reasoning with a General Conditioning Layer. *AAAI*.
+* Jeong, D., Kim, J. H. T., & Im, J. (2023). **A New Global Measure to Simultaneously Evaluate Data Utility and Privacy Risk**. *IEEE Transactions on Information Forensics and Security*, **18**, 715–729. doi:[10.1109/TIFS.2022.3228753](https://doi.org/10.1109/TIFS.2022.3228753)
+* Hang, T., et al. (2023). Efficient Diffusion Training via Min-SNR Weighting Strategy. *ICCV*.
+* Song, J., Meng, C., & Ermon, S. (2020). Denoising Diffusion Implicit Models (DDIM). *ICLR*.
+* The 1000 Genomes Project Consortium (2015). A global reference for human genetic variation. *Nature*.
+
+---
+
+## Citation
+
+본 저장소를 학술적으로 인용할 때는 (1) 본 SW 와 (2) DUPI 원논문을 *동시* 인용하기를 권장한다 — `CITATION.cff` 의 references 항목에 두 entry 가 정의되어 있다.
+
+```bibtex
+@article{Jeong2023DUPI,
+  title   = {A New Global Measure to Simultaneously Evaluate Data Utility and Privacy Risk},
+  author  = {Jeong, Donghoon and Kim, Joseph H. T. and Im, Jongho},
+  journal = {IEEE Transactions on Information Forensics and Security},
+  volume  = {18},
+  pages   = {715--729},
+  year    = {2023},
+  doi     = {10.1109/TIFS.2022.3228753}
+}
+
+@software{HiPoDiT2026,
+  title  = {HiPoDiT: Population-conditional synthetic genotype generation with a DUPI-based privacy/utility evaluator},
+  author = {{Gene Synthesis Project Authors}},
+  year   = {2026},
+  url    = {https://github.com/zongseung/gene-synthesis-project}
+}
+```
 
 ---
 
 ## License
 
-This project is for academic research purposes.
+This project is for academic research purposes. A standalone `LICENSE` file (MIT) will be added prior to public release; until then, see `CITATION.cff` for the intended licensing terms.
