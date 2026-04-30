@@ -141,7 +141,7 @@ def split_dataset_stratified(
         "seed": seed,
         "val_ratio": val_ratio,
         "test_ratio": test_ratio,
-        "n_total": int(len(idx)),
+        "n_total": int(len(train_idx) + len(val_idx) + len(test_idx)),
         "n_train": int(len(train_idx)),
         "n_val": int(len(val_idx)),
         "n_test": int(len(test_idx)),

@@ -273,11 +273,18 @@ def stream_vcf_and_pca(
         n_genes_chr = len(gene_matrices)
 
         for gene_name in sorted(gene_matrices.keys()):
-            result = pca_single_gene(
-                gene_name,
-                gene_matrices[gene_name],
-                optimal_k,
+            from src.preprocessing.config import (
+                DIM_RED_METHOD, GLM_PCA_FAMILY, GLM_PCA_MAX_ITER,
+            )
+            from src.preprocessing.dim_reduction import reduce_single_gene
+            result = reduce_single_gene(
+                method=DIM_RED_METHOD,
+                gene_name=gene_name,
+                matrix=gene_matrices[gene_name],
+                n_components=optimal_k,
                 train_indices=train_indices,
+                fam=GLM_PCA_FAMILY,
+                max_iter=GLM_PCA_MAX_ITER,
             )
             if result is not None:
                 all_pca_features.update(result["features"])

@@ -32,6 +32,18 @@ MARGINAL_GAIN_THRESHOLD = 0.03
 MARGINAL_GAIN_DECAY_RATIO = 0.5
 PCA_SAMPLE_GENES = 500
 
+# Per-gene dimensionality reduction backend.
+#   'pca'      — Gaussian PCA (sklearn). Fast (~10 ms/gene); misspecified for
+#                 Binomial(2, p) genotype dosage data.
+#   'glm_pca'  — GLM-PCA (Townes et al. 2019). Statistically correct for
+#                 dosage; ~100× slower per gene (estimate 7-35 h for full 22-chr
+#                 run on commodity CPU). Recommended for final analysis after
+#                 PCA-based ablation has been verified.
+# Override at runtime: HIPODIT_DIM_RED=glm_pca python src/preprocessing/run_pipeline.py
+DIM_RED_METHOD = os.environ.get("HIPODIT_DIM_RED", "pca")
+GLM_PCA_FAMILY = os.environ.get("HIPODIT_GLM_FAMILY", "poi")  # 'poi' enables Rust path; 'mult' | 'nb' fall back to glmpca-py
+GLM_PCA_MAX_ITER = int(os.environ.get("HIPODIT_GLM_MAX_ITER", "100"))
+
 # Gene size alignment (CNN downsampling x3 + patch_size 16 -> 128)
 GENE_SIZE_ALIGNMENT = 128
 

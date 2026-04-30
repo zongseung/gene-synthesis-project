@@ -85,7 +85,7 @@ def validate_input_files() -> None:
 def main() -> None:
     t_start = time.time()
     logger.info("=" * 60)
-    logger.info("HybridGenoDiT Preprocessing Pipeline (OOM-safe)")
+    logger.info("HiPoDiT Preprocessing Pipeline (OOM-safe)")
     logger.info(f"  VCF: {VCF_PATH}")
     logger.info("=" * 60)
 
@@ -141,13 +141,25 @@ def main() -> None:
         val_idx = val_idx[np.isin(val_idx, np.arange(n_min))]
         test_idx = test_idx[np.isin(test_idx, np.arange(n_min))]
 
-    optimal_k, _ = grid_search_optimal_pca(
-        subset_genes,
+    from src.preprocessing.config import (
+        DIM_RED_METHOD, GLM_PCA_FAMILY, GLM_PCA_MAX_ITER,
+    )
+    from src.preprocessing.dim_reduction import grid_search_optimal_k
+    logger.info(f"Dimensionality reduction backend: {DIM_RED_METHOD}")
+    grid_kwargs = dict(
         candidates=PCA_CANDIDATES,
         n_sample_genes=PCA_SAMPLE_GENES,
         marginal_threshold=MARGINAL_GAIN_THRESHOLD,
         decay_ratio=MARGINAL_GAIN_DECAY_RATIO,
+    )
+    if DIM_RED_METHOD == "glm_pca":
+        grid_kwargs["fam"] = GLM_PCA_FAMILY
+        grid_kwargs["max_iter"] = GLM_PCA_MAX_ITER
+    optimal_k, _ = grid_search_optimal_k(
+        method=DIM_RED_METHOD,
+        gene_matrices=subset_genes,
         train_indices=train_idx,
+        **grid_kwargs,
     )
     del subset_genes
     gc.collect()

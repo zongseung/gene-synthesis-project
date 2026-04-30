@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Main training script for HybridGenoDiT diffusion model.
+"""Main training script for HiPoDiT diffusion model.
 
 Supports:
 - DDP training on 2 GPUs via torchrun (nccl backend)
@@ -324,7 +324,7 @@ def train(config: dict) -> None:
     # ── wandb (rank 0 only) ──
     exp_cfg = config.get("experiment", {})
     wb_logger = ExperimentLogger(
-        project="HybridGenoDiT",
+        project="HiPoDiT",
         run_name=exp_cfg.get("run_name", None),
         tags=exp_cfg.get("tags", None),
         enabled=is_main_process(),
@@ -416,6 +416,10 @@ def train(config: dict) -> None:
                     metrics["train/mmd_pca"] = loss_dict["mmd_pca"].item()
                 if "mmd_pop" in loss_dict:
                     metrics["train/mmd_pop"] = loss_dict["mmd_pop"].item()
+                if "class_centroid" in loss_dict:
+                    metrics["train/class_centroid"] = loss_dict["class_centroid"].item()
+                if "mmd_sigma" in loss_dict:
+                    metrics["train/mmd_sigma"] = loss_dict["mmd_sigma"].item()
                 if "aux_warmup_scale" in loss_dict:
                     metrics["train/aux_warmup_scale"] = (
                         loss_dict["aux_warmup_scale"].item()

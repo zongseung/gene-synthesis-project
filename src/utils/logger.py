@@ -38,7 +38,7 @@ class ExperimentLogger:
 
     def __init__(
         self,
-        project: str = "HybridGenoDiT",
+        project: str = "HiPoDiT",
         run_name: str | None = None,
         tags: list[str] | None = None,
         enabled: bool = True,

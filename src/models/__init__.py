@@ -1,5 +1,5 @@
 """
-HybridGenoDiT model package.
+HiPoDiT model package.
 
 Main exports:
     - HybridCNNDiTFiLM: The main hybrid CNN-DiT model with FiLM conditioning.
