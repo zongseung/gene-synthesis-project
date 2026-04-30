@@ -1,7 +1,7 @@
 # ── 데이터 ──
 data:
   gene_size: 24576
-  num_channels: 8
+  num_channels: 4
   num_classes: 26
   num_superpops: 5
   num_samples: 2504
@@ -59,8 +59,8 @@ training:
 
 # ── 실험 운영 ──
 experiment:
-  run_name: "20260327_baseline_seed20260327"
-  tags: ["baseline", "hybrid-genodit"]
+  run_name: "20260428_glmpca_k4_sym_gpu1"
+  tags: ["baseline", "hybrid-genodit", "glm-pca", "k4", "sym-fix"]
   save_top_k_checkpoints: 3
   export_policy: "internal_only"
 
@@ -72,10 +72,19 @@ distributed:
 # ── 보조 손실 ──
 aux_loss:
   enabled: true
-  lambda_pca_dist: 0.01
-  lambda_pop_structure: 0.01
+  lambda_pca_dist: 0.02
+  lambda_pop_structure: 0.02
+  lambda_class_centroid: 0.05
   type: "mmd_rbf"
+  mmd_sigma: "median"
+  feature_subsample: 4096
+  class_alignment_level: "superpop"
+  # superpopulation index order from label_hierarchy.pkl:
+  # 0=AFR, 1=AMR, 2=EAS, 3=EUR, 4=SAS.
+  # Current metrics show the largest centroid/coverage gaps in EAS, EUR, AFR.
+  class_alignment_weights: [1.5, 1.0, 2.0, 1.5, 1.0]
+  min_class_samples: 1
   warmup_epochs: 20
 
 # ── 저장 ──
-save_dir: "outputs/default"
+save_dir: "outputs/20260428_glmpca_k4_sym_gpu1"
