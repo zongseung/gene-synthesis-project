@@ -1,0 +1,36 @@
+# ver8.1 § serving · HanMed Bogam CLI 별도 entry point 패키지.
+#
+# root 의 hanmed CLI (`hanmed_cli.main:cli`) 와 충돌 없이 동의보감 RAG sidecar
+# (port 8080) 전용 채팅 REPL 을 등록한다.
+#
+# 설치:
+#   pip install -e experiments/dongui_bogam
+# 사용:
+#   hanmed-bogam                          # REPL
+#   hanmed-bogam -q "사물탕의 구성"       # one-shot
+#   hanmed-bogam --show-retrieved         # 발췌 path 표 표시
+#   hanmed-bogam --json -q "..."          # raw JSON (jq 파이프 용)
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hanmed-bogam-cli"
+version = "0.1.0"
+description = "HanMed ver8.1 RAG CLI — 동의보감 sidecar 통합 REPL"
+requires-python = ">=3.10"
+dependencies = [
+    "httpx>=0.27",
+    "rich>=13",
+]
+
+[project.scripts]
+hanmed-bogam = "bogam_cli.chat:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["bogam_cli*"]
+
+[tool.setuptools.package-data]
+bogam_cli = ["*.ansi"]

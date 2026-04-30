@@ -20,8 +20,10 @@ ROOT = Path(__file__).resolve().parents[4]
 EXP_ROOT = Path(__file__).resolve().parents[2]
 TOKENIZER_PATH = ROOT / "data" / "tokenizer" / "hanmed_bllossom_ext"
 DEFAULT_BASE = "MLP-KTLim/llama-3-Korean-Bllossom-8B"
-DEFAULT_OUTPUT = EXP_ROOT / "outputs_ver5_book008_full"
-DEFAULT_SFT_DATA = EXP_ROOT / "data" / "sft" / "book008_full_sft.jsonl"
+DEFAULT_OUTPUT = EXP_ROOT / "outputs_ver8_1_bllossom_v1"
+DEFAULT_SFT_DATA = EXP_ROOT / "data" / "sft" / "phaseB_qa_v8_1_corpus.jsonl"
+# v8.1 corpus (sft-quality-fix round_1+2 수렴, 34,039 rows). Provenance: docs/ver8.1/00, 04 참조.
+# 이전 default 'book008_full_sft.jsonl' (v5) 및 후속 v6/v7 corpus 들은 historical 보존; 새 학습은 v8.1 사용.
 
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))

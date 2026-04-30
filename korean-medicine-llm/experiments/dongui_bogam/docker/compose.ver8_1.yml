@@ -1,0 +1,127 @@
+# ver8.1 § serving · HanMed Phase B (Gemma3-12B + ver8.1 LoRA, merged) + RAG sidecar.
+#
+# 구성:
+#   ┌─────────────────────┐  internal :8000  ┌──────────────────────┐
+#   │  hanmed_rag         │ ─────────────────►│  hanmed_vllm_ver8_1  │
+#   │  (FastAPI, CPU)     │                  │  (vLLM, GPU)         │
+#   │  retrieval + safety │                  │  Gemma3 + LoRA merged│
+#   └──────────▲──────────┘                  └──────────────────────┘
+#              │ public :8080
+#
+# 선결 (한 번만):
+#   PYTHONHASHSEED=0 .venv/bin/python \
+#     experiments/dongui_bogam/scripts/build_merged_model_ver8_1.py
+#   → outputs_ver8_1_gemma_v1/merged/  (~24 GB)
+#
+# 기동 (build context = experiments/dongui_bogam):
+#   cd experiments/dongui_bogam
+#   docker compose -f docker/compose.ver8_1.yml up -d --build
+#
+# 상태:
+#   docker compose -f docker/compose.ver8_1.yml ps
+#   docker compose -f docker/compose.ver8_1.yml logs -f hanmed_vllm_ver8_1
+#   curl -sf http://localhost:8080/health
+#
+# Smoke test:
+#   curl -X POST http://localhost:8080/rag/answer \
+#     -H "Content-Type: application/json" \
+#     -d '{"query":"인삼(人蔘)의 성미와 귀경에 대해 간단히 설명해줘."}'
+#
+# 중지:
+#   docker compose -f docker/compose.ver8_1.yml down
+
+services:
+
+  # ── vLLM (GPU, internal) ───────────────────────────────────────────────
+  hanmed_vllm_ver8_1:
+    build:
+      context: ..                       # = experiments/dongui_bogam/
+      dockerfile: docker/Dockerfile.vllm
+    image: hanmed-llm:ver8_1
+    container_name: hanmed_vllm_ver8_1
+    runtime: nvidia
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=0
+      - HF_HOME=/hf
+      - HF_HUB_OFFLINE=1
+      - TRANSFORMERS_OFFLINE=1
+    command:
+      - --model=/model
+      - --tokenizer=/model
+      - --served-model-name=hanmed-ver8_1
+      - --trust-remote-code
+      - --dtype=bfloat16
+      - --port=8000
+      - --host=0.0.0.0
+      - --max-model-len=4096
+      - --max-num-seqs=8
+      - --gpu-memory-utilization=0.85
+      - --disable-log-requests
+    volumes:
+      - ${HF_HOME_HOST:-/home/user/.cache/huggingface}:/hf:ro
+      - ${HANMED_MERGED_DIR:-../outputs_ver8_1_gemma_v1/merged}:/model:ro
+    networks:
+      - hanmed_ver8_1_net
+    # 외부 노출 X — RAG sidecar 만 통과. 디버깅 시 주석 해제:
+    # ports:
+    #   - "127.0.0.1:8000:8000"
+    restart: unless-stopped
+    shm_size: 8gb
+    logging:
+      driver: json-file
+      options: {max-size: "100m", max-file: "3"}
+
+  # ── RAG sidecar (CPU, public) ──────────────────────────────────────────
+  hanmed_rag:
+    build:
+      context: ..                       # = experiments/dongui_bogam/ (rag_service + src 접근 위해)
+      dockerfile: docker/Dockerfile.rag
+    image: hanmed-rag:ver8_1
+    container_name: hanmed_rag
+    environment:
+      - VLLM_URL=http://hanmed_vllm_ver8_1:8000
+      - VLLM_MODEL_NAME=hanmed-ver8_1
+      - VLLM_TIMEOUT_S=60
+      - RAG_INDEX_PATH=/rag_data/book_008.index
+      - RAG_META_PATH=/rag_data/book_008.meta.jsonl
+      - RAG_ENCODER=BAAI/bge-m3
+      - RAG_ENCODER_DEVICE=cpu
+      - RAG_TOP_K=5
+      - RAG_BOOST_K=2
+      - RAG_MIN_BODY_LEN=30
+      - GEN_MAX_TOKENS=400
+      - GEN_TEMPERATURE=0.0
+      - GEN_REPETITION_PENALTY=1.1
+      - INFO_PROMPTS_YAML=/prompts/info_mode_prompts.yaml
+      - HF_HOME=/hf
+      - HF_HUB_OFFLINE=1
+    volumes:
+      # rag corpus (book_008.index + meta.jsonl)
+      - ${RAG_DATA_DIR:-../../../data/rag}:/rag_data:ro
+      # INFO mode prompt yaml (Phase 6 후속 — 우선 마운트만)
+      - ../eval:/prompts:ro
+      # HF cache (BGE-M3 download 캐시)
+      - ${HF_HOME_HOST:-/home/user/.cache/huggingface}:/hf
+    ports:
+      - "0.0.0.0:8080:8080"
+    networks:
+      - hanmed_ver8_1_net
+    depends_on:
+      hanmed_vllm_ver8_1:
+        condition: service_healthy
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options: {max-size: "50m", max-file: "3"}
+
+networks:
+  hanmed_ver8_1_net:
+    name: hanmed_ver8_1_net
+    driver: bridge
