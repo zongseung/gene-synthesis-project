@@ -5,7 +5,10 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "glmpca>=0.1.0",
+    "glmpca-fast",
     "kernel>=0.49.0",
+    "statsmodels>=0.14.6",
 ]
 
 [tool.setuptools.packages.find]
@@ -21,4 +24,13 @@ dependencies = [
     "scikit-learn>=1.8.0",
     "seaborn>=0.13.2",
     "torch>=2.11.0",
+]
+
+[tool.uv.sources]
+glmpca-fast = { path = "../glmpca-fast/dist/glmpca_fast-0.1.0-cp313-cp313-manylinux_2_34_x86_64.whl" }
+
+[dependency-groups]
+dev = [
+    "pypdf>=6.10.2",
+    "pytest>=9.0.3",
 ]

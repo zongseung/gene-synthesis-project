@@ -985,6 +985,23 @@ pytest tests/test_dupi.py -v
 # wandb agent <sweep_id>
 ```
 
+### 전처리 backend — PCA 또는 GLM-PCA
+
+기본은 sklearn `PCA`. 통계적으로 옳은 **GLM-PCA (Townes et al. 2019, Poisson family)** 로 교체하려면:
+
+```bash
+# Rust 가속 GLM-PCA 빌드 (한 번)
+VIRTUAL_ENV=$(pwd)/.venv .venv/bin/maturin develop --release \
+    -m glm_pca_rs/Cargo.toml
+
+# GLM-PCA 백엔드로 전처리 실행
+HIPODIT_DIM_RED=glm_pca python src/preprocessing/run_pipeline.py
+```
+
+* Python fallback (`glmpca` PyPI) 는 자동 동작; Rust 빌드 시 ~13× 가속
+* `HIPODIT_GLM_FAMILY=poi`(default, Rust 가속) | `mult` | `nb` (Python fallback)
+* 자세한 설명: `src/preprocessing/glm_pca.py` 모듈 docstring
+
 ---
 
 ## Project Structure
