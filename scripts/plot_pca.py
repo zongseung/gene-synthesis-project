@@ -16,7 +16,7 @@ Usage::
 
     uv run python scripts/plot_pca.py
     uv run python scripts/plot_pca.py --run-dir outputs/default --guidance-weight 7.0
-    uv run python scripts/plot_pca.py --title "HybridGenoDiT v1 — 500ep Linear 197M"
+    uv run python scripts/plot_pca.py --title "HiPoDiT v1 — 500ep Linear 197M"
 """
 
 from __future__ import annotations
@@ -118,7 +118,7 @@ def pop_idx_to_superpop_name(y: np.ndarray, lh: dict) -> np.ndarray:
 def infer_title(run_dir: Path, config_path: Path, checkpoint_path: Path | None) -> str:
     """Build a default suptitle from config + checkpoint metadata.
 
-    Format: ``HybridGenoDiT v1 — <epochs>ep <Schedule> <params>M — PCA (non-zero features)``
+    Format: ``HiPoDiT v1 — <epochs>ep <Schedule> <params>M — PCA (non-zero features)``
     """
     spec_parts: list[str] = []
     try:
@@ -143,7 +143,7 @@ def infer_title(run_dir: Path, config_path: Path, checkpoint_path: Path | None) 
             pass
 
     spec = " ".join(spec_parts)
-    head = "HybridGenoDiT v1"
+    head = "HiPoDiT v1"
     if spec:
         return f"{head} — {spec} — PCA (non-zero features)"
     return f"{head} — PCA (non-zero features)"
