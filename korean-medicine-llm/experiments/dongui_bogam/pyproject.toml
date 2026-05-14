@@ -32,6 +32,7 @@ voice = [
     "faster-whisper>=1.0",
     "edge-tts>=6.1",
     "openai>=1.68",
+    "pywebview>=5.0",
     "sounddevice>=0.4",
     "soundfile>=0.12",
 ]
@@ -39,10 +40,11 @@ voice = [
 [project.scripts]
 hanmed-bogam = "bogam_cli.chat:main"
 hanmed-bogam-voice = "bogam_cli.voice:main"
+hanmed-bogam-hologram = "bogam_cli.hologram_app:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["bogam_cli*"]
 
 [tool.setuptools.package-data]
-bogam_cli = ["*.ansi"]
+bogam_cli = ["*.ansi", "hologram/*.html", "hologram/*.png"]

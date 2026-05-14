@@ -21,7 +21,7 @@ from hanmed_cli.session import Session, ModelPin, SamplingState, list_sessions, 
 
 # ver4 §03.02 default — vLLM OpenAI-compatible 엔드포인트
 _DEFAULT_ENDPOINT = os.environ.get("HANMED_ENDPOINT", "http://localhost:8000/v1")
-_DEFAULT_MODEL_NAME = os.environ.get("HANMED_MODEL", "hanmed-p-a-plus")
+_DEFAULT_MODEL_NAME = os.environ.get("HANMED_MODEL", "hanmed-sft-ver5-v3-1")
 
 
 @click.group(invoke_without_command=True)
@@ -58,7 +58,7 @@ def cli(ctx: click.Context, verbose: bool, splash_only: bool, plain: bool) -> No
     except Exception as exc:
         print_error(
             f"backend 접속 실패 ({_DEFAULT_ENDPOINT}): {exc!r}\n"
-            f"  vLLM 서버 기동 확인: docker compose ps\n"
+            f"  vLLM 서버 기동 확인: docker compose -f docker/docker-compose.ver5_v3_1.yml ps\n"
             f"  또는: hanmed chat --help 로 local backend 사용"
         )
         sys.exit(2)
