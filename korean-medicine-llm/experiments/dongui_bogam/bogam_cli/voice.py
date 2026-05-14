@@ -60,7 +60,8 @@ def _soundwave(width: int, phase: int) -> str:
     return "".join(chars)
 
 
-def _print_splash(endpoint: str, stt: STT, health: dict, speak: bool) -> None:
+def _print_splash(endpoint: str, stt: STT, health: dict,
+                  speak: bool, tts_backend: str) -> None:
     """거북이 마스코트 + 헤더 — chat.py 톤과 일관."""
     if MASCOT_LINES:
         sys.stdout.write("\n")
@@ -80,14 +81,14 @@ def _print_splash(endpoint: str, stt: STT, health: dict, speak: bool) -> None:
         f"  [grey58]┌─ hanmed-voice ─────[/] "
         f"endpoint=[cyan]{endpoint}[/] · "
         f"stt=[cyan]{stt.model_size}[/] ([cyan]{stt.load_seconds:.1f}s[/]) · "
-        f"tts=[cyan]{'on' if speak else 'off'}[/] · "
+        f"tts=[cyan]{tts_backend if speak else 'off'}[/] · "
         f"rag=[{rag_color}]{health.get('rag')}[/] · "
         f"vllm=[{vllm_color}]{health.get('vllm')}[/]"
     )
 
 
-def _speak(text: str) -> None:
-    """answer 정제 → edge-tts 합성 → 사운드웨이브 애니메이션과 함께 재생.
+def _speak(text: str, backend: str) -> None:
+    """answer 정제 → TTS 합성 → 사운드웨이브 애니메이션과 함께 재생.
 
     애니메이션은 \\r(캐리지 리턴)로 같은 줄을 덮어쓴다 — rich.Live 의 커서
     이동 방식보다 터미널·문자폭에 둔감해 어디서나 안정적으로 한 줄에서 움직인다.
@@ -95,7 +96,7 @@ def _speak(text: str) -> None:
     spoken = tts.clean_for_speech(text)
     if not spoken:
         return
-    mp3 = tts.synthesize(spoken)
+    mp3 = tts.synthesize(spoken, backend=backend)
     phase = {"n": 0}
     try:
         def tick() -> None:
@@ -114,7 +115,7 @@ def _speak(text: str) -> None:
 
 
 def _handle_turn(endpoint: str, query: str, k: int,
-                 show_retrieved: bool, speak: bool) -> None:
+                 show_retrieved: bool, speak: bool, tts_backend: str) -> None:
     """질문 1건 처리 — 화면 출력 + (옵션) 음성 출력."""
     query = query.strip()
     if not query:
@@ -127,7 +128,7 @@ def _handle_turn(endpoint: str, query: str, k: int,
 
     _print_response(d, show_retrieved)
     if speak:
-        _speak(d["answer"])
+        _speak(d["answer"], tts_backend)
 
 
 def _health(endpoint: str) -> dict:
@@ -155,6 +156,8 @@ def main() -> None:
                     help="오디오 파일 1회 질의 (마이크 불필요)")
     ap.add_argument("--no-speak", dest="speak", action="store_false",
                     help="TTS 생략")
+    ap.add_argument("--tts", default="openai", choices=["openai", "edge"],
+                    help="TTS 백엔드 (openai: gpt-4o-mini-tts / edge: edge-tts)")
     ap.add_argument("--show-retrieved", action="store_true",
                     help="발췌 path 표 표시")
     args = ap.parse_args()
@@ -165,7 +168,7 @@ def main() -> None:
     if args.text:
         console.print(f"  [grey58]{CLI_TITLE}[/]  [dim](text mode)[/]")
         _handle_turn(args.endpoint, args.text, args.k,
-                     args.show_retrieved, args.speak)
+                     args.show_retrieved, args.speak, args.tts)
         return
 
     compute_type = "float16" if args.device == "cuda" else "int8"
@@ -174,13 +177,13 @@ def main() -> None:
         stt = STT(model_size=args.model, device=args.device,
                   device_index=device_index, compute_type=compute_type)
 
-    _print_splash(args.endpoint, stt, health, args.speak)
+    _print_splash(args.endpoint, stt, health, args.speak, args.tts)
 
     # --audio 모드: 파일 1회 (서버 검증용)
     if args.audio:
         query = stt.transcribe(args.audio)
         _handle_turn(args.endpoint, query, args.k,
-                     args.show_retrieved, args.speak)
+                     args.show_retrieved, args.speak, args.tts)
         return
 
     # 라이브 마이크 REPL
@@ -199,7 +202,7 @@ def main() -> None:
         with console.status("[grey70]받아쓰는 중…[/]", spinner="dots"):
             query = stt.transcribe(audio)
         _handle_turn(args.endpoint, query, args.k,
-                     args.show_retrieved, args.speak)
+                     args.show_retrieved, args.speak, args.tts)
 
 
 if __name__ == "__main__":
