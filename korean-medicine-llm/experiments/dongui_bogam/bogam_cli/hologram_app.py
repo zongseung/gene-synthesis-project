@@ -74,6 +74,16 @@ def _set_transcript(window, text: str) -> None:
     _js(window, f"window.hologram.setTranscript('{safe}')")
 
 
+def _show_error(window, msg: str) -> None:
+    """오류를 표시하고 idle 로 복귀한다.
+
+    오류 메시지는 transcript 영역에 남긴다 — status 라벨은 setState 가 곧바로
+    LABEL['idle'] 로 덮어쓰므로 오류 표기에 부적합하다.
+    """
+    _set_state(window, "idle")
+    _set_transcript(window, f"⚠ {msg}")
+
+
 def _record_until_click(bridge: Bridge) -> np.ndarray:
     """마이크 녹음 → 16kHz mono float32. 다음 클릭이 올 때까지 캡처한다."""
     import sounddevice as sd
@@ -139,10 +149,18 @@ def voice_loop(window, bridge: Bridge, cfg: argparse.Namespace) -> None:
             compute_type=compute_type,
         )
     except Exception as exc:  # noqa: BLE001
-        _set_status(window, f"STT 로드 실패: {exc}")
+        _set_state(window, "idle")
+        _set_transcript(window, f"⚠ STT 로드 실패: {exc}")
         return
 
+    # RAG 서버 연결 확인 — 안 되면 경고 (SSH 터널 미연결이 흔한 원인)
     _set_state(window, "idle")
+    try:
+        httpx.get(f"{cfg.endpoint}/health", timeout=5).raise_for_status()
+    except Exception as exc:  # noqa: BLE001
+        _set_transcript(
+            window, f"⚠ RAG 서버 연결 안 됨 — SSH 터널(8080) 확인 ({exc})"
+        )
 
     while True:
         # 1) 대기 → 클릭 → 녹음 → 클릭
@@ -155,12 +173,11 @@ def voice_loop(window, bridge: Bridge, cfg: argparse.Namespace) -> None:
         dur = len(audio) / SAMPLE_RATE
         peak = float(np.max(np.abs(audio))) if len(audio) else 0.0
         if dur < 0.3 or peak < 0.01:
-            _set_status(
+            _show_error(
                 window,
                 f"마이크 입력 없음 (길이 {dur:.1f}s · 피크 {peak:.3f}) — "
                 f"터미널 앱의 마이크 권한 확인",
             )
-            _set_state(window, "idle")
             continue
 
         # 2) 받아쓰기
@@ -169,12 +186,10 @@ def voice_loop(window, bridge: Bridge, cfg: argparse.Namespace) -> None:
         try:
             query = stt.transcribe(audio)
         except Exception as exc:  # noqa: BLE001
-            _set_status(window, f"STT 오류: {exc}")
-            _set_state(window, "idle")
+            _show_error(window, f"STT 오류: {exc}")
             continue
         if not query.strip():
-            _set_transcript(window, "음성을 알아듣지 못했어요 — 다시 시도해 주세요")
-            _set_state(window, "idle")
+            _show_error(window, "음성을 알아듣지 못했어요 — 다시 시도해 주세요")
             continue
         _set_transcript(window, f"❝ {query} ❞")
 
@@ -182,8 +197,7 @@ def voice_loop(window, bridge: Bridge, cfg: argparse.Namespace) -> None:
         try:
             answer = _rag_answer(cfg.endpoint, query, cfg.k).get("answer", "")
         except Exception as exc:  # noqa: BLE001
-            _set_status(window, f"RAG 오류: {exc}")
-            _set_state(window, "idle")
+            _show_error(window, f"RAG 오류: {exc} — SSH 터널(8080) 확인")
             continue
 
         # 4) 답변 음성 + 파형
@@ -191,7 +205,8 @@ def voice_loop(window, bridge: Bridge, cfg: argparse.Namespace) -> None:
         try:
             _speak_with_levels(window, answer, cfg.tts)
         except Exception as exc:  # noqa: BLE001
-            _set_status(window, f"재생 오류: {exc}")
+            _show_error(window, f"재생 오류: {exc}")
+            continue
         _set_state(window, "idle")
 
 
