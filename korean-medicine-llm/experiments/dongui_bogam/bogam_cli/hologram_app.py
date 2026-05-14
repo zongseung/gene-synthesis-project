@@ -13,24 +13,32 @@
 
 상호작용: 홀로그램을 **클릭 → 녹음 시작, 다시 클릭 → 녹음 종료** → 처리 → 답변.
 
+⚠ macOS 세그폴트 회피 — 무거운 네이티브 라이브러리(faster-whisper→ctranslate2·
+onnxruntime, sounddevice, soundfile, numpy)를 **모듈 최상단에서 import 하지
+않는다.** Cocoa GUI 가 먼저 초기화된 뒤, 백그라운드 스레드 안에서 lazy import
+해야 libomp 중복 로드 등으로 인한 크래시를 피할 수 있다. 그래서 이 파일 상단
+import 는 webview + 표준 라이브러리뿐이다.
+
 실행 (맥):
   hanmed-bogam-hologram --device cpu
 """
 from __future__ import annotations
+
+import os
+
+# 네이티브 스레딩 라이브러리 충돌 가드 — 무거운 import 전에 설정.
+os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
 import argparse
 import threading
 import time
 from pathlib import Path
 
-import httpx
-import numpy as np
-import webview
-
-from bogam_cli import tts
-from bogam_cli.stt import SAMPLE_RATE, STT
+import webview  # GUI 라이브러리 — 가장 먼저 로드되어야 함
 
 HTML_PATH = Path(__file__).resolve().parent / "hologram" / "index.html"
+SAMPLE_RATE = 16000  # faster-whisper 입력 레이트 (stt.py 와 동일, import 회피용 상수)
 
 
 class Bridge:
@@ -50,6 +58,7 @@ class Bridge:
         self._click.clear()
 
 
+# ── JS 브리지 헬퍼 ────────────────────────────────────────────────────────
 def _js(window, code: str) -> None:
     """evaluate_js 안전 래퍼 — 창이 닫히는 중이면 조용히 무시한다."""
     try:
@@ -63,13 +72,13 @@ def _set_state(window, state: str) -> None:
 
 
 def _set_status(window, text: str) -> None:
-    """상태 라벨에 임의 텍스트 표시 (로딩·오류 메시지용)."""
+    """상태 라벨에 임의 텍스트 표시 (로딩 메시지용)."""
     safe = text.replace("'", " ").replace("\n", " ").replace("\\", " ")[:64]
     _js(window, f"document.getElementById('status').textContent='{safe}'")
 
 
 def _set_transcript(window, text: str) -> None:
-    """인식 텍스트 영역에 표시 (STT 결과·진행 메시지용)."""
+    """인식 텍스트 영역에 표시 (STT 결과·진행·오류 메시지용)."""
     safe = (text or "").replace("'", " ").replace("\n", " ").replace("\\", " ")[:120]
     _js(window, f"window.hologram.setTranscript('{safe}')")
 
@@ -84,8 +93,10 @@ def _show_error(window, msg: str) -> None:
     _set_transcript(window, f"⚠ {msg}")
 
 
-def _record_until_click(bridge: Bridge) -> np.ndarray:
+# ── 파이프라인 단계 (무거운 import 는 전부 함수 내부에서) ─────────────────
+def _record_until_click(bridge: Bridge):
     """마이크 녹음 → 16kHz mono float32. 다음 클릭이 올 때까지 캡처한다."""
+    import numpy as np
     import sounddevice as sd
 
     frames: list = []
@@ -102,6 +113,8 @@ def _record_until_click(bridge: Bridge) -> np.ndarray:
 
 
 def _rag_answer(endpoint: str, query: str, k: int) -> dict:
+    import httpx
+
     r = httpx.post(
         f"{endpoint}/rag/answer", json={"query": query, "k": k}, timeout=120
     )
@@ -111,7 +124,10 @@ def _rag_answer(endpoint: str, query: str, k: int) -> dict:
 
 def _speak_with_levels(window, text: str, backend: str) -> None:
     """answer 정제 → TTS 합성 → 재생하며 오디오 진폭을 JS 로 push한다."""
+    import numpy as np
     import sounddevice as sd
+
+    from bogam_cli import tts
 
     spoken = tts.clean_for_speech(text)
     if not spoken:
@@ -136,9 +152,17 @@ def _speak_with_levels(window, text: str, backend: str) -> None:
 
 
 def voice_loop(window, bridge: Bridge, cfg: argparse.Namespace) -> None:
-    """백그라운드 음성 루프 — idle→listening→thinking→speaking 상태머신."""
+    """백그라운드 음성 루프 — idle→listening→thinking→speaking 상태머신.
+
+    무거운 import(STT, httpx, numpy)는 전부 이 함수 안에서 — Cocoa GUI 가
+    초기화된 뒤에 로드되도록 한다 (macOS 세그폴트 회피).
+    """
+    import numpy as np
+
     # STT 모델 로드 (창은 이미 떠 있음 — '준비 중' 표시)
     _set_status(window, "엔진 준비 중…")
+    from bogam_cli.stt import STT
+
     compute_type = "float16" if cfg.device == "cuda" else "int8"
     device_index = cfg.device_index if cfg.device == "cuda" else 0
     try:
@@ -156,6 +180,8 @@ def voice_loop(window, bridge: Bridge, cfg: argparse.Namespace) -> None:
     # RAG 서버 연결 확인 — 안 되면 경고 (SSH 터널 미연결이 흔한 원인)
     _set_state(window, "idle")
     try:
+        import httpx
+
         httpx.get(f"{cfg.endpoint}/health", timeout=5).raise_for_status()
     except Exception as exc:  # noqa: BLE001
         _set_transcript(
