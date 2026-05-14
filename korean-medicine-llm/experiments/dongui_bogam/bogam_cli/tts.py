@@ -39,6 +39,12 @@ OPENAI_INSTRUCTIONS = (
 # ── 텍스트 정제 ───────────────────────────────────────────────────────────
 _CITATION = re.compile(r"\[\d+\]")           # [1] 같은 인용 마커
 _CJK = re.compile(r"[㐀-鿿]")        # 한자 — TTS 가 못 읽거나 깨뜨림
+# 고전 출전 표기 《국방》〈입문〉<본초> — 책이름 괄호는 TTS 가 어색하게 읽는다.
+# 문장 끝 출전은 통째로 제거. 문중 출전은 — 뒤에 한글 조사가 붙으면 괄호만
+# 벗기고(《입문》에 → 입문에), 그렇지 않으면 "X에 따르면," 구어로 푼다.
+_SOURCE_TRAILING = re.compile(r"\s*[《〈<]\s*[^《〉》<>]+?\s*[》〉>]\s*(?=[\n.!?]|$)")
+_SOURCE_INLINE_JOSA = re.compile(r"[《〈<]\s*([^《〉》<>]+?)\s*[》〉>](?=[가-힣])")
+_SOURCE_INLINE = re.compile(r"[《〈<]\s*([^《〉》<>]+?)\s*[》〉>]")
 _EMPTY_PAREN = re.compile(r"[（(]\s*[)）]")   # 한자 제거 후 남는 빈 괄호
 _MULTI_SPACE = re.compile(r"[ \t]+")
 _MULTI_NL = re.compile(r"\n{2,}")
@@ -49,12 +55,19 @@ def clean_for_speech(answer: str) -> str:
     """RAG answer 를 TTS 가 자연스럽게 읽도록 정제한다.
 
     화면 표시용 텍스트에는 음성에 부적합한 요소가 있다:
-      - [N] 인용 마커        → 제거
-      - '풀이:' 라벨         → 자연스러운 구어 전환구로 치환
-      - 한자 표기(人蔘 등)   → 제거 (한글 표기는 보통 함께 있음)
-      - 한자 제거 후 빈 괄호 → 제거
+      - [N] 인용 마커            → 제거
+      - 《국방》 같은 고전 출전   → 문장 끝이면 제거, 문중이면 'X에 따르면,' 로 풀이
+      - '풀이:' 라벨             → 자연스러운 구어 전환구로 치환
+      - 한자 표기(人蔘 등)       → 제거 (한글 표기는 보통 함께 있음)
+      - 한자 제거 후 빈 괄호     → 제거
     """
     text = _CITATION.sub("", answer)
+    # 문장 끝에 붙은 출전(《본초》 등)은 음성에서 군더더기 — 통째로 제거.
+    text = _SOURCE_TRAILING.sub("", text)
+    # 문중 출전 — 조사가 붙으면 괄호만 벗기고(《입문》에→입문에),
+    # 단독이면 책이름을 살려 'X에 따르면,' 구어로 푼다.
+    text = _SOURCE_INLINE_JOSA.sub(r"\1", text)
+    text = _SOURCE_INLINE.sub(r"\1에 따르면, ", text)
     text = text.replace("풀이:", " 쉽게 설명드리면, ")
     text = _CJK.sub("", text)
     text = _EMPTY_PAREN.sub("", text)

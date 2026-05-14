@@ -266,6 +266,95 @@ CLI 코드 자체는 공유 (단일 버전), 실험별로 env var 로 endpoint/m
 ```
 단 8B 모델을 CPU/GPU 에 직접 로드하므로 무거움. vLLM 배포가 권장.
 
+## 음성 자비스 (voice assistant)
+
+`bogam_cli/` 의 텍스트 REPL (`hanmed-bogam`) 에 STT·TTS 를 붙인 음성 인터페이스.
+두뇌(RAG sidecar)는 그대로 두고 양 끝만 음성으로 바꾼다.
+
+```
+🎤 마이크 → faster-whisper STT → POST :8080/rag/answer → TTS(edge-tts / OpenAI) → 🔊 재생
+```
+
+### 설치
+
+음성 기능은 `voice` optional-dependency extra 로 분리되어 있다 (기본 CLI 는 extra 없이 동작).
+
+```bash
+uv pip install -e "experiments/dongui_bogam[voice]"
+```
+
+`voice` extra 의존성: `faster-whisper`, `edge-tts`, `openai`, `pywebview`,
+`sounddevice`, `soundfile`. 라이브 녹음·재생은 PortAudio (sounddevice) 가 필요하므로
+맥에서 실행하고, PortAudio 가 없는 서버에서는 `--audio` 파일 입력만 가능하다.
+
+### 실행 모드
+
+두 개의 console entry point 가 추가된다.
+
+| Entry point | 모듈 | 설명 |
+|-------------|------|------|
+| `hanmed-bogam-voice` | `bogam_cli.voice:main` | 터미널 음성 REPL — 거북이 ANSI 마스코트 + 사운드웨이브 |
+| `hanmed-bogam-hologram` | `bogam_cli.hologram_app:main` | pywebview 홀로그램 GUI — 프레임리스·항상 위 창, 클릭하여 대화 |
+
+#### `hanmed-bogam-voice` — 터미널 REPL
+
+```bash
+# 라이브 마이크 REPL (맥 — PortAudio 필요). Enter 로 녹음 종료, Ctrl+C 로 종료
+hanmed-bogam-voice --device cpu
+
+# 오디오 파일 1회 (서버 검증용 — 마이크 불필요)
+hanmed-bogam-voice --audio sample.wav --no-speak
+
+# 텍스트 1회 (STT 건너뜀 — RAG·TTS 정제만 검증)
+hanmed-bogam-voice --text "사물탕의 구성 약재" --no-speak
+```
+
+| 옵션 | 기본값 | 설명 |
+|------|--------|------|
+| `--endpoint URL` | `http://localhost:8080` | RAG sidecar URL |
+| `--model NAME` | `large-v3-turbo` | faster-whisper 모델 |
+| `--device cuda\|cpu` | `cuda` | STT 디바이스 (서버: cuda, 맥: cpu) |
+| `--device-index N` | `1` | cuda 디바이스 번호 (서버: 1 — vLLM 이 GPU0 점유) |
+| `-k INT` | `5` | retrieval top-k |
+| `--text STR` | — | 텍스트 1회 질의 (STT 건너뜀) |
+| `--audio PATH` | — | 오디오 파일 1회 질의 |
+| `--no-speak` | (speak) | TTS 생략, 텍스트 답변만 |
+| `--tts openai\|edge` | `openai` | TTS 백엔드 |
+| `--show-retrieved` | off | 발췌 path 표 표시 |
+
+#### `hanmed-bogam-hologram` — 홀로그램 GUI
+
+`voice.py` 와 **동일한 STT/RAG/TTS 파이프라인**을 쓰되 출력만 홀로그램 창
+(`bogam_cli/hologram/index.html`) 으로 한다. pywebview 기반 데스크톱 앱 —
+프레임리스·항상 위 (`on_top`) 창에 사이안 글로우/스캔라인 비주얼과 거북이 마스코트가
+상태(idle/listening/thinking/speaking)별로 애니메이션된다.
+
+상호작용: 홀로그램을 **클릭 → 녹음 시작, 다시 클릭 → 녹음 종료** → 처리 → 답변.
+재생 중 오디오 진폭이 파형으로 시각화된다.
+
+```bash
+# 맥에서 실행
+hanmed-bogam-hologram --device cpu
+```
+
+옵션은 `--endpoint` / `--model` / `--device` / `--device-index` / `-k` / `--tts`
+로 `hanmed-bogam-voice` 와 동일하나, `--device` 기본값만 `cpu` 다.
+
+> GUI 를 RAG 서버와 다른 머신(맥)에서 띄울 때는 서버의 8080 포트로 **SSH 터널**을
+> 열어 두어야 한다 — `--endpoint http://localhost:8080` 이 터널을 통해 sidecar 에
+> 닿는다. 터널이 없으면 창에 "RAG 서버 연결 안 됨 — SSH 터널(8080) 확인" 경고가 뜬다.
+
+### TTS 백엔드
+
+| 백엔드 | 모델 | 비고 |
+|--------|------|------|
+| `openai` (기본) | `gpt-4o-mini-tts` | `instructions` 로 톤 지시. `OPENAI_API_KEY` / `API_key` 환경변수 또는 상위 디렉토리 `.env` 에서 키 탐색 |
+| `edge` | edge-tts | 무료·키 불필요. 키를 못 찾거나 OpenAI API 오류 시 자동 폴백 |
+
+`tts.clean_for_speech` 가 RAG answer 를 TTS 입력으로 정제한다: `[N]` 인용 마커 제거,
+`풀이:` 라벨을 구어 전환구로 치환, 한자 표기·빈 괄호 제거, `《국방》` 같은 고전 출전
+표기 정리(문장 끝은 제거, 문중은 자연스러운 구어로).
+
 ## 주의
 
 - `outputs/` symlink 는 학습 중이라 아직 adapter 가 없을 수 있음. 학습 완료 후 `outputs/adapter/` 또는 `outputs/checkpoint-NNN/` 생성됨.
