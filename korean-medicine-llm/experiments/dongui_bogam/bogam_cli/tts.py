@@ -28,14 +28,12 @@ DEFAULT_BACKEND = os.environ.get("TTS_BACKEND", "openai")
 EDGE_VOICE = "ko-KR-SunHiNeural"
 
 OPENAI_MODEL = "gpt-4o-mini-tts"
-# onyx — 깊고 낮은 남성 목소리. JARVIS 풍 AI 비서 톤에 가장 가깝다.
-# (다른 후보: ash, echo, sage / 따뜻한 여성: nova, shimmer)
-OPENAI_VOICE = "onyx"
+# nova — 따뜻한 여성 목소리. (다른 후보: shimmer / 남성: onyx·ash·echo·sage)
+OPENAI_VOICE = "nova"
 # gpt-4o-mini-tts 는 instructions 로 말투를 지시받는다 — 톤의 핵심 레버.
 OPENAI_INSTRUCTIONS = (
-    "침착하고 지적인 AI 비서처럼 읽어 주세요. 낮고 차분한 목소리로, 정중하되 "
-    "신뢰감 있고 또렷하게 — 영화 속 인공지능 비서 같은 느낌으로요. 한의학 고전을 "
-    "설명하는 내용이니 서두르지 말고 한 문장씩 차분하게 전달하세요."
+    "한의학 고전을 풀어 설명해 주는 따뜻하고 친근한 선생님처럼 읽어 주세요. "
+    "또박또박하되 너무 빠르지 않게, 생동감 있고 자연스러운 한국어 억양으로요."
 )
 
 # ── 텍스트 정제 ───────────────────────────────────────────────────────────
