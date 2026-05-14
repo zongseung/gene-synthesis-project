@@ -24,7 +24,11 @@ import 는 webview + 표준 라이브러리뿐이다.
 """
 from __future__ import annotations
 
+import faulthandler
 import os
+
+# 세그폴트 시 Python 스택을 stderr 로 덤프 — 네이티브 크래시 원인 추적용.
+faulthandler.enable()
 
 # 네이티브 스레딩 라이브러리 충돌 가드 — 무거운 import 전에 설정.
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
