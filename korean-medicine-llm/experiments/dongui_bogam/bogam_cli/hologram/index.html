@@ -158,6 +158,15 @@
     transition: height 0.06s linear;
   }
 
+  /* ── 인식 텍스트 (STT 결과 표시) ────────────────────────────── */
+  .transcript {
+    position: absolute; top: 12%;
+    max-width: 78%; text-align: center;
+    font-size: 12px; line-height: 1.5; color: var(--cyan);
+    opacity: 0.7; min-height: 1.4em;
+    text-shadow: 0 0 8px var(--cyan-dark);
+  }
+
   /* ── 상태 라벨 ─────────────────────────────────────────────── */
   .status {
     position: absolute; bottom: 9%;
@@ -251,6 +260,7 @@
     <div class="base"></div>
   </div>
 
+  <div class="transcript" id="transcript"></div>
   <div class="waveform" id="waveform"></div>
   <div class="status" id="status">IDLE</div>
 
@@ -267,11 +277,12 @@
   </div>
 
 <script>
-  const stage    = document.getElementById('stage');
-  const turtle   = document.getElementById('turtle');
-  const statusEl = document.getElementById('status');
-  const waveform = document.getElementById('waveform');
-  const debug    = document.getElementById('debug');
+  const stage      = document.getElementById('stage');
+  const turtle     = document.getElementById('turtle');
+  const statusEl   = document.getElementById('status');
+  const waveform   = document.getElementById('waveform');
+  const debug      = document.getElementById('debug');
+  const transcript = document.getElementById('transcript');
 
   const FRAME = { idle: 'turtle_idle.png', blink: 'turtle_blink.png', talk: 'turtle_talk.png' };
   const LABEL = {
@@ -356,6 +367,7 @@
   window.hologram = {
     setState,                              // setState('listening') 등
     pushLevel: (v) => { level = Math.max(0, Math.min(1, v)); },  // 오디오 진폭 0~1
+    setTranscript: (t) => { transcript.textContent = t || ''; }, // 인식 텍스트 표시
   };
 
   // ── pywebview 환경에서만 — 창 클릭 → Python 으로 녹음 토글 신호 ──
@@ -365,6 +377,11 @@
     if (window.pywebview && window.pywebview.api && window.pywebview.api.click) {
       window.pywebview.api.click();
     }
+  });
+
+  // pywebview 앱에서는 디버그 버튼을 숨긴다 — 클릭 대상은 홀로그램뿐.
+  window.addEventListener('pywebviewready', () => {
+    debug.style.display = 'none';
   });
 
   setState('idle');

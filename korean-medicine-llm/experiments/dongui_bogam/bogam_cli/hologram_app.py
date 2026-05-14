@@ -64,8 +64,14 @@ def _set_state(window, state: str) -> None:
 
 def _set_status(window, text: str) -> None:
     """상태 라벨에 임의 텍스트 표시 (로딩·오류 메시지용)."""
-    safe = text.replace("'", " ").replace("\n", " ")[:48]
+    safe = text.replace("'", " ").replace("\n", " ").replace("\\", " ")[:64]
     _js(window, f"document.getElementById('status').textContent='{safe}'")
+
+
+def _set_transcript(window, text: str) -> None:
+    """인식 텍스트 영역에 표시 (STT 결과·진행 메시지용)."""
+    safe = (text or "").replace("'", " ").replace("\n", " ").replace("\\", " ")[:120]
+    _js(window, f"window.hologram.setTranscript('{safe}')")
 
 
 def _record_until_click(bridge: Bridge) -> np.ndarray:
@@ -141,11 +147,25 @@ def voice_loop(window, bridge: Bridge, cfg: argparse.Namespace) -> None:
     while True:
         # 1) 대기 → 클릭 → 녹음 → 클릭
         bridge.wait_click()
+        _set_transcript(window, "")
         _set_state(window, "listening")
         audio = _record_until_click(bridge)
 
+        # 1-b) 마이크 입력 점검 — 무음/너무 짧으면 권한·장치 문제
+        dur = len(audio) / SAMPLE_RATE
+        peak = float(np.max(np.abs(audio))) if len(audio) else 0.0
+        if dur < 0.3 or peak < 0.01:
+            _set_status(
+                window,
+                f"마이크 입력 없음 (길이 {dur:.1f}s · 피크 {peak:.3f}) — "
+                f"터미널 앱의 마이크 권한 확인",
+            )
+            _set_state(window, "idle")
+            continue
+
         # 2) 받아쓰기
         _set_state(window, "thinking")
+        _set_transcript(window, f"({dur:.1f}초 녹음 · 받아쓰는 중…)")
         try:
             query = stt.transcribe(audio)
         except Exception as exc:  # noqa: BLE001
@@ -153,8 +173,10 @@ def voice_loop(window, bridge: Bridge, cfg: argparse.Namespace) -> None:
             _set_state(window, "idle")
             continue
         if not query.strip():
+            _set_transcript(window, "음성을 알아듣지 못했어요 — 다시 시도해 주세요")
             _set_state(window, "idle")
             continue
+        _set_transcript(window, f"❝ {query} ❞")
 
         # 3) RAG
         try:
@@ -201,7 +223,7 @@ def main() -> None:
         width=440,
         height=640,
         frameless=True,
-        easy_drag=True,
+        easy_drag=False,  # 클릭=녹음 과 충돌하지 않도록 드래그 비활성
         on_top=True,
         background_color="#03070A",
     )
