@@ -92,3 +92,6 @@ tea_debug.log
 # ───────────── HuggingFace cache (if symlinked in) ─────────────
 .cache/
 huggingface/
+
+# ───────────── 동의보감 음성 자비스 작업 문서 (로컬 전용) ─────────────
+experiments/dongui_bogam/docs/

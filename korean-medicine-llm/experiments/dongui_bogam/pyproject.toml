@@ -25,8 +25,19 @@ dependencies = [
     "rich>=13",
 ]
 
+[project.optional-dependencies]
+# 음성 자비스 (voice.py) 전용 — 기본 CLI 는 이 extra 없이 동작.
+# 설치: uv pip install -e "experiments/dongui_bogam[voice]"
+voice = [
+    "faster-whisper>=1.0",
+    "edge-tts>=6.1",
+    "sounddevice>=0.4",
+    "soundfile>=0.12",
+]
+
 [project.scripts]
 hanmed-bogam = "bogam_cli.chat:main"
+hanmed-bogam-voice = "bogam_cli.voice:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
