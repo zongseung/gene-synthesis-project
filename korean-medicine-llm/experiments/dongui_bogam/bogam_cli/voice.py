@@ -32,7 +32,6 @@ import math
 import sys
 
 import httpx
-from rich.text import Text
 
 from bogam_cli.chat import (
     MASCOT_LINES,
@@ -88,23 +87,26 @@ def _print_splash(endpoint: str, stt: STT, health: dict, speak: bool) -> None:
 
 
 def _speak(text: str) -> None:
-    """answer 정제 → edge-tts 합성 → 사운드웨이브 애니메이션과 함께 재생."""
+    """answer 정제 → edge-tts 합성 → 사운드웨이브 애니메이션과 함께 재생.
+
+    애니메이션은 \\r(캐리지 리턴)로 같은 줄을 덮어쓴다 — rich.Live 의 커서
+    이동 방식보다 터미널·문자폭에 둔감해 어디서나 안정적으로 한 줄에서 움직인다.
+    """
     spoken = tts.clean_for_speech(text)
     if not spoken:
         return
     mp3 = tts.synthesize(spoken)
     phase = {"n": 0}
     try:
-        from rich.live import Live
+        def tick() -> None:
+            phase["n"] += 1
+            wave = _soundwave(40, phase["n"])
+            sys.stdout.write(f"\r  \033[36m재생 중  {wave}\033[0m")
+            sys.stdout.flush()
 
-        with Live(console=console, refresh_per_second=12, transient=True) as live:
-
-            def tick() -> None:
-                phase["n"] += 1
-                wave = _soundwave(46, phase["n"])
-                live.update(Text(f"  🔊  {wave}", style="cyan"))
-
-            tts.play(mp3, on_tick=tick, tick_hz=12)
+        tts.play(mp3, on_tick=tick, tick_hz=12)
+        sys.stdout.write("\r" + " " * 60 + "\r")  # 애니메이션 줄 지우기
+        sys.stdout.flush()
     except RuntimeError as exc:
         # 서버 등 PortAudio 없는 환경 — 합성까지만 하고 경로를 안내.
         console.print(f"  [yellow]※ 재생 건너뜀[/] ({exc})")
