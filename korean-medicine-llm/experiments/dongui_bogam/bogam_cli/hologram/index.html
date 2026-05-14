@@ -149,6 +149,7 @@
   /* ── 오디오 파형 ───────────────────────────────────────────── */
   .waveform {
     position: absolute; bottom: 15%;
+    left: 50%; transform: translateX(-50%);   /* 가로 중앙 정렬 */
     display: flex; align-items: flex-end; gap: 4px; height: 56px;
   }
   .waveform i {
@@ -161,6 +162,7 @@
   /* ── 인식 텍스트 / 답변 텍스트 표시 ─────────────────────────── */
   .transcript {
     position: absolute; top: 11%;
+    left: 0; right: 0; margin: 0 auto;        /* 가로 중앙 정렬 */
     max-width: 82%; max-height: 42%; overflow-y: auto;
     text-align: center; white-space: pre-wrap;
     font-size: 12px; line-height: 1.55; color: var(--cyan);
@@ -171,6 +173,7 @@
   /* ── 상태 라벨 ─────────────────────────────────────────────── */
   .status {
     position: absolute; bottom: 9%;
+    left: 0; right: 0; text-align: center;    /* 가로 중앙 정렬 */
     font-size: 13px; letter-spacing: 0.46em; text-indent: 0.46em;
     color: var(--cyan); text-shadow: 0 0 10px var(--cyan-deep);
   }
