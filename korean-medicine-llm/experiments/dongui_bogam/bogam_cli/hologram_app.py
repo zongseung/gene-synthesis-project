@@ -35,6 +35,7 @@ os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
 import argparse
+import json
 import threading
 import time
 from pathlib import Path
@@ -85,9 +86,13 @@ def _set_status(window, text: str) -> None:
 
 
 def _set_transcript(window, text: str) -> None:
-    """인식 텍스트 영역에 표시 (STT 결과·진행·오류 메시지용)."""
-    safe = (text or "").replace("'", " ").replace("\n", " ").replace("\\", " ")[:120]
-    _js(window, f"window.hologram.setTranscript('{safe}')")
+    """인식 텍스트/답변 영역에 표시.
+
+    JSON 인코딩으로 따옴표·줄바꿈·유니코드를 안전하게 처리한다 — 답변 텍스트는
+    길고 다양한 문자를 포함하므로 단순 치환으론 부족하다.
+    """
+    payload = json.dumps((text or "")[:600])
+    _js(window, f"window.hologram.setTranscript({payload})")
 
 
 def _show_error(window, msg: str) -> None:
@@ -287,8 +292,9 @@ def voice_loop(window, bridge: Bridge, cfg: argparse.Namespace) -> None:
             _show_error(window, f"RAG 오류: {exc} — SSH 터널(8080) 확인")
             continue
 
-        # 4) 답변 음성 + 파형
+        # 4) 답변 텍스트 표시 + 음성 재생 + 파형 (동시)
         _set_state(window, "speaking")
+        _set_transcript(window, answer)
         try:
             _speak_with_levels(window, answer, cfg.tts)
         except Exception as exc:  # noqa: BLE001
