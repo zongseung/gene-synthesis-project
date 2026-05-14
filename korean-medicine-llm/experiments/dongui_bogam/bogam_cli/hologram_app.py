@@ -60,6 +60,10 @@ class Bridge:
         self._click.wait()
         self._click.clear()
 
+    def clear_pending(self) -> None:
+        """처리·재생 중 들어온 stray click 을 버린다 — 다음 턴은 새 클릭만 받도록."""
+        self._click.clear()
+
 
 # ── JS 브리지 헬퍼 ────────────────────────────────────────────────────────
 def _js(window, code: str) -> None:
@@ -158,7 +162,12 @@ def _rag_answer(endpoint: str, query: str, k: int) -> dict:
 
 
 def _speak_with_levels(window, text: str, backend: str) -> None:
-    """answer 정제 → TTS 합성 → 재생하며 오디오 진폭을 JS 로 push한다."""
+    """answer 정제 → TTS 합성 → 재생하며 오디오 진폭을 JS 로 push한다.
+
+    재생 모니터링은 sd.get_stream().active 가 아니라 **오디오 길이** 기준으로
+    한다. 스트림 상태에 의존하면 macOS 에서 재생이 반복되는 비결정적 동작이
+    생길 수 있어, 길이만큼만 결정론적으로 재생·모니터한다.
+    """
     import numpy as np
     import sounddevice as sd
 
@@ -171,7 +180,7 @@ def _speak_with_levels(window, text: str, backend: str) -> None:
     data, sr = tts.load_audio(mp3)
     if data.ndim > 1:
         data = data.mean(axis=1)
-    data = data.astype("float32")
+    data = np.ascontiguousarray(data, dtype="float32")
 
     # 출력 디바이스가 TTS 레이트(보통 24kHz)를 직접 못 열 수 있음 → 디바이스 레이트로 리샘플
     try:
@@ -182,16 +191,21 @@ def _speak_with_levels(window, text: str, backend: str) -> None:
         data = _resample(data, sr, out_sr)
         sr = out_sr
 
-    sd.play(data, sr)
+    total_s = len(data) / sr
+    sd.stop()              # 남아있을지 모를 이전 재생 정리
+    sd.play(data, sr)      # loop=False (기본) — 정확히 한 번만 재생
+
+    # 오디오 길이만큼만 진폭 push — 스트림 상태에 의존하지 않음
     win = int(sr * 0.05)
     start = time.time()
-    stream = sd.get_stream()
-    while stream is not None and stream.active:
+    while time.time() - start < total_s:
         pos = int((time.time() - start) * sr)
         chunk = data[pos:pos + win]
         level = float(np.sqrt(np.mean(np.square(chunk)))) if len(chunk) else 0.0
         _js(window, f"window.hologram.pushLevel({min(1.0, level * 4.0):.3f})")
         time.sleep(0.05)
+
+    sd.wait()              # 재생이 끝까지 가도록 보장
     sd.stop()
     _js(window, "window.hologram.pushLevel(0)")
 
@@ -233,6 +247,8 @@ def voice_loop(window, bridge: Bridge, cfg: argparse.Namespace) -> None:
 
     while True:
         # 1) 대기 → 클릭 → 녹음 → 클릭
+        #    이전 턴 처리·재생 중 들어온 클릭은 버린다 — 같은 답변 반복·오작동 방지.
+        bridge.clear_pending()
         bridge.wait_click()
         _set_transcript(window, "")
         _set_state(window, "listening")
