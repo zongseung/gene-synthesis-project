@@ -127,11 +127,13 @@ def merge_annotation(img_agg, sp2herb, kb, sci_map) -> list[dict]:
         herbs = sp2herb.get(sp, [])
         classical, status = (_classical_block(herbs, kb) if herbs else (None, "unlinked"))
         n = a["n_images"]
+        sci, sci_conf = sci_map.get(sp) or (None, None)
         rows.append({
             "species_ko": sp,
             "dataset": sorted(a["datasets"]),
             "species_code": a["species_code"],
-            "scientific_name": sci_map.get(sp),
+            "scientific_name": sci,
+            "scientific_name_confidence": sci_conf,   # resolved 일 때만 학명 단정 가능
             "herb_name_label": a["herb_name_label"],             # 612 라벨 생약명(있으면)
             "is_poisonous": a["n_pois_true"] > 0,                 # 안전 방향: 하나라도 양성이면 양성
             "pois_conflict": 0 < a["n_pois_true"] < n,            # 종 내 라벨 불일치 플래그
@@ -143,13 +145,20 @@ def merge_annotation(img_agg, sp2herb, kb, sci_map) -> list[dict]:
     return rows
 
 
-def load_sci_map(crosswalk_path: str) -> dict[str, str]:
+def load_sci_map(crosswalk_path: str) -> dict[str, tuple[str, str]]:
+    """species_ko → (학명, crosswalk confidence).
+
+    confidence 를 버리면 안 된다. 은조롱의 Cynanchum wilfordii 는 ambiguous(gbif)
+    인데 학명만 넘어가 SFT 가 「식별 결과는 은조롱(Cynanchum wilfordii)입니다」로
+    단정했다. 소비자(build_sft_mm.render_T1)가 resolved 만 단정하도록 같이 넘긴다.
+    """
     df = pd.read_parquet(crosswalk_path)
     out = {}
     for _, r in df.iterrows():
         sp, sci = r.get("species_ko"), r.get("scientific_name")
+        conf = r.get("confidence")
         if sp and isinstance(sci, str) and sci.strip():
-            out.setdefault(sp, sci)
+            out.setdefault(sp, (sci, conf if isinstance(conf, str) else None))
     return out
 
 

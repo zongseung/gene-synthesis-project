@@ -53,12 +53,20 @@ CREATE TABLE fact(
 );
 CREATE TABLE species(
   species_ko TEXT PRIMARY KEY,
-  herb_hanja TEXT,
+  herb_hanja TEXT,                  -- 대표 1개(표시·하위호환). 조회는 species_herb 를 쓴다
   knowledge_status TEXT NOT NULL,   -- linked | ambiguous | unlinked
   tox_status TEXT NOT NULL,         -- toxic | safe_documented | unverified
   has_similar_class INTEGER NOT NULL,
   link_grade TEXT,
   tox_conflict INTEGER NOT NULL     -- 종 주석은 toxic 인데 고전은 무독이라 한 경우
+);
+-- 종↔한약재는 1:N 이다. 참깨는 白油麻·胡麻 둘 다인데 대표 하나만 보면 胡麻 쪽 9개
+-- 사실(익기력 등)이 통째로 안 보여, SFT 가 옳게 인용한 주장을 게이트가 근거 없음으로
+-- 되돌린다(거짓 과잉거부).
+CREATE TABLE species_herb(
+  species_ko TEXT NOT NULL,
+  herb_hanja TEXT NOT NULL,
+  PRIMARY KEY (species_ko, herb_hanja)
 );
 CREATE INDEX fact_subject ON fact(subject, predicate);
 """
@@ -188,7 +196,10 @@ def kb_toxicity(kb_dir: str = "data/safety_kb/classical") -> dict[str, str]:
 
 
 def resolve_species(species_path: str, idx: dict[str, list[str]]):
-    """종 → (한자 표제어, link_grade, 유효 상태, 독성충돌). 기존 링크 + 독음 확장.
+    """종 → (주석, 한자 표제어 전체, link_grade, 유효 상태, 독성충돌). 기존 링크 + 독음 확장.
+
+    표제어는 **리스트 전체**를 낸다. 예전엔 [0] 만 저장해 참깨(白油麻·胡麻)의 胡麻
+    사실이 조회에서 사라졌다. 대표 1개는 호출측이 [0] 으로 고른다.
 
     ambiguous 는 candidate 로 기록만 하고 게이트에서 쓰지 않는다 (§3.3).
 
@@ -223,12 +234,13 @@ def resolve_species(species_path: str, idx: dict[str, list[str]]):
             else:
                 hit = link(a.get("herb_name_label") or "", idx) or link(a["species_ko"], idx)
                 hanja_list, grade = hit, ("reading" if hit else None)
+            hanja_list = list(dict.fromkeys(hanja_list or []))
             hw = hanja_list[0] if hanja_list else None
             conflict = bool(hw and a["tox_status"] == "toxic"
                             and "무독" in tox_kb.get(hw, ""))
             # 사람이 확인한 exact_hanja 만 게이트가 쓴다. reading·candidate 는 기록만.
             eff = "linked" if grade == "exact_hanja" else ("ambiguous" if grade else "unlinked")
-            yield a, hw, grade, eff, conflict
+            yield a, hanja_list, grade, eff, conflict
 
 
 def build(db_path: str = DB_PATH,
@@ -243,11 +255,14 @@ def build(db_path: str = DB_PATH,
     rows = []
     idx = build_index(kb_terms(), *classic_headwords(classics_dir))
     stat["reading_index"] = len(idx)
-    for a, hanja_hw, grade, eff, conflict in resolve_species(species_path, idx):
-        rows.append((a["species_ko"], hanja_hw, eff, a["tox_status"],
+    links = []
+    for a, hanja_list, grade, eff, conflict in resolve_species(species_path, idx):
+        rows.append((a["species_ko"], hanja_list[0] if hanja_list else None,
+                     eff, a["tox_status"],
                      int(bool(a.get("has_similar_class"))), grade, int(conflict)))
-        if hanja_hw and eff == "linked":
-            subjects.add(hanja_hw)
+        if eff == "linked":
+            subjects.update(hanja_list)
+            links += [(a["species_ko"], h) for h in hanja_list]
         # 종 주석에서 오는 사실 — 고전이 아니라 출처는 book_id NULL.
         if a.get("scientific_name"):
             con.execute("INSERT INTO fact VALUES (?,?,?,?,?,?,?,?)",
@@ -257,8 +272,12 @@ def build(db_path: str = DB_PATH,
             con.execute("INSERT INTO fact VALUES (?,?,?,?,?,?,?,?)",
                         _fact(a["species_ko"], "약용부위", part, None, None, None, grade))
     con.executemany("INSERT INTO species VALUES (?,?,?,?,?,?,?)", rows)
+    con.executemany("INSERT INTO species_herb VALUES (?,?)", links)
     stat["species"] = len(rows)
     stat["linked"] = sum(1 for r in rows if r[2] == "linked")
+    stat["species_herb_links"] = len(links)
+    # 대표 1개만 저장하던 시절 조용히 버려지던 링크 수. 0 이 아니면 1:N 이 실재한다.
+    stat["extra_herb_links"] = len(links) - len({s for s, _ in links})
     stat["tox_conflict"] = sum(1 for r in rows if r[6])
 
     for name, gen in (("donguibogam", donguibogam_facts()),
@@ -277,6 +296,18 @@ def build(db_path: str = DB_PATH,
 # ---------------------------------------------------------------------------
 # 조회 (게이트 1단이 쓰는 진입점)
 # ---------------------------------------------------------------------------
+def fact_subjects(con, species_ko: str, primary: str | None = None) -> list[str]:
+    """종이 근거로 삼는 fact.subject 목록 — 연결된 한약재 **전부** + 종명 자체.
+
+    게이트(gate.verify)와 lookup 이 같은 답을 봐야 해서 여기 한 곳에만 둔다.
+    primary 는 species.herb_hanja (구 DB 나 아직 species_herb 가 없는 경우의 안전망).
+    """
+    linked = [r[0] for r in con.execute(
+        "SELECT herb_hanja FROM species_herb WHERE species_ko=? ORDER BY herb_hanja",
+        (species_ko,))]
+    return [s for s in dict.fromkeys(linked + [primary, species_ko]) if s]
+
+
 def lookup(species_ko: str, predicate: str | None = None,
            db_path: str = DB_PATH) -> list[dict]:
     """종의 사실을 출처와 함께 반환. 링크가 없거나 candidate 면 빈 리스트.
@@ -289,7 +320,7 @@ def lookup(species_ko: str, predicate: str | None = None,
         sp = con.execute("SELECT * FROM species WHERE species_ko=?", (species_ko,)).fetchone()
         if sp is None or sp["knowledge_status"] != "linked":
             return []
-        subjects = [s for s in (sp["herb_hanja"], species_ko) if s]
+        subjects = fact_subjects(con, species_ko, sp["herb_hanja"])
         q = ("SELECT * FROM fact WHERE subject IN (%s)"
              % ",".join("?" * len(subjects)))
         params = list(subjects)

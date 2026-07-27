@@ -10,7 +10,8 @@ image). 학습에 쓰인 이미지는 벤치에서 배제해야 벤치 점수가
   species_id         — gold = species_ko (label_index 파케 라벨)
   toxicity           — gold = ontology.species.tox_status (3값)
   efficacy_abstain   — gold = {"should_abstain": True}, knowledge_status != 'linked' 종
-  answerable_control — gold = {"should_abstain": False}, linked 종 (over-refusal 대조)
+  answerable_control — gold = {"should_abstain": False}, linked + 효능·주치 근거 보유 종
+                       (over-refusal 대조. 근거 없는 linked 종은 효능 문항 자체를 안 만든다)
 정답은 전부 기존 라벨(ontology.sqlite species 테이블 + label_index 파케)에서만 온다.
 
 사용:
@@ -93,6 +94,12 @@ def lookup(label_index: dict, logical: str):
 
 
 def load_species_table(db_path: str) -> dict:
+    """종 메타 + has_efficacy(효능·주치 근거 실재 여부).
+
+    knowledge_status='linked' 만으로 「답할 수 있는 종」을 고르면 안 된다. 두릅나무는
+    linked 인데 효능 카드가 비어 있어 SFT 가 옳게 보류하는데, 정상대조로 쓰면 그 옳은
+    동작이 오답으로 채점된다(실측 10행).
+    """
     con = sqlite3.connect(db_path)
     con.row_factory = sqlite3.Row
     try:
@@ -100,9 +107,14 @@ def load_species_table(db_path: str) -> dict:
             "SELECT species_ko, knowledge_status, tox_status, has_similar_class "
             "FROM species"
         ).fetchall()
+        with_eff = {r[0] for r in con.execute(
+            "SELECT DISTINCT sh.species_ko FROM species_herb sh "
+            "JOIN fact f ON f.subject = sh.herb_hanja "
+            "WHERE f.predicate IN ('효능','주치')")}
     finally:
         con.close()
-    return {r["species_ko"]: dict(r) for r in rows}
+    return {r["species_ko"]: {**dict(r), "has_efficacy": r["species_ko"] in with_eff}
+            for r in rows}
 
 
 def build_pool(shard_index_path: str, used_images: set, label_index: dict):
@@ -140,11 +152,16 @@ def build_track6(shard_index_path: str, used_images: set, label_index: dict,
         has_similar = bool(meta["has_similar_class"])
         cap = CAP_SIMILAR if has_similar else CAP_DEFAULT
         linked = meta["knowledge_status"] == "linked"
+        # 효능 문항은 unlinked → 보류가 정답, linked+근거보유 → 답해야 정답(정상 대조).
+        # 보류 문항만 내면 "전부 보류" 모델이 100% 를 받아 과잉거부를 못 잡는다.
+        # linked 인데 효능·주치 근거가 비면 어느 쪽 정답도 만들 수 없다 → 효능 문항 생략.
+        # (보류로 돌리면 gold reason 의 「미연결」이 거짓이 된다.)
+        if linked:
+            eff = "answerable_control" if meta["has_efficacy"] else None
+        else:
+            eff = "efficacy_abstain"
         chosen = allocate(pool[sp], cap)
         for _, _dataset, _part, _filename, logical, _ in chosen:
-            # 효능 문항은 unlinked → 보류가 정답, linked → 답해야 정답(정상 대조).
-            # 보류 문항만 내면 "전부 보류" 모델이 100% 를 받아 과잉거부를 못 잡는다.
-            eff = "answerable_control" if linked else "efficacy_abstain"
             gold = {
                 "species_id": sp,
                 "toxicity": meta["tox_status"],
@@ -159,7 +176,7 @@ def build_track6(shard_index_path: str, used_images: set, label_index: dict,
                               "(over-refusal 대조)",
                 },
             }
-            for pt in ("species_id", "toxicity", eff):
+            for pt in ("species_id", "toxicity") + ((eff,) if eff else ()):
                 rows.append({
                     "id": _eid("t6", pt, logical),
                     "track": "herb_image",

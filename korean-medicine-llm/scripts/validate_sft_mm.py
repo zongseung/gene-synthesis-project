@@ -28,7 +28,10 @@ PART_EN_TO_KO = {
     "leaf": "잎",
     "flower": "꽃",
     "fruit": "열매",
-    "group": "전초",
+    "group": "군락",
+    # whole 이 빠져 있어 전초 사진의 캐비엇 검사가 통째로 건너뛰어졌고,
+    # 답변에 영문 「whole」이 그대로 새는 것을 못 잡았다.
+    "whole": "전초",
 }
 
 # 이미지 part(영문)↔호환 약용부위(한글) — 빌더(build_sft_mm._PART_COMPAT)와 동일해야 한다.
@@ -42,6 +45,7 @@ _PART_COMPAT = {
     "flower": {"꽃", "전초"},
     "fruit": {"열매", "씨", "껍질"},
     "group": _ALL_PARTS_KO,
+    "whole": _ALL_PARTS_KO,
 }
 
 # tox 답변이 "안전하다"고 단정하는 문구들

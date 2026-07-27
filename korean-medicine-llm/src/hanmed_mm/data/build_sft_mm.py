@@ -4,8 +4,8 @@
 이미지 1장 = 대화 1쌍(LLaVA/VARCO conversations 포맷)을 생성한다.
 
 태스크 (annotation 필드로 결정론 생성 → 환각 0):
-  T1 약초ID    : 전체 종, 응답=species_ko(+학명)
-  T2 독초판별  : 전체 종, 응답=AIHub is_poisonous (고전 독성 아님)
+  T1 약초ID    : 전체 종, 응답=species_ko(+학명, crosswalk confidence=resolved 일 때만)
+  T2 독초판별  : 전체 종, 응답=tox_status 3값 (필드 없으면 실패 — 폴백 금지)
   T3 효능설명  : linked 종만, 응답=동의보감 효능·주치 + 출전 (ambiguous 기본 제외)
 
 규칙: T3는 linked(resolved)만 — unlinked/ambiguous는 고전 응답 미생성(환각 차단).
@@ -134,8 +134,14 @@ def render_T1(ann, q, key):
     문구가 하나였을 때 종당 고유 답변이 1개라 같은 문장이 100회 반복됐다(실측).
     조사 문제를 피하려고 모든 템플릿이 「…입니다」로 끝난다 — 학명 괄호 뒤에는
     받침 판정을 할 수 없다.
+
+    학명은 crosswalk confidence 가 resolved 일 때만 단정한다. 은조롱의
+    Cynanchum wilfordii 는 ambiguous(gbif) 인데도 정답으로 단정돼 있었다.
+    필드가 아예 없으면 확인된 것으로 치지 않는다 — 한국명만 내면 틀릴 일이 없고,
+    빠뜨렸을 때의 손해가 단정했을 때의 손해보다 작다.
     """
-    sci = ann.get("scientific_name")
+    sci = (ann.get("scientific_name")
+           if ann.get("scientific_name_confidence") == "resolved" else None)
     name = f"{ann['species_ko']}({sci})" if sci else ann["species_ko"]
     return {"from": "gpt", "value": _pick(A_ID, key).format(name=name)}, q
 
@@ -143,7 +149,13 @@ def render_T1(ann, q, key):
 def render_T2(ann, q, key):
     """안전 게이트: tox_status(toxic/safe_documented/unverified)로 3분기.
     unverified(미검증)는 '안전' 단정 금지 → abstain(안전 우선).
-    tox_status 미제공 시 기존 is_poisonous 로직으로 폴백(하위호환)."""
+
+    **폴백 없음.** tox_status 가 없거나 모르는 값이면 답변을 만들지 않고 죽는다.
+    예전 폴백은 is_poisonous 를 봤는데, 그 라벨은 「미검증」과 「무독 확인」을 구분하지
+    못해 False 인 종 전부가 「독초로 분류되지 않습니다」라는 안전 단정으로 렌더됐다
+    (오늘 unverified 8,085행이 전부 해당). 이 프로젝트 최악의 실패 모드라
+    조용한 기본값을 두지 않는다.
+    """
     tox = ann.get("tox_status")
     if tox == "toxic":
         a = _pick(A_TOX_TOXIC, key)
@@ -157,15 +169,11 @@ def render_T2(ann, q, key):
         # 독성 미검증 → 안전하다고 단정하지 않고 섭취 자제 권고.
         a = _pick(A_TOX_UNVERIFIED, key)
     else:
-        # 폴백: tox_status 필드 없음 → 기존 is_poisonous 기반 동작 유지.
-        if ann.get("is_poisonous"):
-            a = _pick(A_TOX_TOXIC, key)
-            if ann.get("has_similar_class"):
-                a += _TOX_SIMILAR_TOXIC
-        else:
-            a = _pick(A_TOX_SAFE, key)
-            if ann.get("has_similar_class"):
-                a += _TOX_SIMILAR_SAFE
+        raise ValueError(
+            f"{ann.get('species_ko')}: tox_status={tox!r} — 독성 답변을 만들 수 없다. "
+            "species_annotation.jsonl 을 만드는 hanmed_mm.data.annotate 가 종마다 "
+            "toxic/safe_documented/unverified 중 하나를 넣어야 한다."
+        )
     return {"from": "gpt", "value": a}, q
 
 

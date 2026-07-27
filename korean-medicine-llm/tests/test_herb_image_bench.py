@@ -94,6 +94,26 @@ def test_efficacy_abstain_species_are_all_unlinked():
 
 
 @needs_bench
+@needs_db
+def test_answerable_control_species_have_real_efficacy_evidence():
+    """두릅나무는 linked 인데 효능 카드가 비어 SFT 가 옳게 보류한다 — 정상대조로 쓰면
+    옳은 동작이 오답이 된다. knowledge_status 가 아니라 근거 실재로 골라야 한다."""
+    rows = [r for r in _rows(TRACK6) if r["probe_type"] == "answerable_control"]
+    assert rows
+    con = sqlite3.connect(DB_PATH)
+    try:
+        for sp in {r["species_ko"] for r in rows}:
+            n = con.execute(
+                "SELECT COUNT(*) FROM species_herb sh JOIN fact f"
+                " ON f.subject = sh.herb_hanja"
+                " WHERE sh.species_ko=? AND f.predicate IN ('효능','주치')", (sp,)
+            ).fetchone()[0]
+            assert n > 0, f"{sp} 는 효능·주치 근거가 없는데 정상대조로 쓰였다"
+    finally:
+        con.close()
+
+
+@needs_bench
 def test_per_species_image_caps():
     """행 수 비교는 종 수(88 vs 56)만으로도 통과해 버린다 — 종당 이미지 상한이
     실제로 10/5 로 갈리는지를 본다."""

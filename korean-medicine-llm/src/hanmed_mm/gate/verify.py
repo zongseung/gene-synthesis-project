@@ -17,7 +17,7 @@ import re
 import sqlite3
 from dataclasses import dataclass, field
 
-from hanmed_mm.data.build_ontology import DB_PATH
+from hanmed_mm.data.build_ontology import DB_PATH, fact_subjects
 
 # 근거 없이 단정하면 안 되는 술어. no_knowledge 면 유보시킨다.
 CLAIM_PREDICATES = ("효능", "주치", "금기", "성미", "귀경", "생약명", "약용부위")
@@ -50,7 +50,8 @@ def _species(con, species_ko: str):
 
 
 def _facts(con, sp, predicate: str | None):
-    subjects = [s for s in (sp["herb_hanja"], sp["species_ko"]) if s]
+    # 종당 한약재가 여럿일 수 있다(참깨=白油麻·胡麻) → 대표 하나만 보면 근거를 놓친다.
+    subjects = fact_subjects(con, sp["species_ko"], sp["herb_hanja"])
     q = "SELECT * FROM fact WHERE subject IN (%s)" % ",".join("?" * len(subjects))
     params = list(subjects)
     if predicate:

@@ -39,3 +39,18 @@ def test_unlinked_species_has_no_facts():
 def test_toxic_species_with_conflicting_link_is_held():
     """독미나리(맹독)는 독음으로 水芹(미나리)에 걸린다 → 링크 보류, 근거 0."""
     assert lookup("독미나리") == []
+
+
+@needs_db
+def test_multi_hanja_species_returns_every_linked_herb():
+    """참깨는 白油麻·胡麻 둘 다다. 대표 하나만 보면 胡麻 쪽 사실(익기력)이 사라져
+    SFT 가 옳게 인용한 주장을 게이트가 근거 없음으로 되돌린다(거짓 과잉거부)."""
+    facts = lookup("참깨", "효능")
+    assert {"白油麻", "胡麻"} <= {f["subject"] for f in facts}
+    assert any(f["object"] == "익기력" for f in facts)
+
+
+@needs_db
+def test_claim_from_secondary_herb_is_supported():
+    from hanmed_mm.gate.verify import verify_claim
+    assert verify_claim("참깨", "효능", "익기력").status == "supported"
