@@ -50,6 +50,12 @@ _workspace/
 checkpoints/
 runs/
 
+# ───────────── ver1 (legacy) data/experiment artifacts ─────────────
+# Un-hidden by the /data/ anchor fix in 63abdc1; these are research
+# data/checkpoint dumps, not source. ver1/data/ ~2.3GB, ver1/experiments/ ~105GB.
+ver1/data/
+ver1/experiments/
+
 # ───────────── Experiment artifacts ─────────────
 experiments/**/outputs/
 experiments/**/outputs_*/
