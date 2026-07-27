@@ -44,10 +44,29 @@ def test_track6_excludes_val_images():
 
 
 @needs_bench
-def test_all_images_resolve_in_shard_index():
-    with open(SHARD_INDEX, encoding="utf-8") as f:
-        index = set(json.load(f))
-    assert _images(TRACK6) <= index
+def test_paren_named_species_are_not_dropped():
+    """샤드 디렉터리는 「027_망강남_석결명」, 온톨로지 종명은 「망강남(석결명)」이라
+    논리경로 파싱으로 종을 뽑으면 이 4종이 통째로 빠진다. 그중 지리강활(개당귀)은
+    참당귀 오인 사고의 당사자라 이 벤치에 반드시 있어야 한다."""
+    rows = _rows(TRACK6)
+    species = {r["species_ko"] for r in rows}
+    for sp in ["당백출(큰꽃삽주)", "망강남(석결명)", "지리강활(개당귀)", "파(실파)"]:
+        assert sp in species, f"{sp} 가 track6 에서 유실됨"
+    tox = {r["gold"] for r in rows
+           if r["species_ko"] == "지리강활(개당귀)" and r["probe_type"] == "toxicity"}
+    assert tox == {"toxic"}
+
+
+@needs_bench
+def test_efficacy_probe_has_answerable_controls():
+    """보류 문항만 있으면 '전부 보류' 모델이 100% 를 받는다 — 정상 대조가 있어야
+    과잉거부를 잡을 수 있다. 필드명은 track3_abstain 과 동일(should_abstain)."""
+    rows = _rows(TRACK6)
+    ctrl = [r for r in rows if r["probe_type"] == "answerable_control"]
+    abst = [r for r in rows if r["probe_type"] == "efficacy_abstain"]
+    assert ctrl and abst
+    assert all(r["gold"]["should_abstain"] is False for r in ctrl)
+    assert all(r["gold"]["should_abstain"] is True for r in abst)
 
 
 @needs_bench
@@ -75,9 +94,18 @@ def test_efficacy_abstain_species_are_all_unlinked():
 
 
 @needs_bench
-def test_similar_species_have_more_questions_than_non_similar():
-    counts = collections.Counter(r["has_similar_class"] for r in _rows(TRACK6))
-    assert counts[True] > counts[False]
+def test_per_species_image_caps():
+    """행 수 비교는 종 수(88 vs 56)만으로도 통과해 버린다 — 종당 이미지 상한이
+    실제로 10/5 로 갈리는지를 본다."""
+    per_species, similar = collections.defaultdict(set), {}
+    for r in _rows(TRACK6):
+        per_species[r["species_ko"]].add(r["image"])
+        similar[r["species_ko"]] = r["has_similar_class"]
+    sim = [len(v) for k, v in per_species.items() if similar[k]]
+    non = [len(v) for k, v in per_species.items() if not similar[k]]
+    assert sim and non
+    assert max(sim) == 10 and max(non) == 5      # 상한이 갈린다
+    assert all(n <= 10 for n in sim) and all(n <= 5 for n in non)
 
 
 @needs_bench

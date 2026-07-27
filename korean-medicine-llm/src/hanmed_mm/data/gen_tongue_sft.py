@@ -162,6 +162,11 @@ def main():
             # 내장 hash() 는 PYTHONHASHSEED 마다 값이 달라 재현 불가 → md5 hexdigest 정렬 사용.
             ordered = sorted(recs, key=lambda kv: hashlib.md5(kv[0].encode()).hexdigest())
             n = args.holdout_val
+            if n >= len(recs):
+                # 조용히 빈 train 파일을 쓰면 학습이 0 스텝으로 "성공"해 버린다.
+                raise SystemExit(
+                    f"--holdout_val {n} >= train 레코드 {len(recs)} — 학습셋이 비어버린다. "
+                    "값을 줄이거나 원천 데이터를 확인할 것.")
             holdout, remainder = ordered[:n], ordered[n:]
             _write_jsonl(args.out, "tongue_sft_train.jsonl", [r for _, r in remainder])
             _write_jsonl(args.out, "tongue_sft_val.jsonl", [r for _, r in holdout])

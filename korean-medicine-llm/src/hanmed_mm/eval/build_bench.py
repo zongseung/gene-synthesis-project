@@ -1,7 +1,7 @@
 """한의학 멀티모달 평가셋(hanmed_bench) 빌더 — 5 트랙 jsonl 생성.
 
 원천(읽기 전용, 변경 안 함):
-  - data/sft/tongue_sft/tongue_sft_val.jsonl  (설진 held-out, signs + provenance 복합키 인용)
+  - data/sft/tongue_sft/tongue_sft_test.jsonl  (설진 test 분할, signs + provenance 복합키 인용)
   - ver1/data/raw/mediclassics_unified/book_008/vol_*.jsonl  (동의보감 원문, (volume_id,content_seq) 키)
   - data/annotations/species_annotation.jsonl  (약재·독성 라벨)
   - data/safety_kb/tongue_rule_kb.json  (sign 어휘·변증·복합키)
@@ -28,7 +28,10 @@ from hanmed_mm.eval import SIGN_META, CATEGORY_KO, ABSTAIN_SIGNS
 SEED = 20260630
 
 # --- 경로 기본값 (저장소 루트 기준) ---
-DEF_VAL = "data/sft/tongue_sft/tongue_sft_val.jsonl"
+# 벤치 원천은 반드시 test 분할이다. tongue_sft_val.jsonl 은 학습 중 체크포인트 선택에
+# 쓰이는 홀드아웃이라, 그걸로 벤치를 다시 빌드하면 "모델이 이미 골라낸 이미지"로 모델을
+# 채점하게 된다(결함 A). test 는 원천 val 분할 전량이며 학습·선택 어디에도 노출되지 않는다.
+DEF_VAL = "data/sft/tongue_sft/tongue_sft_test.jsonl"
 DEF_BOOK008 = "ver1/data/raw/mediclassics_unified/book_008"
 DEF_SPECIES = "data/annotations/species_annotation.jsonl"
 DEF_RULEKB = "data/safety_kb/tongue_rule_kb.json"
@@ -389,7 +392,7 @@ def main():
         "seed": SEED,
         "book008_index_size": len(book_idx),
         "tracks": {
-            "track1_tongue_byeonjeung": {"n": len(t1), "source": DEF_VAL,
+            "track1_tongue_byeonjeung": {"n": len(t1), "source": args.val,
                                          "metric": "멀티라벨 P/R/F1(카테고리별) + 변증 부분문자열"},
             "track2_donguibogam_citation": {"n": len(t2), "n_gold_citations": sum(x["n_gold"] for x in t2),
                                             "grounding_verified": t2stats,
@@ -407,7 +410,15 @@ def main():
             "track5 는 KISTI 표준 미확보로 설계만(색보정 한계 명시).",
         ],
     }
-    with open(os.path.join(args.out, "manifest.json"), "w", encoding="utf-8") as f:
+    # 이 빌더가 만들지 않은 트랙(track6 은 scripts/build_herb_image_bench.py 소관)의
+    # manifest 항목은 보존한다. 통째로 덮어쓰면 재실행만으로 track6 기록이 사라진다.
+    man_path = os.path.join(args.out, "manifest.json")
+    if os.path.exists(man_path):
+        with open(man_path, encoding="utf-8") as f:
+            prev = json.load(f)
+        kept = {k: v for k, v in prev.get("tracks", {}).items() if k not in manifest["tracks"]}
+        manifest["tracks"] = {**kept, **manifest["tracks"]}
+    with open(man_path, "w", encoding="utf-8") as f:
         json.dump(manifest, f, ensure_ascii=False, indent=2)
 
     print(json.dumps(manifest["tracks"], ensure_ascii=False, indent=2))

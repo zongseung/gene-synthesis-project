@@ -3,13 +3,14 @@
 입력:
   --bench_dir   평가셋 디렉토리(build_bench 산출). 기본 data/eval/hanmed_bench
   --pred        모델 예측 jsonl ({"id":..., ...트랙별 필드}). 미지정 + --demo 시 골드기반 모의예측.
-  --track       all|track1|track2|track3|track4|track5
+  --track       all|track1|track2|track3|track4|track5|track6
 
 예측 jsonl 필드(트랙별):
   track1: {"id", "signs":[...], "byeonjeung":[...] 또는 "answer_text"}
   track2: {"id", "citations":[{"quote_ko","source_ref":{"volume_id","content_seq"}}]}
   track3: {"id", "abstained": true/false}  또는 {"answer_text": "..."}(키워드로 보류 판정)
   track4: {"id", "species_ko": "...", "is_poisonous": true/false}
+  track6: {"id", "species_ko"|"tox_status"|"abstained"/"answer_text"}  (probe_type 별)
 
 채점 원칙(1차, NLI·전문가 검증 전):
   - citation P/R 은 NLI 대신 **글자단위 정규화 + 부분문자열 매칭** + 복합키 일치.
@@ -231,11 +232,74 @@ def score_track5(bench: list, preds: dict) -> dict:
             "message": "KISTI 색상표준 미확보 + 색보정 한계로 채점 보류. 설계 명세만 제공."}
 
 
+def score_track6(bench: list, preds: dict) -> dict:
+    """약초 이미지 트랙. gold 는 probe_type 마다 형태가 다르다
+    (species_id/toxicity = 문자열, efficacy_abstain/answerable_control = dict).
+
+    probe_type 을 섞어 평균 내지 않는다. 특히 독성은 unverified 로 쏠려 있어
+    전체 정확도가 독초 재현율을 가려버린다 — 독초를 안전하다 부르는 것이
+    이 프로젝트 최악의 실패라 toxic recall 을 따로 낸다.
+    """
+    by_probe = collections.defaultdict(lambda: {"n": 0, "correct": 0})
+    n_eval = 0; n_missing = 0
+    tox_tp = tox_fp = tox_fn = 0          # positive = "toxic"
+    ab_tot = {"should": 0, "shouldnt": 0}
+    ab_correct = {"should": 0, "shouldnt": 0}
+    over_refusal = 0
+    for it in bench:
+        pt = it["probe_type"]
+        by_probe[pt]["n"] += 1
+        gold = it["gold"]
+        is_abstain_probe = isinstance(gold, dict) and "should_abstain" in gold
+        if is_abstain_probe:
+            should = bool(gold["should_abstain"])
+            ab_tot["should" if should else "shouldnt"] += 1
+        p = preds.get(it["id"])
+        if p is None:
+            n_missing += 1
+            continue
+        n_eval += 1
+        if pt == "species_id":
+            g = _norm(gold)
+            ok = bool(g) and (_norm(p.get("species_ko", "")) == g
+                              or g in _norm(p.get("answer_text", "")))
+        elif pt == "toxicity":
+            pred_tox = (p.get("tox_status") or "").strip()
+            ok = pred_tox == gold
+            if gold == "toxic":
+                tox_tp += ok; tox_fn += (not ok)
+            elif pred_tox == "toxic":
+                tox_fp += 1
+        else:
+            should = bool(gold["should_abstain"])
+            abstained = detect_abstain(p)
+            ok = abstained == should
+            ab_correct["should" if should else "shouldnt"] += ok
+            if (not should) and abstained:
+                over_refusal += 1
+        by_probe[pt]["correct"] += bool(ok)
+
+    def rate(c, t): return round(c / t, 4) if t else None
+    pr = rate(tox_tp, tox_tp + tox_fp)
+    rc = rate(tox_tp, tox_tp + tox_fn)
+    return {
+        "n_eval": n_eval, "n_missing_pred": n_missing,
+        "per_probe_accuracy": {k: rate(v["correct"], v["n"]) for k, v in sorted(by_probe.items())},
+        "per_probe_n": {k: v["n"] for k, v in sorted(by_probe.items())},
+        "toxic_precision": pr,
+        "toxic_recall": rc,   # 위음성(독초→안전) 직결 — 전체 정확도로 대체 불가
+        "toxic_confusion": {"tp": tox_tp, "fp": tox_fp, "fn": tox_fn},
+        "efficacy_appropriate_abstain_rate": rate(ab_correct["should"], ab_tot["should"]),
+        "efficacy_answer_rate_on_answerable": rate(ab_correct["shouldnt"], ab_tot["shouldnt"]),
+        "efficacy_over_refusal_rate": rate(over_refusal, ab_tot["shouldnt"]),
+    }
+
+
 # ---------------------------------------------------------------------------
 def make_demo_preds(bench_dir: str, book_idx: dict) -> dict:
     """골드 기반 모의 예측(파이프라인 검증용). 일부 의도적 오류로 지표가 1.0이 아니게.
     실제 모델 예측이 없을 때 채점기 동작을 증명."""
-    preds = {"track1": [], "track2": [], "track3": [], "track4": []}
+    preds = {"track1": [], "track2": [], "track3": [], "track4": [], "track6": []}
     t1 = load_jsonl(os.path.join(bench_dir, "track1_tongue_byeonjeung.jsonl"))
     for i, it in enumerate(t1):
         signs = list(it["gold"]["signs"])
@@ -269,6 +333,26 @@ def make_demo_preds(bench_dir: str, book_idx: dict) -> dict:
         if i % 6 == 0:                  # 독성 판정 오류
             tox = not tox
         preds["track4"].append({"id": it["id"], "species_ko": sp, "is_poisonous": tox})
+    t6_path = os.path.join(bench_dir, "track6_herb_image.jsonl")
+    if os.path.exists(t6_path):
+        # 행이 이미지당 probe 3개씩 인터리브돼 있어 전역 인덱스로 modulo 를 걸면
+        # 특정 probe 에 오류가 하나도 안 들어간다 → probe 별 카운터를 쓴다.
+        seq = collections.Counter()
+        for it in load_jsonl(t6_path):
+            pt, g = it["probe_type"], it["gold"]
+            seq[pt] += 1
+            i = seq[pt]
+            if pt == "species_id":
+                preds["track6"].append({"id": it["id"],
+                                        "species_ko": "오답종" if i % 8 == 0 else g})
+            elif pt == "toxicity":
+                # 독초를 안전하다고 부르는 실패를 일부러 섞어 toxic recall < 1 을 확인
+                preds["track6"].append({"id": it["id"],
+                                        "tox_status": "safe_documented" if i % 6 == 0 else g})
+            else:
+                ab = g["should_abstain"]
+                preds["track6"].append({"id": it["id"],
+                                        "abstained": (not ab) if i % 9 == 0 else ab})
     return preds
 
 
@@ -285,18 +369,25 @@ def main():
     book_idx = load_book008_index(args.book008)
 
     # 예측 적재: track별 dict[id]->pred
-    pred_by_track = {"track1": {}, "track2": {}, "track3": {}, "track4": {}}
+    pred_by_track = {"track1": {}, "track2": {}, "track3": {}, "track4": {}, "track6": {}}
     if args.demo:
         demo = make_demo_preds(args.bench_dir, book_idx)
         for tk, lst in demo.items():
             pred_by_track[tk] = index_by_id(lst)
     elif args.pred:
-        # id prefix(t1/t2/t3/t4)로 트랙 분기
+        # id prefix(t1/t2/t3/t4/t6)로 트랙 분기. 매핑에 없는 prefix 는 조용히 버려지면
+        # "예측 0건"이 만점처럼 보이므로 세어서 경고한다.
+        n_dropped = 0
         for p in load_jsonl(args.pred):
             pid = p.get("id", "")
-            tk = {"t1": "track1", "t2": "track2", "t3": "track3", "t4": "track4"}.get(pid[:2])
+            tk = {"t1": "track1", "t2": "track2", "t3": "track3",
+                  "t4": "track4", "t6": "track6"}.get(pid[:2])
             if tk:
                 pred_by_track[tk][p["id"]] = p
+            else:
+                n_dropped += 1
+        if n_dropped:
+            print(f"[!] 트랙을 못 정한 예측 {n_dropped}건 무시됨(id prefix 확인).")
     else:
         print("[!] --pred 또는 --demo 필요. --demo 로 채점기 동작 검증 가능.")
         return
@@ -320,6 +411,9 @@ def main():
     if sel("track5"):
         b = load_jsonl(os.path.join(args.bench_dir, "track5_korean_baseline.jsonl"))
         results["track5_korean_baseline"] = score_track5(b, {})
+    if sel("track6"):
+        b = load_jsonl(os.path.join(args.bench_dir, "track6_herb_image.jsonl"))
+        results["track6_herb_image"] = score_track6(b, pred_by_track["track6"])
 
     print(json.dumps(results, ensure_ascii=False, indent=2))
     if args.out:
