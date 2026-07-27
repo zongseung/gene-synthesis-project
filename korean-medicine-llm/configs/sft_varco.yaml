@@ -7,7 +7,7 @@
 base_model: models/VARCO-VISION-2.0-14B
 
 # 데이터
-tongue_train: data/sft/tongue_sft/tongue_sft_train.jsonl   # 5,325
+tongue_train: data/sft/tongue_sft/tongue_sft_train.jsonl   # 4,769
 tongue_val:   data/sft/tongue_sft/tongue_sft_val.jsonl     #   556
 herb_train:   data/sft/mm_train_resolved.jsonl              # 36,240 (이미지 실재 행만)
 herb_val:     data/sft/mm_val_resolved.jsonl                #  4,716
