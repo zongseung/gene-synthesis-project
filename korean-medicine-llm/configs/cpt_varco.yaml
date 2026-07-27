@@ -1,0 +1,40 @@
+# VARCO-VISION 한의학 CPT (Stage 1, 선택) — 텍스트 전용 packed corpus causal LM
+# 전략: claudedocs/training_strategy_hanmed.md §1단계
+# - VARCO 멀티모달 모델의 "언어모델 부분"만 LoRA 적응 (비전타워/projector 동결)
+# - 가볍게 1 epoch, 작은 LR(사전학습의 1/5~1/10 수준), rank-stabilized LoRA
+# - packed input_ids(2048) → next-token CE loss
+
+base_model: models/VARCO-VISION-2.0-14B
+data: data/cpt_varco/hanmed_ko_packed_varco_2048.jsonl
+output_dir: outputs/cpt_varco
+
+seq_len: 2048
+val_split: 0.02          # §C.7 held-out
+
+# LoRA (전략: rank 64, rank-stabilized)
+lora_rank: 64
+lora_alpha: 128
+lora_dropout: 0.05
+use_rslora: true
+
+# 학습 하이퍼파라미터
+lr: 2.0e-5               # 사전학습 LR의 ~1/5~1/10 (가벼운 적응)
+weight_decay: 0.0
+epochs: 1
+micro_bs: 1
+grad_accum: 16          # eff batch = 1*16*2GPU = 32 seq = 65,536 tok/step
+warmup_ratio: 0.03
+lr_scheduler: cosine
+logging_steps: 10
+save_steps: 200
+eval_steps: 200
+save_total_limit: 2
+grad_checkpointing: true
+
+# early stopping (val perplexity == exp(eval_loss) 모니터)
+early_stopping_patience: 2
+
+# 메모리 회피용 (smoke 시 OOM 나면 true)
+load_4bit: false
+
+seed: 42

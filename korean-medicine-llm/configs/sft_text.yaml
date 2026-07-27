@@ -1,0 +1,46 @@
+# 1차 텍스트 SFT (Stage 1) — 고전 번역문으로 도메인 언어 적응
+# 기획: claudedocs/vlm_plan/03_dataset.md §3.1, 06_training.md §6.1
+# - 이미지 0장. 비전타워·projector 는 이 라운드에서 신호를 받지 않는다.
+# - 답변은 번역문 verbatim (build_sft_text.py 산출). 합성·증강 없음.
+
+base_model: models/VARCO-VISION-2.0-14B
+
+# 데이터 (text_* 만 설정 → UnifiedMMDataset 이 이미지 소스를 건너뛴다)
+text_train: data/sft/text_train.jsonl   # 79,538 (고전 79,427 + abstain 111)
+text_val:   data/sft/text_val.jsonl     #    814
+
+output_dir: outputs/sft_text
+
+# 단일 소스라 균형 샘플러를 쓰지 않는다. 키는 스키마 호환용.
+tongue_target_frac: 0.0
+
+# LoRA — 2차와 동일 설정(어댑터를 이어받기 위함)
+lora_rank: 64
+lora_alpha: 128
+lora_dropout: 0.05
+use_rslora: true
+
+# 학습
+lr: 1.0e-5
+weight_decay: 0.0
+epochs: 2
+# 메모리 상한은 activation 이 아니라 **logits** 이 정한다.
+#   micro_bs × 배치최대길이 × vocab(151,936) × 4B(fp32 CE) × 2(값+기울기)
+#   micro_bs 8 × 1024 → 약 10GB. 14B bf16 가중치 28GB 와 겹쳐 OOM 났다(실측).
+#   micro_bs 16 은 로드 직후 OOM, 8은 긴 배치에서 OOM → 4 로 내린다.
+micro_bs: 4
+grad_accum: 32               # 글로벌 배치 4×32×2GPU = 256 (동일) → 에폭당 311스텝
+warmup_ratio: 0.03
+lr_scheduler: cosine
+max_seq_len: 1024            # 번역문 평균 130자. 긴 꼬리만 잘린다
+logging_steps: 10
+eval_steps: 100
+save_steps: 100
+save_total_limit: 2
+grad_checkpointing: true
+early_stopping_patience: 2
+
+# 14B bf16 + LoRA + 짧은 텍스트 → 단일 A6000 에 적재 가능. OOM 시 true 로 전환.
+load_4bit: false
+
+seed: 42

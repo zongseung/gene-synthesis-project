@@ -45,7 +45,7 @@ outputs/
 models/
 wandb/
 logs/
-data/
+/data/
 _workspace/
 checkpoints/
 runs/

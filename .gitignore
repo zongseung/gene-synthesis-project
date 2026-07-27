@@ -28,7 +28,7 @@ env/
 notebooks/*.html
 
 # Data (large files, not tracked)
-data/
+/data/
 !data/.gitkeep
 
 # Model outputs (checkpoints, samples, evaluation results)
