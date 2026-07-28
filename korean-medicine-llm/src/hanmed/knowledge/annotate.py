@@ -150,7 +150,7 @@ def load_sci_map(crosswalk_path: str) -> dict[str, tuple[str, str]]:
 
     confidence 를 버리면 안 된다. 은조롱의 Cynanchum wilfordii 는 ambiguous(gbif)
     인데 학명만 넘어가 SFT 가 「식별 결과는 은조롱(Cynanchum wilfordii)입니다」로
-    단정했다. 소비자(build_sft_mm.render_T1)가 resolved 만 단정하도록 같이 넘긴다.
+    단정했다. 소비자(build_herb.render_T1)가 resolved 만 단정하도록 같이 넘긴다.
     """
     df = pd.read_parquet(crosswalk_path)
     out = {}

@@ -2,14 +2,14 @@
 
 612 Training 원천 zip은 121종 중 30종만 받아져 있고 나머지 1,979GB 는 미다운로드다.
 반면 Validation 원천 zip은 121종 전부 로컬에 있다. 라벨링데이터(JSON)는 Training 쪽만
-있으므로 val 이미지에는 라벨 zip이 없는데, build_sft_mm 이 parquet 에서 실제로 읽는 건
+있으므로 val 이미지에는 라벨 zip이 없는데, build_herb 이 parquet 에서 실제로 읽는 건
 dataset/species_ko/part/image_filename/label_zip 다섯 컬럼뿐이고(독성·효능은
 species_annotation.jsonl 에서 옴), 이 다섯은 전부 zip 이름과 내부 경로에서 도출된다.
-→ 원천 zip 목록만으로 동일 스키마 parquet 을 만들어 build_sft_mm 을 무수정 재사용한다.
+→ 원천 zip 목록만으로 동일 스키마 parquet 을 만들어 build_herb 을 무수정 재사용한다.
 
 zip 내부 구조: `{부위한글}/{종}_{부위}_{id}.jpg`  (꽃/열매/잎/전초)
 
-label_zip 은 파일명이 아니라 **split 태그**로 쓰인다(build_sft_mm._split_of 가 VS_ →val,
+label_zip 은 파일명이 아니라 **split 태그**로 쓰인다(build_herb._split_of 가 VS_ →val,
 그 외→train 로 판정). 종별로 파일명 정렬 후 앞 train_cap 장은 TS_, 다음 val_cap 장은 VS_
 로 태깅해 train/val 이미지가 겹치지 않게 한다. 물리 파일은 둘 다 VS_ zip 안에 있다.
 
@@ -57,7 +57,7 @@ def main():
     ap.add_argument("--dataset", default="612")
     ap.add_argument("--split", default="2.Validation", help="01.데이터 하위 폴더명")
     ap.add_argument("--out", default="data/label_index/shards")
-    ap.add_argument("--train_cap", type=int, default=100, help="build_sft_mm --train_cap 과 맞출 것")
+    ap.add_argument("--train_cap", type=int, default=100, help="build_herb --train_cap 과 맞출 것")
     ap.add_argument("--val_cap", type=int, default=15)
     ap.add_argument("--workers", type=int, default=8)
     ap.add_argument("--dry_run", action="store_true")
