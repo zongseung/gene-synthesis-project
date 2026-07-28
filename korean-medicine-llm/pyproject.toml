@@ -1,7 +1,7 @@
 [project]
 name = "hanmed-llm"
 version = "0.1.0"
-description = "HanMed CLI — Korean medicine classics assistant (ver4 P-A+ CPT)"
+description = "HanMed-VLM — VARCO-VISION-2.0-14B LoRA SFT for Korean medicinal-plant identification, toxicity screening, and literature-grounded efficacy description"
 requires-python = ">=3.12"
 dependencies = [
   "torch>=2.6.0",
