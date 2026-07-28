@@ -4,7 +4,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-HybridGenoDiT: Population-conditional synthetic genotype generation using a Hybrid CNN-DiT diffusion model with hierarchical FiLM conditioning. Targets SCI publication using 1000 Genomes Phase 3 data (2,504 samples, 26 populations, 5 superpopulations).
+HiPoDiT: Population-conditional synthetic genotype generation using a Hybrid CNN-DiT diffusion model with hierarchical FiLM conditioning. Targets SCI publication using 1000 Genomes Phase 3 data (2,504 samples, 26 populations, 5 superpopulations).
+
+## Environments
+
+This repo has two independent virtualenvs — never merge them:
+
+- Root `.venv` (Python 3.13.6): this project (HiPoDiT). `uv sync` / `.venv/bin/python`.
+- `korean-medicine-llm/.venv` (Python 3.12): separate sub-project with a working VARCO-VISION 14B
+  training stack (torch + bitsandbytes 4bit + peft). Use `korean-medicine-llm/.venv/bin/python`
+  for that project; do not `uv sync` it from the root.
 
 ## Commands
 
@@ -32,7 +41,7 @@ python src/inference/generator.py --config configs/default.yaml --model_path out
 python src/evaluation/run_evaluation.py --config configs/default.yaml --syn_dir outputs/run_001/synthetic_samples
 
 # Hyperparameter sweep
-wandb sweep configs/sweep.yaml --project HybridGenoDiT
+wandb sweep configs/sweep.yaml --project HiPoDiT
 wandb agent <sweep_id>
 
 # Tests
