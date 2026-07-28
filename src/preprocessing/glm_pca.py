@@ -61,17 +61,22 @@ def _import_glmpca():
 
 
 def _try_import_rust():
-    """Import the Rust GLM-PCA extension if available.
+    """Import the accelerated GLM-PCA extension if available.
 
-    Built and installed via:
-        VIRTUAL_ENV=$(pwd)/.venv .venv/bin/maturin develop --release \
-            -m glm_pca_rs/Cargo.toml
-    Returns the module on success or None if the build hasn't been run.
+    Published on PyPI as ``glmpca-fast`` (declared in pyproject.toml);
+    installed normally via ``uv sync``. Returns the module on success, or
+    logs once and returns None if it isn't importable — callers then fall
+    back to the ~13x slower pure-Python `glmpca` reference implementation.
     """
     try:
-        import glm_pca_rs
-        return glm_pca_rs
+        import glmpca_fast
+        return glmpca_fast
     except ImportError:
+        logger.warning(
+            "glmpca-fast not importable — GLM-PCA will use the pure-Python "
+            "`glmpca` reference implementation (~13x slower). Run `uv sync` "
+            "to install the accelerated backend."
+        )
         return None
 
 
@@ -152,9 +157,9 @@ def glm_pca_single_gene(
 
     Backend
     -------
-    If the optional Rust extension :mod:`glm_pca_rs` is importable and
-    ``fam == "poi"``, this function delegates to the Rust implementation
-    (~10–15× faster per gene). Otherwise falls back to the reference Python
+    If the optional accelerated extension :mod:`glmpca_fast` is importable
+    and ``fam == "poi"``, this function delegates to its Rust backend
+    (~13× faster per gene). Otherwise falls back to the reference Python
     package :mod:`glmpca` (Townes 2019).
     """
     n_vars = matrix.shape[1]
@@ -168,17 +173,17 @@ def glm_pca_single_gene(
     # ── Rust fast path ─────────────────────────────────────────────────
     if _RUST_BACKEND is not None and fam == "poi":
         try:
-            f_rs, v_rs, _intercept_rs, dev_list, _ = _RUST_BACKEND.fit_poisson(
+            result = _RUST_BACKEND.fit_poisson(
                 np.ascontiguousarray(fit_matrix, dtype=np.float32),
-                l=n_comp,
+                L=n_comp,
                 max_iter=max_iter,
                 tol=1e-4,
                 penalty=1.0,
                 seed=42,
             )
-            factors = np.asarray(f_rs, dtype=np.float32)
-            loadings = np.asarray(v_rs, dtype=np.float32)
-            dev = np.asarray(dev_list, dtype=np.float32)
+            factors = np.asarray(result["factors"], dtype=np.float32)
+            loadings = np.asarray(result["loadings"], dtype=np.float32)
+            dev = np.asarray(result["deviance"], dtype=np.float32)
             return _build_result(
                 gene_name=gene_name,
                 matrix=matrix,
