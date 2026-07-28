@@ -22,9 +22,9 @@
   PYTHONPATH=src .venv/bin/python -m hanmed_mm.eval.run_eval --pred preds.jsonl --track all
 """
 from __future__ import annotations
-import argparse, glob, json, os, collections
+import argparse, json, os, collections
 
-from hanmed_mm.eval import SIGN_META, CATEGORY_KO, ABSTAIN_SIGNS
+from hanmed_mm.eval import SIGN_META, CATEGORY_KO
 from hanmed_mm.eval.build_bench import load_book008_index, DEF_BOOK008
 
 ABSTAIN_KEYWORDS = [

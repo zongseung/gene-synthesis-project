@@ -25,7 +25,7 @@
 from __future__ import annotations
 import argparse, glob, json, os, random, hashlib, collections
 
-from hanmed_mm.eval import SIGN_META, CATEGORY_KO, ABSTAIN_SIGNS
+from hanmed_mm.eval import SIGN_META, ABSTAIN_SIGNS
 
 SEED = 20260630
 

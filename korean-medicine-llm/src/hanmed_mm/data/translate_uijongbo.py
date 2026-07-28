@@ -16,7 +16,7 @@ concurrency: ThreadPoolExecutor. 증분 기록(중간 중단 안전).
 """
 from __future__ import annotations
 import argparse, glob, json, os, sys, threading, time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 
 SYS_PROMPT = (
     "당신은 한의학 고전 한문(漢文)을 현대 한국어로 번역하는 전문 번역가입니다. "
