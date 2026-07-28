@@ -4,7 +4,7 @@ import os
 import pytest
 
 from hanmed.knowledge.build_ontology import DB_PATH
-from hanmed_mm.gate.verify import gate_answer, tox_status, verify_claim
+from hanmed.gate.verify import gate_answer, tox_status, verify_claim
 
 pytestmark = pytest.mark.skipif(not os.path.exists(DB_PATH), reason="ontology.sqlite 없음")
 

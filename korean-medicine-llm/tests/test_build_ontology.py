@@ -52,5 +52,5 @@ def test_multi_hanja_species_returns_every_linked_herb():
 
 @needs_db
 def test_claim_from_secondary_herb_is_supported():
-    from hanmed_mm.gate.verify import verify_claim
+    from hanmed.gate.verify import verify_claim
     assert verify_claim("참깨", "효능", "익기력").status == "supported"
