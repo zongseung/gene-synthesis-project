@@ -20,12 +20,12 @@
       모든 인용 골드는 book_008 복합키 원문에 부분문자열로 존재함을 빌드 시 검증.
 
 사용:
-  PYTHONPATH=src .venv/bin/python -m hanmed_mm.eval.build_bench
+  PYTHONPATH=src .venv/bin/python -m hanmed.bench.build_bench
 """
 from __future__ import annotations
 import argparse, glob, json, os, random, hashlib, collections
 
-from hanmed_mm.eval import SIGN_META, ABSTAIN_SIGNS
+from hanmed.bench import SIGN_META, ABSTAIN_SIGNS
 
 SEED = 20260630
 

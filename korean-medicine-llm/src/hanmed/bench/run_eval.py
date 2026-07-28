@@ -18,14 +18,14 @@
 설계: claudedocs/hanmed_benchmark_design.md (LLM judge·전문가 검증은 2차 단계)
 
 사용:
-  PYTHONPATH=src .venv/bin/python -m hanmed_mm.eval.run_eval --demo
-  PYTHONPATH=src .venv/bin/python -m hanmed_mm.eval.run_eval --pred preds.jsonl --track all
+  PYTHONPATH=src .venv/bin/python -m hanmed.bench.run_eval --demo
+  PYTHONPATH=src .venv/bin/python -m hanmed.bench.run_eval --pred preds.jsonl --track all
 """
 from __future__ import annotations
 import argparse, json, os, collections
 
-from hanmed_mm.eval import SIGN_META, CATEGORY_KO
-from hanmed_mm.eval.build_bench import load_book008_index, DEF_BOOK008
+from hanmed.bench import SIGN_META, CATEGORY_KO
+from hanmed.bench.build_bench import load_book008_index, DEF_BOOK008
 
 ABSTAIN_KEYWORDS = [
     "보류", "모릅니다", "모르겠", "알 수 없", "확인할 수 없", "근거가 없", "근거를 찾을 수 없",
