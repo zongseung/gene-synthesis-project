@@ -27,8 +27,8 @@ import sys
 
 sys.path.insert(0, "src")
 
-PART_KO = {"leaf": "잎", "stem": "줄기", "flower": "꽃", "fruit": "열매",
-           "root": "뿌리", "whole": "전초", "group": "군락"}
+from hanmed.shared.parts import PART_KO  # noqa: E402  (sys.path 삽입 후 임포트)
+
 # 판정 선택지. 라벨 어휘 + 배타성 검사용 2개.
 CHOICES = [("leaf", "잎"), ("stem", "줄기"), ("flower", "꽃"), ("fruit", "열매"),
            ("root", "뿌리"), ("whole", "전초(한 개체 전체)"), ("group", "군락(여러 개체)"),

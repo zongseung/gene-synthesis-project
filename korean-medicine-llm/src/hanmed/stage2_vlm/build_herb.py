@@ -20,9 +20,12 @@
       --out data/sft --per_species_cap 40
 """
 from __future__ import annotations
-import argparse, glob, hashlib, json, os, collections
+import argparse, glob, json, os, collections
 
 import pyarrow.parquet as pq
+
+from hanmed.shared import _pick
+from hanmed.shared.parts import PART_KO, NON_PART, PART_COMPAT
 
 IMG_TOKEN = "<image>"
 
@@ -76,32 +79,6 @@ A_EFF_ABSTAIN = [
     "동의보감 등 본초 문헌에서 효능 기술을 찾지 못해, 이 약재의 효능을 단정하기 어렵습니다.",
 ]
 
-# 이미지 part(영문) → 한글 표기.
-# group 은 부위가 아니라 군락(여러 개체) 사진이다 — 전초(한 개체 전체)와 다르다.
-# 실물 확인: 612/부들 group 은 연못의 부들 군락 사진이었다.
-_PART_KO = {"root": "뿌리", "stem": "줄기", "leaf": "잎",
-            "flower": "꽃", "fruit": "열매",
-            "whole": "전초", "group": "군락"}
-# 부위가 아니라 사진 유형인 값. 답변에서 부위로 단정하지 않는다.
-NON_PART = ("group", "whole")
-# 이미지 part(영문)와 호환으로 간주할 약용부위(한글) 집합 — 부위 불일치 캐비엇 판단용.
-# 부분문자열보다 안전한 명시 매핑(예: root는 뿌리/뿌리줄기/줄기껍질/수피 와 관련).
-# group(전초/군락 사진)은 식물 전체가 찍히므로 모든 부위와 호환(캐비엇 생략).
-_ALL_PARTS_KO = {"뿌리", "뿌리줄기", "줄기껍질", "수피", "줄기",
-                 "잎", "꽃", "열매", "씨", "껍질", "전초"}
-_PART_COMPAT = {
-    "root": {"뿌리", "뿌리줄기", "줄기껍질", "수피"},
-    "stem": {"줄기", "뿌리줄기", "줄기껍질", "수피", "껍질"},
-    "leaf": {"잎", "전초"},
-    "flower": {"꽃", "전초"},
-    "fruit": {"열매", "씨", "껍질"},
-    # 군락·전초 사진은 식물 전체가 찍혀 어떤 약용부위와도 어긋나지 않는다 → 캐비엇 생략.
-    # whole 이 빠져 있어 전초 사진마다 「사진은 whole으로 보입니다」가 나올 뻔했다.
-    "group": _ALL_PARTS_KO,
-    "whole": _ALL_PARTS_KO,
-}
-
-
 def _euro(word):
     """받침에 맞는 조사 '으로'/'로' 선택. 받침 없음·ㄹ받침 → '로', 그 외 → '으로'.
     (예: 잎→잎으로, 꽃→꽃으로, 껍질→껍질로, 뿌리→뿌리로)"""
@@ -113,11 +90,6 @@ def _euro(word):
         if jong not in (0, 8):   # 받침 있고 ㄹ(8)이 아니면 '으로'
             return "으로"
     return "로"
-
-
-def _pick(opts, key):
-    # 내장 hash() 는 PYTHONHASHSEED 에 좌우돼 실행마다 문구가 바뀐다 → 재현 불가.
-    return opts[hashlib.md5(key.encode("utf-8")).digest()[0] % len(opts)]
 
 
 def _split_of(label_zip: str) -> str:
@@ -200,9 +172,9 @@ def render_T3(ann, q, key, part=None):
     # medicinal_part_ko 가 비어 있으면(미상) 거짓 단정 방지 위해 캐비엇 생략.
     med = ann.get("medicinal_part_ko") or []
     if med and part:
-        compat = _PART_COMPAT.get(part, set())
+        compat = PART_COMPAT.get(part, set())
         if not (compat & set(med)):
-            img_ko = _PART_KO.get(part, part)
+            img_ko = PART_KO.get(part, part)
             parts.append(
                 f" (다만 약재로 쓰는 부위는 {', '.join(med)}이며, 사진은 {img_ko}{_euro(img_ko)} 보입니다."
                 " 부위에 따라 약효가 다를 수 있습니다.)"

@@ -18,35 +18,15 @@ import json
 import os
 import sys
 
+from hanmed.shared.parts import PART_KO as PART_EN_TO_KO, PART_COMPAT as _PART_COMPAT
+
 
 # ---------------------------------------------------------------------------
 # 상수 / 사전
 # ---------------------------------------------------------------------------
-PART_EN_TO_KO = {
-    "root": "뿌리",
-    "stem": "줄기",
-    "leaf": "잎",
-    "flower": "꽃",
-    "fruit": "열매",
-    "group": "군락",
-    # whole 이 빠져 있어 전초 사진의 캐비엇 검사가 통째로 건너뛰어졌고,
-    # 답변에 영문 「whole」이 그대로 새는 것을 못 잡았다.
-    "whole": "전초",
-}
-
-# 이미지 part(영문)↔호환 약용부위(한글) — 빌더(build_sft_mm._PART_COMPAT)와 동일해야 한다.
-# 캐비엇 부착 기준의 단일 진실. 둘이 어긋나면 검증이 거짓 위반을 낸다.
-_ALL_PARTS_KO = {"뿌리", "뿌리줄기", "줄기껍질", "수피", "줄기",
-                 "잎", "꽃", "열매", "씨", "껍질", "전초"}
-_PART_COMPAT = {
-    "root": {"뿌리", "뿌리줄기", "줄기껍질", "수피"},
-    "stem": {"줄기", "뿌리줄기", "줄기껍질", "수피", "껍질"},
-    "leaf": {"잎", "전초"},
-    "flower": {"꽃", "전초"},
-    "fruit": {"열매", "씨", "껍질"},
-    "group": _ALL_PARTS_KO,
-    "whole": _ALL_PARTS_KO,
-}
+# part 어휘·호환 매핑은 hanmed.shared.parts 가 단일 진실이다 — 빌더(build_herb.py)와
+# 이 검증기가 각자 사본을 들고 있다가 whole 이 한쪽에서 빠져 캐비엇 검사가 통째로
+# 건너뛰인 이력이 있어(§shared/parts.py 참조) 통합했다.
 
 # tox 답변이 "안전하다"고 단정하는 문구들
 SAFE_ASSERT_PATTERNS = (
