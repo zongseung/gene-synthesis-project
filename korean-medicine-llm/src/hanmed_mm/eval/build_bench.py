@@ -223,7 +223,7 @@ def build_track3(val_path: str, species_path: str):
         })
     # (d) 미근거 설진 소견(zishe/chihenshe/shoushe) → 변증 보류해야 정답
     #     val 에서 해당 sign 이 포함된 실제 이미지 사용(근거 없는 변증 단정 금지).
-    seen = set()
+    ungrounded_count = collections.Counter()
     ungrounded = []
     with open(val_path, encoding="utf-8") as f:
         for line in f:
@@ -231,9 +231,9 @@ def build_track3(val_path: str, species_path: str):
             sset = set(d.get("signs", []))
             hit = sset & ABSTAIN_SIGNS
             for s in hit:
-                if s in seen and len([x for x in ungrounded if x["sign"] == s]) >= 8:
+                if ungrounded_count[s] >= 8:
                     continue
-                seen.add(s)
+                ungrounded_count[s] += 1
                 ungrounded.append({"image": d.get("image"), "sign": s})
     rng.shuffle(ungrounded)
     for u in ungrounded[:24]:
