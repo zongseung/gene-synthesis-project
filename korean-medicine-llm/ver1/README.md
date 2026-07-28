@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="../hammed_icon/HanMed_1.png" alt="HanMed mascot — turtle apothecary" width="280">
+  <img src="../../hammed_icon/HanMed_1.png" alt="HanMed mascot — turtle apothecary" width="280">
 </p>
 
 <h1 align="center">HanMed-LLM</h1>
@@ -7,6 +7,10 @@
 <p align="center">
   <em>동의보감 고전 해제 도우미 · Gemma-3-12B-IT 기반 LoRA SFT + RAG 검색증강 + vLLM 서빙 + 음성 자비스</em>
 </p>
+
+---
+
+> **ver1 (Text2LLM, Gemma-3-12B-IT 기반) — 아카이브.** 현재 운영 라인은 VARCO-VISION 기반 멀티모달 후속 세대 **ver2 (HanMed-VLM)**: [`../README.md`](../README.md). 본 문서는 재현성 확보와, 아래 ver0→ver8.2 전환 이력을 보존하기 위해 유지한다.
 
 ---
 
@@ -116,12 +120,12 @@ flowchart TD
 | 단계 | 코드 | 입력 | 출력 | 핵심 역할 |
 |---|---|---|---|---|
 | 수집 | `src/data/crawler/mediclassics_orchestrator.py` | book_id | `data/raw/mediclassics_unified/book_008/vol_*.jsonl` | 권별 병렬 크롤, content_seq resume |
-| SFT 코퍼스 빌드 | `scripts/build_sft_full_corpus.py` + `scripts/augment_sft_v7.py` | raw jsonl | `phaseB_qa_full_corpus.jsonl` | book_008 → Q/A 쌍 (v7 builder) |
+| SFT 코퍼스 빌드 | `scripts/sft/build_sft_full_corpus.py` + `scripts/sft/augment_sft_v7.py` | raw jsonl | `phaseB_qa_full_corpus.jsonl` | book_008 → Q/A 쌍 (v7 builder) |
 | 품질 audit/fix | `sft-quality-fix` 하네스 (`docs/ver8.1/`) | full_corpus | `phaseB_qa_v8_1_corpus.jsonl` | 10차원 감사 + 행 단위 수정, 2라운드 수렴 |
 | 친절체 증강 | ver8.2 rewrite 파이프라인 (`docs/ver8.2/`) | v8_1 corpus | `phaseB_qa_v8_2_corpus.jsonl` | gold 100행 + base Gemma rewrite 혼합 |
 | 학습 | `experiments/dongui_bogam/src/training/sft_trainer.py` | v8_x corpus | LoRA adapter | TRL SFT, `--preset gemma`, single-GPU |
 | 병합 | `experiments/dongui_bogam/scripts/build_merged_model_ver8_1.py` | adapter | merged HF model | `peft.merge_and_unload` |
-| RAG 인덱스 | `scripts/build_rag_index.py` | book_008 raw jsonl | `data/rag/book_008.{index,meta.jsonl}` | bge-m3 인코딩 → FAISS IndexFlatIP |
+| RAG 인덱스 | `scripts/rag/build_rag_index.py` | book_008 raw jsonl | `data/rag/book_008.{index,meta.jsonl}` | bge-m3 인코딩 → FAISS IndexFlatIP |
 | 서빙 (LLM) | `experiments/dongui_bogam/docker/compose.ver8_1.yml` (`hanmed_vllm_ver8_1`) | merged model | OpenAI 호환 API (:8000, 내부) | vLLM, bf16, max_num_seqs 8 |
 | 서빙 (RAG) | `experiments/dongui_bogam/rag_service/` (`hanmed_rag`) | FAISS index + meta | `POST /rag/answer` (:8080, 공개) | 검색 + safety + LLM 호출 오케스트레이션 |
 | 클라이언트 | `experiments/dongui_bogam/bogam_cli/` | stdin / 마이크 | 텍스트·음성 응답 | 텍스트 REPL + 음성 자비스 (§4) |
@@ -134,7 +138,7 @@ flowchart TD
 
 | 항목 | 값 |
 |---|---|
-| 빌드 스크립트 | `scripts/build_rag_index.py` |
+| 빌드 스크립트 | `scripts/rag/build_rag_index.py` |
 | 입력 | `data/raw/mediclassics_unified/book_008/vol_01~23.jsonl` (34,040 레코드) |
 | 청킹 | **없음** — 레코드 1개(원문 1 content_seq) = 벡터 1개 |
 | 임베딩 텍스트 | `up_path_nm` + `trans_ko` + `original`(국역과 다를 때만) 연결 |
@@ -308,13 +312,14 @@ vLLM 옵션: `--served-model-name=hanmed-ver8_1 --dtype=bfloat16 --max-model-len
 ### 7.2 배포 절차
 
 ```bash
-# (저장소 최상위에서 실행 — 스크립트 기본 경로가 repo root 기준)
+# (korean-medicine-llm/ver1/ 에서 실행 — 스크립트 내부 경로는 자기 위치 기준(__file__)으로 계산되므로
+#  cwd 와 무관하게 정상 동작. venv 는 이 디렉토리에 없고 상위 korean-medicine-llm/.venv 를 공유한다)
 
 # 1. adapter → merged 모델 (학습 완료 후, 기본 입출력 = outputs_ver8_1_gemma_v1/{adapter,merged})
-PYTHONHASHSEED=0 .venv/bin/python experiments/dongui_bogam/scripts/build_merged_model_ver8_1.py
+PYTHONHASHSEED=0 ../.venv/bin/python experiments/dongui_bogam/scripts/build_merged_model_ver8_1.py
 
-# 2. RAG 인덱스 빌드 (최초 1회 — data/rag/book_008.{index,meta.jsonl} 생성)
-CUDA_VISIBLE_DEVICES=0 .venv/bin/python scripts/build_rag_index.py
+# 2. RAG 인덱스 빌드 (최초 1회 — data/rag/book_008.{index,meta.jsonl} 생성; 이미 산출돼 있음)
+CUDA_VISIBLE_DEVICES=0 ../.venv/bin/python scripts/rag/build_rag_index.py
 
 # 3. 서빙 스택 기동 (vLLM + RAG sidecar)
 cd experiments/dongui_bogam/docker
@@ -329,7 +334,7 @@ curl -s http://localhost:8080/rag/answer \
 
 스모크 테스트 절차: [`experiments/dongui_bogam/docker/SMOKE_TEST_ver8_1.md`](experiments/dongui_bogam/docker/SMOKE_TEST_ver8_1.md).
 
-> 저장소 최상위 `docker/` 의 compose 파일들(`docker-compose.{yml,merged,phaseA*,gemma,ver5_v3_1}.yml`)은 ver5 이하 레거시 서빙 경로다. 현 운영 스택은 `experiments/dongui_bogam/docker/compose.ver8_1.yml`.
+> 이 디렉토리(`korean-medicine-llm/ver1/`) 바로 아래 `docker/` 의 compose 파일들(`docker-compose.{yml,merged,phaseA*,gemma,ver5_v3_1}.yml`)은 ver5 이하 레거시 서빙 경로다. 현 운영 스택은 `experiments/dongui_bogam/docker/compose.ver8_1.yml`.
 
 ## 8. CLI 사용
 
@@ -350,7 +355,7 @@ hanmed-bogam-hologram --device cpu              # 홀로그램 GUI (맥, SSH 터
 
 REPL 슬래시 명령: `/help /retrieved /reset /exit`.
 
-> 저장소 최상위 `src/hanmed_cli/` 의 `hanmed` CLI 는 RAG 없이 vLLM 에 직접 붙는 ver4/ver5 시기 레거시 REPL 이다. 현 RAG 시스템 클라이언트는 `bogam_cli`.
+> 이 디렉토리(`korean-medicine-llm/ver1/`) 바로 아래 `src/hanmed_cli/` 의 `hanmed` CLI 는 RAG 없이 vLLM 에 직접 붙는 ver4/ver5 시기 레거시 REPL 이다 (설치는 상위 `korean-medicine-llm/pyproject.toml` 을 통해서만 가능 — 이 CLI 는 자체 `pyproject.toml` 을 갖지 않는다). 현 RAG 시스템 클라이언트는 `bogam_cli`.
 
 ## 9. 리소스 요구사항
 
@@ -393,9 +398,9 @@ REPL 슬래시 명령: `/help /retrieved /reset /exit`.
 ## 11. 디렉토리 구조
 
 ```
-korean-medicine-llm/
+korean-medicine-llm/ver1/           # 본 문서 위치 (ver2 는 상위 korean-medicine-llm/)
 ├── README.md                       # 이 파일
-├── pyproject.toml                  # 레거시 hanmed CLI 엔트리 (ver4/5)
+├── ../pyproject.toml                # 레거시 hanmed CLI 엔트리 (ver4/5) — 상위 korean-medicine-llm/ 에 위치, venv 도 거기(.venv) 공유
 │
 ├── docs/
 │   ├── 01_overview ~ 09_roadmap/    # 주제별 원자 문서 (r0)
@@ -428,11 +433,13 @@ korean-medicine-llm/
 │   └── utils/seed.py
 │
 ├── scripts/
-│   ├── build_sft_full_corpus.py / augment_sft_v7.py   # v7 builder (현 코퍼스 기반)
-│   ├── build_rag_index.py          # ★ FAISS 인덱스 빌드
-│   ├── build_merged_model.py
-│   ├── probe_ver8_1_rag*.py        # RAG 오프라인 평가 하네스 (v1~v4 + info)
-│   └── (audit/verify/probe/meta 스크립트)
+│   ├── sft/build_sft_full_corpus.py / augment_sft_v7.py   # v7 builder (현 코퍼스 기반)
+│   ├── rag/build_rag_index.py      # ★ FAISS 인덱스 빌드
+│   ├── rag/probe_ver8_1_rag*.py    # RAG 오프라인 평가 하네스 (v4 + info)
+│   ├── model/build_merged_model.py
+│   ├── corpus/                     # 크롤 후처리 (splits/factsheet/분류)
+│   ├── eval/                       # audit/verify/probe 스크립트
+│   └── deploy/                     # phaseA 배포 셸 스크립트 (레거시)
 │
 ├── data/
 │   ├── raw/mediclassics_unified/   # 26권 크롤 결과 (book_008 = 동의보감)

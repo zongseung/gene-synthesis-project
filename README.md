@@ -21,6 +21,17 @@
 
 ---
 
+> **이 저장소에는 서로 무관한 두 프로젝트가 들어 있습니다.**
+>
+> | 경로 | 프로젝트 | README |
+> | --- | --- | --- |
+> | `/` (본 파일) | HiPoDiT — 합성 유전형 생성 (본 문서) | 본 파일 |
+> | `korean-medicine-llm/` | 한의학 LLM/VLM (Text2LLM ver1 → VLM ver2) | [`korean-medicine-llm/README.md`](korean-medicine-llm/README.md) |
+>
+> 이하 본 README의 모든 내용은 **HiPoDiT에만** 해당한다. `korean-medicine-llm/`은 별도의 가상환경과 별도의 컨벤션(uv 프로젝트, 자체 CLAUDE.md)을 가지므로 이 문서의 설치/실행 지침을 그대로 적용하지 말 것.
+
+---
+
 ## Why This Model?
 
 ### 문제: 소수 인구군의 합성 유전형 품질 저하
