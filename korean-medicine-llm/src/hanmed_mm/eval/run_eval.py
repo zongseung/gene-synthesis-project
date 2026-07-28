@@ -3,7 +3,7 @@
 입력:
   --bench_dir   평가셋 디렉토리(build_bench 산출). 기본 data/eval/hanmed_bench
   --pred        모델 예측 jsonl ({"id":..., ...트랙별 필드}). 미지정 + --demo 시 골드기반 모의예측.
-  --track       all|track1|track2|track3|track4|track5|track6
+  --track       all|track1|track2|track3|track4|track6
 
 예측 jsonl 필드(트랙별):
   track1: {"id", "signs":[...], "byeonjeung":[...] 또는 "answer_text"}
@@ -227,11 +227,6 @@ def score_track4(bench: list, preds: dict) -> dict:
     }
 
 
-def score_track5(bench: list, preds: dict) -> dict:
-    return {"n": len(bench), "status": "design_only",
-            "message": "KISTI 색상표준 미확보 + 색보정 한계로 채점 보류. 설계 명세만 제공."}
-
-
 def score_track6(bench: list, preds: dict) -> dict:
     """약초 이미지 트랙. gold 는 probe_type 마다 형태가 다르다
     (species_id/toxicity = 문자열, efficacy_abstain/answerable_control = dict).
@@ -408,9 +403,6 @@ def main():
     if sel("track4"):
         b = load_jsonl(os.path.join(args.bench_dir, "track4_herb_toxic_id.jsonl"))
         results["track4_herb_toxic_id"] = score_track4(b, pred_by_track["track4"])
-    if sel("track5"):
-        b = load_jsonl(os.path.join(args.bench_dir, "track5_korean_baseline.jsonl"))
-        results["track5_korean_baseline"] = score_track5(b, {})
     if sel("track6"):
         b = load_jsonl(os.path.join(args.bench_dir, "track6_herb_image.jsonl"))
         results["track6_herb_image"] = score_track6(b, pred_by_track["track6"])

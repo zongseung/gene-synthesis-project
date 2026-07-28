@@ -1,4 +1,4 @@
-"""한의학 멀티모달 평가셋(hanmed_bench) 빌더 — 5 트랙 jsonl 생성.
+"""한의학 멀티모달 평가셋(hanmed_bench) 빌더 — 4 트랙 jsonl 생성.
 
 원천(읽기 전용, 변경 안 함):
   - data/sft/tongue_sft/tongue_sft_test.jsonl  (설진 test 분할, signs + provenance 복합키 인용)
@@ -11,8 +11,10 @@
   track2_donguibogam_citation.jsonl 동의보감 출처 충실성 골드(검증된 인용 복합키)
   track3_abstain.jsonl              보류 적절성 프로브(합성, Med-HALT Fake식 + 보류해야하는 미근거 + 정상 대조)
   track4_herb_toxic_id.jsonl        약재 식별 + 독초 판별(독초 per-class)
-  track5_korean_baseline.jsonl      KISTI 한국인 설태 정상범위 비교(설계만, 색보정 한계)
   manifest.json                     규모·구성 요약
+
+  (구 track5_korean_baseline 는 채점기가 입력을 보지 않고 상수만 반환하는 죽은
+   트랙이라 2026-07-28 삭제됐다. 설계 기록은 claudedocs/hanmed_benchmark_design.md 참조.)
 
 원칙: 결정론(seed 고정). 정답은 원천 라벨에서만 유도(합성 사실 추가 금지).
       모든 인용 골드는 book_008 복합키 원문에 부분문자열로 존재함을 빌드 시 검증.
@@ -318,42 +320,6 @@ def build_track4(species_path: str, neg_ratio: int = 2):
     return items
 
 
-# ---------------------------------------------------------------------------
-# Track 5 — 한국인 정상 baseline (KISTI, 설계만)
-# ---------------------------------------------------------------------------
-# KISTI 한국인 설태 색상 참조표준 DSDETL250113-002-1-DATA 는 저장소에 미포함.
-# 색보정(white balance) 한계로 일반 사진의 절대 색좌표 비교는 신뢰 어려움 → 설계만 제시.
-KISTI_NOTE = ("KISTI 한국인 설태 색상 참조표준(DSDETL250113-002-1-DATA) 기반. "
-              "[추정] 정상범위는 표준 확보 후 실측값으로 대체. "
-              "한계: 일반 스마트폰 사진은 광원·화이트밸런스 미보정 → 절대 Lab/색좌표 비교 신뢰도 낮음. "
-              "본 트랙은 색보정 파이프라인(컬러차트/캘리브레이션) 전제하의 설계 명세이며 채점은 보류.")
-
-
-def build_track5():
-    # 정상(健康) 기술은 tongue_rule_kb jiankangshe 근거(本紅而澤). 색범위는 KISTI 표준 의존.
-    comparisons = [
-        {"attribute": "설질색(舌質)", "normal_desc": "담홍(淡紅)~본홍이택(本紅而澤)",
-         "kisti_range_placeholder": "[추정] L*a*b* 정상범위 — 표준 확보 후 기입"},
-        {"attribute": "설태색(舌苔)", "normal_desc": "박백태(薄白苔)",
-         "kisti_range_placeholder": "[추정] 백태 색좌표 정상범위 — 표준 확보 후 기입"},
-        {"attribute": "설태후박(苔厚薄)", "normal_desc": "박태(薄), 바탕이 비치는 정도",
-         "kisti_range_placeholder": "[추정] 피복률/투과도 정상범위 — 표준 확보 후 기입"},
-    ]
-    items = []
-    for c in comparisons:
-        items.append({
-            "id": _eid("t5", c["attribute"]),
-            "track": "korean_normal_baseline",
-            "design_only": True,
-            "question": f"이 혀의 {c['attribute']} 이 한국인 정상범위(KISTI 표준)에 드는지 판정하라.",
-            "gold": {"normal_desc": c["normal_desc"],
-                     "kisti_range": c["kisti_range_placeholder"]},
-            "note": KISTI_NOTE,
-            "scoring": "normal_range_agreement (색보정 전제, 현재 보류)",
-        })
-    return items
-
-
 def write_jsonl(path: str, items: list):
     with open(path, "w", encoding="utf-8") as f:
         for it in items:
@@ -375,13 +341,11 @@ def main():
     t2, t2stats = build_track2(args.val, book_idx)
     t3 = build_track3(args.val, args.species)
     t4 = build_track4(args.species)
-    t5 = build_track5()
 
     write_jsonl(os.path.join(args.out, "track1_tongue_byeonjeung.jsonl"), t1)
     write_jsonl(os.path.join(args.out, "track2_donguibogam_citation.jsonl"), t2)
     write_jsonl(os.path.join(args.out, "track3_abstain.jsonl"), t3)
     write_jsonl(os.path.join(args.out, "track4_herb_toxic_id.jsonl"), t4)
-    write_jsonl(os.path.join(args.out, "track5_korean_baseline.jsonl"), t5)
 
     # track3 구성 분해
     t3_by = collections.Counter(x["probe_type"] for x in t3)
@@ -401,28 +365,28 @@ def main():
                                "metric": "보류 정확도, 적정/부적정 보류율, over-refusal"},
             "track4_herb_toxic_id": {"n": len(t4), "n_poisonous": t4_pos, "n_nonpoison": len(t4) - t4_pos,
                                      "metric": "종 top-1 acc + 독초 per-class P/R"},
-            "track5_korean_baseline": {"n": len(t5), "design_only": True,
-                                       "metric": "정상범위 일치(색보정 전제, 보류)"},
         },
         "notes": [
             "정답은 원천 라벨에서만 유도(합성 사실 추가 금지). 위험 프로브 질문문만 합성.",
             "track2 골드 인용은 전부 book_008 복합키 원문에 부분문자열로 존재함을 빌드 시 검증.",
-            "track5 는 KISTI 표준 미확보로 설계만(색보정 한계 명시).",
         ],
     }
     # 이 빌더가 만들지 않은 트랙(track6 은 scripts/build_herb_image_bench.py 소관)의
     # manifest 항목은 보존한다. 통째로 덮어쓰면 재실행만으로 track6 기록이 사라진다.
+    # track5(korean_normal_baseline)는 채점기가 상수만 반환하는 죽은 트랙이라 삭제됐다
+    # (claudedocs/hanmed_benchmark_design.md 에 설계 기록 보존) — kept 에서도 걸러낸다.
     man_path = os.path.join(args.out, "manifest.json")
     if os.path.exists(man_path):
         with open(man_path, encoding="utf-8") as f:
             prev = json.load(f)
-        kept = {k: v for k, v in prev.get("tracks", {}).items() if k not in manifest["tracks"]}
+        kept = {k: v for k, v in prev.get("tracks", {}).items()
+                if k not in manifest["tracks"] and k != "track5_korean_baseline"}
         manifest["tracks"] = {**kept, **manifest["tracks"]}
     with open(man_path, "w", encoding="utf-8") as f:
         json.dump(manifest, f, ensure_ascii=False, indent=2)
 
     print(json.dumps(manifest["tracks"], ensure_ascii=False, indent=2))
-    print(f"\n[OK] {args.out} 에 5 트랙 + manifest 생성")
+    print(f"\n[OK] {args.out} 에 4 트랙 + manifest 생성")
 
 
 if __name__ == "__main__":
