@@ -22,6 +22,8 @@ import json
 import os
 from pathlib import Path
 
+from hanmed.shared import _pick
+
 # mediclassics book_id → (한자 서명, 한글 서명). 본초 계열 7책만 사용한다.
 BOOKS = {
     190: ("本草綱目", "본초강목"),
@@ -49,12 +51,6 @@ Q_ABSTAIN = (
 A_ABSTAIN = "해당 종은 동의보감·본초강목에 기록이 없습니다."
 
 MIN_CHARS = 20
-
-
-def _pick(opts: tuple[str, ...], key: str) -> str:
-    """어투 회전. 내장 hash() 는 PYTHONHASHSEED 에 좌우되므로 쓰지 않는다."""
-    h = hashlib.md5(key.encode("utf-8")).digest()
-    return opts[h[0] % len(opts)]
 
 
 def render(rec: dict) -> dict:

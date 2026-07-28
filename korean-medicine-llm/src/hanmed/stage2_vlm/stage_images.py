@@ -4,7 +4,7 @@ SFT jsonl(mm_*.jsonl)이 참조하는 이미지만 골라, NAS 원천데이터 z
 trainer의 --image_root 가 기대하는 논리 경로(`{dataset}/{code_species}/{filename}`)로 저장한다.
 NAS가 느리므로: 종별 병렬 · 이미 받은 파일 skip(resume) · per-zip try/except · .part(미완) 제외.
 
-논리 경로는 build_sft_mm._image_path 와 정확히 일치해야 한다(= trainer가 그대로 조인).
+논리 경로는 build_herb._image_path 와 정확히 일치해야 한다(= trainer가 그대로 조인).
 
 사용:
   PYTHONPATH=src .venv/bin/python -m hanmed.stage2_vlm.stage_images \
@@ -17,12 +17,8 @@ from __future__ import annotations
 import argparse, glob, json, os, zipfile
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
-
-def _cp949(name: str) -> str:
-    try:
-        return name.encode("cp437").decode("cp949")
-    except Exception:
-        return name
+from hanmed.shared.label_index import _cp949  # 재사용(중복 방지)
+from hanmed.stage2_vlm.shard import PREFIX_612
 
 
 def find_source_zips(root: str) -> list[str]:
@@ -99,7 +95,7 @@ def map_zips(need, all_zips):
         else:  # 612: sub=종명, zip은 TS_/VS_/TL_/VL_ 접두
             for z, bn in by_ds["612"]:
                 stem = bn[:-4] if bn.lower().endswith(".zip") else bn
-                for pre in ("TS_", "VS_", "TL_", "VL_"):
+                for pre in PREFIX_612:
                     if stem.startswith(pre):
                         stem = stem[len(pre):]
                         break

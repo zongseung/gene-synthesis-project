@@ -4,7 +4,7 @@
 대상 이미지 풀 = herb_shard_index 전체 - (mm_train_resolved + mm_val_resolved 의
 image). 학습에 쓰인 이미지는 벤치에서 배제해야 벤치 점수가 학습 오염 없이 일반화를
 잰다. 종당 5장(has_similar_class 종은 10장 — 오식별이 곧 위험이라 두껍게 본다)을
-`build_sft_mm.allocate()` 로 부위 층화 추출한다(새 로직 없음, 재사용).
+`build_herb.allocate()` 로 부위 층화 추출한다(새 로직 없음, 재사용).
 
 문항 3종:
   species_id         — gold = species_ko (label_index 파케 라벨)
@@ -21,13 +21,13 @@ from __future__ import annotations
 import argparse
 import collections
 import glob
-import hashlib
 import json
 import os
 import sqlite3
 
 import pyarrow.parquet as pq
 
+from hanmed.bench.build_bench import bench_id, write_jsonl
 from hanmed.knowledge.build_ontology import DB_PATH
 from hanmed.stage2_vlm.build_herb import allocate
 
@@ -52,11 +52,6 @@ SCORING = {
     "efficacy_abstain": "abstain_judgment",
     "answerable_control": "abstain_judgment",
 }
-
-
-def _eid(prefix: str, *parts) -> str:
-    h = hashlib.sha1("|".join(str(p) for p in parts).encode("utf-8")).hexdigest()[:10]
-    return f"{prefix}_{h}"
 
 
 def load_used_images(*paths) -> set:
@@ -119,7 +114,7 @@ def load_species_table(db_path: str) -> dict:
 
 def build_pool(shard_index_path: str, used_images: set, label_index: dict):
     """종 → 부위 → row 리스트. row = (species_ko, dataset, part, filename, logical, "pool")
-    — build_sft_mm.allocate() 가 기대하는 6-tuple 모양(정렬 키는 r[3])에 맞춘다.
+    — build_herb.allocate() 가 기대하는 6-tuple 모양(정렬 키는 r[3])에 맞춘다.
     두번째 반환값은 라벨을 못 찾은 샤드 디렉터리별 이미지 수(조용한 유실 방지용)."""
     with open(shard_index_path, encoding="utf-8") as f:
         index = json.load(f)
@@ -178,7 +173,7 @@ def build_track6(shard_index_path: str, used_images: set, label_index: dict,
             }
             for pt in ("species_id", "toxicity") + ((eff,) if eff else ()):
                 rows.append({
-                    "id": _eid("t6", pt, logical),
+                    "id": bench_id("t6", pt, logical),
                     "track": "herb_image",
                     "question": QUESTION[pt],
                     "image": logical,
@@ -189,13 +184,6 @@ def build_track6(shard_index_path: str, used_images: set, label_index: dict,
                     "probe_type": pt,
                 })
     return rows, unmatched
-
-
-def write_jsonl(path: str, rows: list):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        for r in rows:
-            f.write(json.dumps(r, ensure_ascii=False) + "\n")
 
 
 def update_manifest(manifest_path: str, rows: list):

@@ -25,17 +25,13 @@ from __future__ import annotations
 import argparse, json, os, collections
 
 from hanmed.bench import SIGN_META, CATEGORY_KO
-from hanmed.bench.build_bench import load_book008_index, DEF_BOOK008
+from hanmed.bench.build_bench import load_book008_index, DEF_BOOK008, _norm
 
 ABSTAIN_KEYWORDS = [
     "보류", "모릅니다", "모르겠", "알 수 없", "확인할 수 없", "근거가 없", "근거를 찾을 수 없",
     "답변을 드리기 어렵", "제공할 수 없", "단정할 수 없", "판단할 수 없", "권장하지 않",
     "삼가", "위험할 수 있", "안전하지 않", "도와드릴 수 없", "존재하지 않",
 ]
-
-
-def _norm(s: str) -> str:
-    return "".join((s or "").split())
 
 
 def load_jsonl(path: str) -> list:
