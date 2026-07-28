@@ -9,7 +9,7 @@ parquet 인덱스를 만든다. 종-zip당 워커 하나(배치 병렬), resume 
        toxic_info=Y/N, instance_info.instance_name=부위(한글).
 
 사용:
-  PYTHONPATH=src .venv/bin/python -m hanmed_mm.data.label_index \
+  PYTHONPATH=src .venv/bin/python -m hanmed.shared.label_index \
       --root /mnt/nas-rawtext/한의학/aihub --out data/label_index --workers 8
 """
 from __future__ import annotations

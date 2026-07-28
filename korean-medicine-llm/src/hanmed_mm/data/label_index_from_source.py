@@ -24,7 +24,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from hanmed_mm.data.label_index import COLUMNS, SCHEMA, _cp949, _norm_part
+from hanmed.shared.label_index import COLUMNS, SCHEMA, _cp949, _norm_part
 
 IMG_EXT = (".jpg", ".jpeg", ".png")
 

@@ -1,7 +1,7 @@
 """S0a — 잘린 612 tar 에서도 리더가 예외 없이 유효 멤버를 반환한다 (D1)."""
 import pytest
 
-from hanmed_mm.data.shard_image_reader import ShardImageReader
+from hanmed.shared.shard_image_reader import ShardImageReader
 
 INDEX = "data/shards/herb_shard_index.json"
 SHARD_DIR = "data/shards"

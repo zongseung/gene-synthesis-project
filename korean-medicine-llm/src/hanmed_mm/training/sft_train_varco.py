@@ -141,7 +141,7 @@ class UnifiedMMDataset:
         # 약초 + 샤드 인덱스 설정 시: tar 샤드에서 직접 읽기(/ ↔ __ 경로 불일치 해소)
         if src == "herb" and self._herb_shard_index:
             if self._shard_reader is None:
-                from hanmed_mm.data.shard_image_reader import ShardImageReader
+                from hanmed.shared.shard_image_reader import ShardImageReader
                 self._shard_reader = ShardImageReader(self._herb_shard_index, self._herb_shard_dir)
             img = self._shard_reader.get(rel)
             if img is not None:

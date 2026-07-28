@@ -94,7 +94,7 @@ def extract_features(samples: dict[str, list[str]], device: str, batch_size: int
     import torch
     from concurrent.futures import ThreadPoolExecutor
 
-    from hanmed_mm.data.shard_image_reader import ShardImageReader
+    from hanmed.shared.shard_image_reader import ShardImageReader
 
     reader = ShardImageReader(SHARD_INDEX, SHARD_DIR)
     species = sorted(samples)

@@ -187,7 +187,7 @@ def main() -> int:
     p.add_argument("--out", default="outputs/part_audit/part_audit.html")
     a = p.parse_args()
 
-    from hanmed_mm.data.shard_image_reader import ShardImageReader
+    from hanmed.shared.shard_image_reader import ShardImageReader
     reader = ShardImageReader(a.index, a.shard_dir)
 
     items, skipped = [], 0

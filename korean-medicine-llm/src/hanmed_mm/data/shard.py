@@ -31,7 +31,7 @@ from PIL import Image
 
 Image.MAX_IMAGE_PIXELS = None  # AI Hub 고해상 원본 신뢰 → DecompressionBomb 제한 해제(대형 이미지 스킵 방지)
 
-from hanmed_mm.data.label_index import _cp949, _norm_part  # 재사용(중복 방지)
+from hanmed.shared.label_index import _cp949, _norm_part  # 재사용(중복 방지)
 
 IMG_EXT = (".jpg", ".jpeg", ".png")
 SPLIT_DIR = {"train": "1.Training", "val": "2.Validation"}
