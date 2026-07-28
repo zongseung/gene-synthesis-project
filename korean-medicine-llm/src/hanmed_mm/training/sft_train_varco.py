@@ -31,6 +31,8 @@
 from __future__ import annotations
 
 import argparse
+import collections
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -78,6 +80,27 @@ def _resolve_herb(rel: str, root: str) -> str:
     return os.path.join(root, rel) if root else rel
 
 
+def subsample_val(rows: list, cap: int) -> list:
+    """검증셋을 소스 비율 유지한 채 cap 행으로 줄인다. 결정론적.
+
+    eval 은 체크포인트를 고르려고 도는 것이라 전량이 필요 없다. 2차 val 6,085행을
+    다 돌리면 1회 63분 × 9회 = 9.5시간으로, 학습 47~62시간의 15~20%가 여기 쓰인다.
+    """
+    if len(rows) <= cap:
+        return rows
+    frac = cap / len(rows)
+    by_src = collections.OrderedDict()
+    for r in rows:
+        by_src.setdefault(r["_src"], []).append(r)
+    keep = []
+    for src, grp in by_src.items():
+        grp = sorted(grp, key=lambda r: hashlib.md5(
+            json.dumps(r.get("conversations"), ensure_ascii=False,
+                       sort_keys=True).encode()).hexdigest())
+        keep.extend(grp[:max(1, round(len(grp) * frac))])
+    return keep
+
+
 class UnifiedMMDataset:
     """설진+약초 통합. 각 row 에 source('tongue'|'herb') 태그를 달아 균형 샘플링에 사용."""
 
@@ -107,6 +130,8 @@ class UnifiedMMDataset:
                     cnt += 1
                     if max_samples and cnt >= max_samples:
                         break
+        if split != "train" and cfg.get("val_max_rows"):
+            self.rows = subsample_val(self.rows, cfg["val_max_rows"])
         self.sources = [r["_src"] for r in self.rows]
 
     def __len__(self):

@@ -50,8 +50,11 @@ lr_scheduler: cosine
 # 자르면 image 토큰 수가 어긋나 processor 가 ValueError 를 낸다.
 max_seq_len: 1024            # 1차 replay 행 상한 (실측 중앙 128토큰)
 logging_steps: 10
-eval_steps: 300
-save_steps: 300
+# eval 은 체크포인트 선택용이라 자주·전량으로 돌 이유가 없다.
+# 300스텝·전량(6,085행)이면 1회 63분 × 9회 = 9.5시간으로 학습의 15~20%를 먹는다.
+eval_steps: 700              # 총 2,808스텝 → eval 4회
+save_steps: 700
+val_max_rows: 1500           # 소스 비율 유지한 결정론적 부분표집 (eval 1회 약 15분)
 save_total_limit: 2
 grad_checkpointing: true
 
