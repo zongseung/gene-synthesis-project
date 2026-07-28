@@ -8,7 +8,7 @@
 출력: {input_ids: [...2048...]} jsonl. CPT trainer가 바로 읽음.
 
 사용:
-  PYTHONPATH=src .venv/bin/python -m hanmed_mm.data.pack_cpt_varco \
+  PYTHONPATH=src .venv/bin/python -m hanmed.stage2_vlm._ablation.pack_cpt_varco \
       --model models/VARCO-VISION-2.0-14B --seq_len 2048 \
       --out data/cpt_varco/hanmed_ko_packed_varco_2048.jsonl
 """

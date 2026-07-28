@@ -13,16 +13,16 @@ LlavaOnevisionForConditionalGeneration 는 pixel_values 없이 input_ids 만 주
 
 사용:
   # dry-run (모델 로드 없이 데이터로더/콜레이트/스텝계산만)
-  .venv/bin/python -m hanmed_mm.training.cpt_train_varco \
+  .venv/bin/python -m hanmed.stage2_vlm._ablation.cpt_train_varco \
       --config configs/cpt_varco.yaml --dry_run
 
   # smoke (모델 로드+forward+loss+LoRA 부착 확인, 2 step)
-  .venv/bin/python -m hanmed_mm.training.cpt_train_varco \
+  .venv/bin/python -m hanmed.stage2_vlm._ablation.cpt_train_varco \
       --config configs/cpt_varco.yaml --max_steps 2 --max_records 64
 
   # 실제 학습 (2-GPU DDP)
   PYTHONHASHSEED=0 .venv/bin/torchrun --nproc_per_node=2 \
-      -m hanmed_mm.training.cpt_train_varco --config configs/cpt_varco.yaml
+      -m hanmed.stage2_vlm._ablation.cpt_train_varco --config configs/cpt_varco.yaml
 """
 from __future__ import annotations
 

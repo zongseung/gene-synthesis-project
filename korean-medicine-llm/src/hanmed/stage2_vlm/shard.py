@@ -16,7 +16,7 @@
 
 사용:
   # 151 학습셋 시범 샤딩 (다운로드 완료분)
-  PYTHONPATH=src .venv/bin/python -m hanmed_mm.data.shard \
+  PYTHONPATH=src .venv/bin/python -m hanmed.stage2_vlm.shard \
       --root /mnt/nas-rawtext/한의학/aihub --dataset 151 --split train \
       --out data/shards --long_side 768 --shard_size 1e9 --interleave 8 --workers 4
 

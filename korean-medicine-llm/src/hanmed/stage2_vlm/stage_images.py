@@ -7,7 +7,7 @@ NAS가 느리므로: 종별 병렬 · 이미 받은 파일 skip(resume) · per-z
 논리 경로는 build_sft_mm._image_path 와 정확히 일치해야 한다(= trainer가 그대로 조인).
 
 사용:
-  PYTHONPATH=src .venv/bin/python -m hanmed_mm.data.stage_images \
+  PYTHONPATH=src .venv/bin/python -m hanmed.stage2_vlm.stage_images \
       --sft data/sft/mm_train.jsonl data/sft/mm_val.jsonl \
       --out data/images --linked_only --annotation data/annotations/species_annotation.jsonl \
       --workers 4 --limit_species 10            # 우선 10종만 증분 스테이징

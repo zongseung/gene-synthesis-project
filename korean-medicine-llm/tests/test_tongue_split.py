@@ -74,7 +74,7 @@ def test_holdout_selection_is_deterministic(tmp_path):
     """내장 hash() 였다면 PYTHONHASHSEED 마다 val 홀드아웃이 달라졌을 것.
     md5(file_name) hexdigest 정렬을 쓰므로 해시시드가 달라도 같은 556장이 나와야 한다."""
     base_cmd = [
-        sys.executable, "-m", "hanmed_mm.data.gen_tongue_sft",
+        sys.executable, "-m", "hanmed.stage2_vlm.build_tongue",
         "--coco_root", COCO_ROOT,
         "--rule_kb", "data/safety_kb/tongue_rule_kb.json",
         "--manifest", "data/sft/tongue_sft_build_manifest.json",

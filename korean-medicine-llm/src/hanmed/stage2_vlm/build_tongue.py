@@ -13,7 +13,7 @@
 분리한다. 소스 COCO val 은 전량 test 로만 내보내고 학습에는 절대 쓰지 않는다.
 train→{train,val} 분할은 파일명의 md5 정렬(결정론, PYTHONHASHSEED 비의존)로 고른다.
 
-사용: PYTHONPATH=src python -m hanmed_mm.data.gen_tongue_sft \
+사용: PYTHONPATH=src python -m hanmed.stage2_vlm.build_tongue \
         --coco_root <shezhenv3-coco> --rule_kb data/safety_kb/tongue_rule_kb.json \
         --manifest data/sft/tongue_sft_build_manifest.json --out data/sft/tongue_sft \
         --holdout_val 556

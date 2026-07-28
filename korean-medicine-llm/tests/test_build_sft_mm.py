@@ -1,7 +1,7 @@
 """부위 층화 샘플링 — 앞에서 자르면 부위가 쏠린다(실측 206종 중 76종이 1부위)."""
 import pytest
 
-from hanmed_mm.data.build_sft_mm import (NON_PART_MAX_FRAC, _pick, allocate,
+from hanmed.stage2_vlm.build_herb import (NON_PART_MAX_FRAC, _pick, allocate,
                                          render_T1, render_T2)
 
 # allocate 가 받는 행 형식: (species, dataset, part, filename, zip, split)
@@ -43,7 +43,7 @@ def test_pick_is_stable_across_processes():
     import subprocess
     import sys
     code = ("import sys;sys.path.insert(0,'src');"
-            "from hanmed_mm.data.build_sft_mm import _pick;"
+            "from hanmed.stage2_vlm.build_herb import _pick;"
             "print(_pick(['a','b','c','d'],'091_00005175_fruit.jpg'))")
     outs = {subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
                            env={**os.environ, "PYTHONHASHSEED": s}).stdout

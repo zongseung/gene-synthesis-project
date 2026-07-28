@@ -14,7 +14,7 @@
 설계: claudedocs/design_safety_kb_image_annotation_20260625.md
 
 사용:
-  PYTHONPATH=src .venv/bin/python -m hanmed_mm.data.build_sft_mm \
+  PYTHONPATH=src .venv/bin/python -m hanmed.stage2_vlm.build_herb \
       --annotation data/annotations/species_annotation.jsonl \
       --shards 'data/label_index/shards/*.parquet' \
       --out data/sft --per_species_cap 40
