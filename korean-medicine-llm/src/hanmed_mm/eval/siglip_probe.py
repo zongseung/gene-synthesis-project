@@ -13,7 +13,7 @@ claudedocs/vlm_plan/06_training.md §6.3 선행 측정.
 그것만 읽어 SiglipVisionModel 에 적재한다 (약 0.9GB). 학습 중인 SFT 와 GPU 를 나눠 쓴다.
 
 사용:
-  PYTHONPATH=src .venv/bin/python -m hanmed_mm.classifier.siglip_probe \
+  PYTHONPATH=src .venv/bin/python -m hanmed_mm.eval.siglip_probe \
       --per_species 200 --out outputs/siglip_probe
 """
 from __future__ import annotations
