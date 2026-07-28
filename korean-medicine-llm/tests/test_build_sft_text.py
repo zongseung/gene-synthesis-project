@@ -3,7 +3,7 @@ import os
 
 import pytest
 
-from hanmed_mm.data.build_sft_text import abstain_row, render
+from hanmed.stage1_llm.build import abstain_row, render
 
 REC = {
     "book_id": 8, "volume_id": 21, "content_seq": 1234, "content_level": "ZZ",
@@ -39,7 +39,7 @@ def test_tone_rotation_is_deterministic_across_processes():
     import subprocess
     import sys
     code = ("import json,sys;sys.path.insert(0,'src');"
-            "from hanmed_mm.data.build_sft_text import render;"
+            "from hanmed.stage1_llm.build import render;"
             f"print(render({REC!r})['conversations'][0]['value'])")
     outs = {subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
                            env={**os.environ, "PYTHONHASHSEED": seed}).stdout

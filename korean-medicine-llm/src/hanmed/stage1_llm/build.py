@@ -11,7 +11,7 @@ claudedocs/vlm_plan/03_dataset.md §3.1.
   data/sft/text_replay.jsonl  2차 멀티모달 SFT 의 replay 분(train 의 부분집합)
 
 사용:
-  PYTHONPATH=src .venv/bin/python -m hanmed_mm.data.build_sft_text
+  PYTHONPATH=src .venv/bin/python -m hanmed.stage1_llm.build
 """
 from __future__ import annotations
 
