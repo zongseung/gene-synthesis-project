@@ -990,9 +990,8 @@ pytest tests/test_dupi.py -v
 기본은 sklearn `PCA`. 통계적으로 옳은 **GLM-PCA (Townes et al. 2019, Poisson family)** 로 교체하려면:
 
 ```bash
-# Rust 가속 GLM-PCA 빌드 (한 번)
-VIRTUAL_ENV=$(pwd)/.venv .venv/bin/maturin develop --release \
-    -m glm_pca_rs/Cargo.toml
+# Rust 가속 GLM-PCA 설치 (배포된 패키지, 한 번)
+uv pip install glmpca-fast
 
 # GLM-PCA 백엔드로 전처리 실행
 HIPODIT_DIM_RED=glm_pca python src/preprocessing/run_pipeline.py

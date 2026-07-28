@@ -1,0 +1,61 @@
+# ver4 §08 · HanMed Phase A' (동의보감 단일 책) vLLM serving — merged mode.
+#
+# 선결:
+#   PYTHONHASHSEED=0 .venv/bin/python scripts/build_merged_model.py \
+#     --adapter outputs/cpt_bllossom_phaseA/adapter \
+#     --output outputs/hanmed_merged_phaseA
+#
+# 기동:
+#   cd docker && docker compose -f docker-compose.phaseA.merged.yml up -d --build
+# 상태:
+#   docker compose -f docker-compose.phaseA.merged.yml logs -f
+# 중지:
+#   docker compose -f docker-compose.phaseA.merged.yml down
+#
+# OpenAI 호환:
+#   curl http://localhost:8000/v1/chat/completions \
+#     -H "Content-Type: application/json" \
+#     -d '{"model":"hanmed-phaseA","messages":[{"role":"user","content":"동의보감 편찬자는?"}]}'
+
+services:
+  hanmed_vllm_phaseA_merged:
+    build:
+      context: .
+      dockerfile: Dockerfile.vllm
+    image: hanmed-llm:phaseA-merged
+    container_name: hanmed_vllm_phaseA_merged
+    runtime: nvidia
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=0
+      - HF_HUB_OFFLINE=1
+      - TRANSFORMERS_OFFLINE=1
+    command:
+      - --model=/model
+      - --served-model-name=hanmed-phaseA
+      - --tokenizer=/model
+      - --trust-remote-code
+      - --dtype=bfloat16
+      - --port=8000
+      - --host=0.0.0.0
+      - --max-model-len=4096
+      - --max-num-seqs=16
+      - --gpu-memory-utilization=0.85
+      - --disable-log-requests
+    volumes:
+      - ${HANMED_MODEL_DIR:-../outputs/hanmed_merged_phaseA}:/model:ro
+    ports:
+      - "127.0.0.1:8000:8000"
+    restart: unless-stopped
+    shm_size: 8gb
+    logging:
+      driver: json-file
+      options:
+        max-size: "100m"
+        max-file: "3"
