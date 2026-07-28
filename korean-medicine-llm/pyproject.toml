@@ -4,10 +4,6 @@ version = "0.1.0"
 description = "HanMed CLI — Korean medicine classics assistant (ver4 P-A+ CPT)"
 requires-python = ">=3.10"
 dependencies = [
-  "click>=8.1",
-  "rich>=13.7",
-  "prompt_toolkit>=3.0",
-  "httpx>=0.27",
   "torch>=2.6.0",
   "transformers>=5.5.4",
   "peft>=0.13.2",
@@ -37,9 +33,6 @@ package-dir = {"" = "src"}
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["hanmed_mm*"]
-
-[tool.setuptools.package-data]
-"hanmed_cli.prompts" = ["*.ansi", "*.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
