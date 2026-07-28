@@ -17,7 +17,7 @@ import re
 import sqlite3
 from dataclasses import dataclass, field
 
-from hanmed.knowledge.build_ontology import DB_PATH, fact_subjects
+from hanmed.knowledge.build_ontology import DB_PATH, _query_facts
 
 # 근거 없이 단정하면 안 되는 술어. no_knowledge 면 유보시킨다.
 CLAIM_PREDICATES = ("효능", "주치", "금기", "성미", "귀경", "생약명", "약용부위")
@@ -40,7 +40,7 @@ class Verdict:
                 if e["book_id"] is not None]
 
 
-def _norm(s: str) -> str:
+def _norm_punct(s: str) -> str:
     return _PUNCT.sub("", s or "")
 
 
@@ -50,14 +50,10 @@ def _species(con, species_ko: str):
 
 
 def _facts(con, sp, predicate: str | None):
-    # 종당 한약재가 여럿일 수 있다(참깨=白油麻·胡麻) → 대표 하나만 보면 근거를 놓친다.
-    subjects = fact_subjects(con, sp["species_ko"], sp["herb_hanja"])
-    q = "SELECT * FROM fact WHERE subject IN (%s)" % ",".join("?" * len(subjects))
-    params = list(subjects)
-    if predicate:
-        q += " AND predicate=?"
-        params.append(predicate)
-    return [dict(r) for r in con.execute(q, params)]
+    # build_ontology._query_facts 로 위임 — 종당 한약재가 여럿일 수 있어(참깨=白油麻·胡麻)
+    # 대표 하나만 보면 근거를 놓치는 문제를 그쪽의 fact_subjects 가 이미 처리한다.
+    # con 은 이 함수를 호출하기 전 _species() 가 row_factory=sqlite3.Row 로 설정해 둔 커넥션.
+    return _query_facts(con, sp["species_ko"], predicate)
 
 
 def tox_status(species_ko: str, db_path: str = DB_PATH) -> str:
@@ -93,9 +89,9 @@ def verify_claim(species_ko: str, predicate: str, claim: str,
         if not facts:
             return Verdict("unsupported", note="해당 술어의 근거 없음")
 
-        c = _norm(claim)
-        hit = [f for f in facts if _norm(f["object"]) and
-               (_norm(f["object"]) in c or c in _norm(f["object"]))]
+        c = _norm_punct(claim)
+        hit = [f for f in facts if _norm_punct(f["object"]) and
+               (_norm_punct(f["object"]) in c or c in _norm_punct(f["object"]))]
         if hit:
             return Verdict("supported", evidence=hit)
         # 문자열 대조는 의역을 못 잡는다 → 2단이 근거 전문을 받아 판정한다.

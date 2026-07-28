@@ -294,7 +294,9 @@ def build(db_path: str = DB_PATH,
 
 
 # ---------------------------------------------------------------------------
-# 조회 (게이트 1단이 쓰는 진입점)
+# 조회 — lookup(자체 커넥션을 여는 진입점)과 gate.verify._facts(게이트가 이미
+# 열어 둔 커넥션을 재사용) 가 _query_facts 하나를 공유한다. knowledge_status
+# != 'linked' 필터도 여기 한 곳에만 있다.
 # ---------------------------------------------------------------------------
 def fact_subjects(con, species_ko: str, primary: str | None = None) -> list[str]:
     """종이 근거로 삼는 fact.subject 목록 — 연결된 한약재 **전부** + 종명 자체.
@@ -308,6 +310,24 @@ def fact_subjects(con, species_ko: str, primary: str | None = None) -> list[str]
     return [s for s in dict.fromkeys(linked + [primary, species_ko]) if s]
 
 
+def _query_facts(con, species_ko: str, predicate: str | None = None) -> list[dict]:
+    """조회 본체. `con` 은 호출자가 연 커넥션(row_factory=sqlite3.Row 여야 함)을 그대로 쓴다.
+
+    링크가 없거나 candidate 면 빈 리스트 — knowledge_status != 'linked' 필터가
+    여기 한 곳에만 있어, lookup 과 gate.verify 가 서로 다른 판정을 내릴 수 없다.
+    """
+    sp = con.execute("SELECT * FROM species WHERE species_ko=?", (species_ko,)).fetchone()
+    if sp is None or sp["knowledge_status"] != "linked":
+        return []
+    subjects = fact_subjects(con, species_ko, sp["herb_hanja"])
+    q = "SELECT * FROM fact WHERE subject IN (%s)" % ",".join("?" * len(subjects))
+    params = list(subjects)
+    if predicate:
+        q += " AND predicate=?"
+        params.append(predicate)
+    return [dict(r) for r in con.execute(q, params)]
+
+
 def lookup(species_ko: str, predicate: str | None = None,
            db_path: str = DB_PATH) -> list[dict]:
     """종의 사실을 출처와 함께 반환. 링크가 없거나 candidate 면 빈 리스트.
@@ -317,17 +337,7 @@ def lookup(species_ko: str, predicate: str | None = None,
     con = sqlite3.connect(db_path)
     con.row_factory = sqlite3.Row
     try:
-        sp = con.execute("SELECT * FROM species WHERE species_ko=?", (species_ko,)).fetchone()
-        if sp is None or sp["knowledge_status"] != "linked":
-            return []
-        subjects = fact_subjects(con, species_ko, sp["herb_hanja"])
-        q = ("SELECT * FROM fact WHERE subject IN (%s)"
-             % ",".join("?" * len(subjects)))
-        params = list(subjects)
-        if predicate:
-            q += " AND predicate=?"
-            params.append(predicate)
-        return [dict(r) for r in con.execute(q, params)]
+        return _query_facts(con, species_ko, predicate)
     finally:
         con.close()
 
