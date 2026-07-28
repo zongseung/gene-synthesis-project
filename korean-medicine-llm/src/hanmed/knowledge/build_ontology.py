@@ -18,7 +18,7 @@ claudedocs/vlm_plan/03_dataset.md §3.3.
 표시가 없어 predicate 를 추정해야 하므로 넣지 않았다 — 근거 사전에 추측을 넣지 않는다.
 
 사용:
-  PYTHONPATH=src .venv/bin/python -m hanmed_mm.data.build_ontology
+  PYTHONPATH=src .venv/bin/python -m hanmed.knowledge.build_ontology
 """
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ import os
 import re
 import sqlite3
 
-from hanmed_mm.data.link_species import build_index, kb_terms, link
+from hanmed.knowledge.link_species import build_index, kb_terms, link
 
 DB_PATH = "data/ontology.sqlite"
 

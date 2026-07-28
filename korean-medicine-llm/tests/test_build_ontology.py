@@ -3,7 +3,7 @@ import os
 
 import pytest
 
-from hanmed_mm.data.build_ontology import DB_PATH, headword, lookup, section_of
+from hanmed.knowledge.build_ontology import DB_PATH, headword, lookup, section_of
 
 needs_db = pytest.mark.skipif(not os.path.exists(DB_PATH), reason="ontology.sqlite 없음")
 

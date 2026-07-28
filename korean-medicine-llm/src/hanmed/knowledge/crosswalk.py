@@ -9,7 +9,7 @@
 외부 소스(NIFDS 공공API / OASIS 한약기원사전·이명)는 SpeciesResolver 로 교체 가능.
 
 사용:
-  PYTHONPATH=src .venv/bin/python -m hanmed_mm.data.crosswalk \
+  PYTHONPATH=src .venv/bin/python -m hanmed.knowledge.crosswalk \
       --inventory data/species_inventory.csv --seed data/crosswalk_seed.csv \
       --out data/crosswalk.parquet
 """

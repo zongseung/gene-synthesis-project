@@ -12,7 +12,7 @@ species_ko 키로 병합해 `species_annotation.jsonl`(종 1행=1 지식 카드)
 설계: claudedocs/design_safety_kb_image_annotation_20260625.md
 
 사용:
-  PYTHONPATH=src .venv/bin/python -m hanmed_mm.data.annotate \
+  PYTHONPATH=src .venv/bin/python -m hanmed.knowledge.annotate \
       --shards 'data/label_index/shards/*.parquet' \
       --linked _workspace/boncho/04_linked.jsonl \
       --safety_kb data/safety_kb/classical \

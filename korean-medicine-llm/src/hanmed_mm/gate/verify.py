@@ -17,7 +17,7 @@ import re
 import sqlite3
 from dataclasses import dataclass, field
 
-from hanmed_mm.data.build_ontology import DB_PATH, fact_subjects
+from hanmed.knowledge.build_ontology import DB_PATH, fact_subjects
 
 # 근거 없이 단정하면 안 되는 술어. no_knowledge 면 유보시킨다.
 CLAIM_PREDICATES = ("효능", "주치", "금기", "성미", "귀경", "생약명", "약용부위")

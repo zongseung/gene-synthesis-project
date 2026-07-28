@@ -171,7 +171,7 @@ def render_T2(ann, q, key):
     else:
         raise ValueError(
             f"{ann.get('species_ko')}: tox_status={tox!r} — 독성 답변을 만들 수 없다. "
-            "species_annotation.jsonl 을 만드는 hanmed_mm.data.annotate 가 종마다 "
+            "species_annotation.jsonl 을 만드는 hanmed.knowledge.annotate 가 종마다 "
             "toxic/safe_documented/unverified 중 하나를 넣어야 한다."
         )
     return {"from": "gpt", "value": a}, q

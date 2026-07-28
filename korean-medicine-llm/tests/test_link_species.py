@@ -1,5 +1,5 @@
 """S2 — 독음 링크. 동음이의는 보류하고 단일 후보만 링크한다."""
-from hanmed_mm.data.link_species import build_index, link, normalize_reading
+from hanmed.knowledge.link_species import build_index, link, normalize_reading
 
 
 def test_dueum_normalization_matches_both_directions():

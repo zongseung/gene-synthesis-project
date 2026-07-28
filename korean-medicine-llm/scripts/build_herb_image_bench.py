@@ -28,7 +28,7 @@ import sqlite3
 
 import pyarrow.parquet as pq
 
-from hanmed_mm.data.build_ontology import DB_PATH
+from hanmed.knowledge.build_ontology import DB_PATH
 from hanmed_mm.data.build_sft_mm import allocate
 
 DEF_SHARD_INDEX = "data/shards/herb_shard_index.json"
