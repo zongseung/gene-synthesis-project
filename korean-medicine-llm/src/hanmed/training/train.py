@@ -397,7 +397,7 @@ def main() -> int:
     out.mkdir(parents=True, exist_ok=True)
     trainer.save_model(str(out))
     proc.save_pretrained(str(out))
-    with open(Path(cfg["output_dir"]) / "train_manifest.json", "w") as fh:
+    with open(Path(cfg["output_dir"]) / "train_manifest.json", "w", encoding="utf-8") as fh:
         json.dump({"stage": "sft", "tongue_target_frac": cfg["tongue_target_frac"],
                    **{k: cfg[k] for k in ("base_model", "lora_rank", "lr", "epochs")},
                    "placeholder_images": train_ds.n_placeholder},

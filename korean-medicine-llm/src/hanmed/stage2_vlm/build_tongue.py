@@ -23,7 +23,7 @@ import argparse, collections, hashlib, json, os
 
 
 def load_json(p):
-    with open(p) as f:
+    with open(p, encoding="utf-8") as f:
         return json.load(f)
 
 
@@ -81,7 +81,7 @@ def build_answer(signs_present, kb, idx=0):
 
 
 def _write_jsonl(outdir, fname, recs):
-    with open(os.path.join(outdir, fname), "w") as f:
+    with open(os.path.join(outdir, fname), "w", encoding="utf-8") as f:
         for r in recs:
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
 

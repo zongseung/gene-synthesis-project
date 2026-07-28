@@ -42,7 +42,7 @@ def load_records(raw_dir, min_chars=10):
     """번역 대상: 한문 있고 한국어 없음 + min_chars 이상(짧은 제목/편명 제외)."""
     recs = []
     for f in sorted(glob.glob(os.path.join(raw_dir, "vol_*.jsonl"))):
-        for l in open(f):
+        for l in open(f, encoding="utf-8"):
             d = json.loads(l)
             zh = (d.get("original") or "").strip()
             ko = (d.get("trans_ko") or "").strip()
@@ -55,7 +55,7 @@ def load_records(raw_dir, min_chars=10):
 def load_done(out_path):
     done = set()
     if os.path.exists(out_path):
-        for l in open(out_path):
+        for l in open(out_path, encoding="utf-8"):
             try:
                 d = json.loads(l); done.add((d["volume_id"], d["content_seq"]))
             except Exception:
@@ -75,7 +75,7 @@ def main():
 
     # API 키 로드 (.env 의 API_key)
     key = None
-    for line in open(args.env):
+    for line in open(args.env, encoding="utf-8"):
         if line.strip().startswith("API_key"):
             key = line.split("=", 1)[1].strip().strip('"').strip("'")
     if not key:
@@ -93,7 +93,7 @@ def main():
 
     lock = threading.Lock()
     cnt = {"ok": 0, "err": 0, "skip": 0}
-    fout = open(args.out, "a")
+    fout = open(args.out, "a", encoding="utf-8")
 
     def _call(text, strict=False):
         msgs = [{"role": "system", "content": SYS_PROMPT}]
