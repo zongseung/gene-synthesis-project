@@ -1,498 +1,140 @@
-<p align="center">
-  <img src="../hammed_icon/HanMed_1.png" alt="HanMed mascot — turtle apothecary" width="280">
-</p>
+# HanMed-VLM (ver2)
 
-<h1 align="center">HanMed-LLM</h1>
+VARCO-VISION-2.0-14B(LlavaOnevision: SigLIP + Qwen3) 기반 LoRA SFT로 만드는 한의학 멀티모달 모델. 약용식물 사진을 입력받아 **종 식별 · 독성 판별 · 문헌 근거 효능 서술**을 수행하고, 근거가 없으면 명시적으로 유보(abstain)한다. 핵심 요구는 정확도가 아니라 **환각 억제** — 독초를 안전하다고 답하는 것이 최악의 실패 모드다.
 
-<p align="center">
-  <em>동의보감 고전 해제 도우미 · Gemma-3-12B-IT 기반 LoRA SFT + RAG 검색증강 + vLLM 서빙 + 음성 자비스</em>
-</p>
+이전 세대(Gemma-3-12B 텍스트+RAG)는 `ver1/`에 보존되어 있다 — [ver1/README.md](ver1/README.md).
 
 ---
 
-『동의보감(東醫寶鑑)』 원문을 검색·근거로 삼아 편명·처방·본초·병증에 대한 **서지/해제 질문**에 답하는 RAG 기반 어시스턴트다. 답변은 반드시 검색된 원문 발췌에 근거하며, 발췌에 없는 약명·처방명은 생성하지 않는다. **임상 진단·처방 권고 용도가 아니다.**
+## Quick Start
+
+### 환경
+
+이 서브프로젝트는 `korean-medicine-llm/.venv`(Python 3.12)에 전용 가상환경을 갖는다. 저장소 루트의 `.venv`(3.13.6)는 다른 프로젝트(HiPoDiT) 것이며 `hanja`와 완전한 `transformers`가 없다.
+
+```bash
+cd korean-medicine-llm
+# 항상 .venv/bin/python 사용. uv run 금지(장시간 작업 중 의존성 재동기화 위험).
+PYTHONHASHSEED=0 PYTHONPATH=src .venv/bin/python -m hanmed.training.train --config configs/sft_text.yaml --dry_run
+```
+
+주의:
+- **`uv sync`로 이 venv를 재구성할 수 없다** — 현재 `pyproject.toml`(`requires-python>=3.10`)과 `uv.lock`이 numpy 버전 제약과 충돌해 `uv sync`가 즉시 resolution 실패한다(실측, 2026-07-29). 기존 `.venv`를 그대로 쓸 것. 의존성을 바꿀 때는 `uv pip install --dry-run`으로 먼저 확인한다.
+- `torchrun`도 반드시 `.venv/bin/torchrun` + `PYTHONHASHSEED=0` prefix. system `torchrun`은 다른 pyarrow/datasets 버전이라 크래시한다.
+- `vllm` 설치 금지 — torch 2.6.0+cu124 → 2.11.0 교체를 강제해 4bit 경로를 깬다.
+
+### 학습 — 2단 SFT, 트레이너 하나
+
+**파이프라인 순서는 LLM → VLM이다.** 두 단계 모두 같은 트레이너 `src/hanmed/training/train.py` 하나로 돈다 — 코드가 다른 게 아니라, config가 어떤 키를 설정하느냐로 단계가 갈린다. `text_train`만 있으면 텍스트 전용(1차), `tongue_train`/`herb_train`이 있으면 멀티모달(2차)이다. 이것이 이 코드베이스에서 가장 흔히 오해되는 부분이다.
+
+```bash
+# 1차 — 텍스트 SFT (이미지 0장, 고전 번역문으로 도메인 언어 적응)
+PYTHONHASHSEED=0 PYTHONPATH=src .venv/bin/python -m hanmed.training.train \
+    --config configs/sft_text.yaml --dry_run     # 모델 로드 없이 데이터셋/콜레이트만 검증
+PYTHONHASHSEED=0 PYTHONPATH=src .venv/bin/python -m hanmed.training.train \
+    --config configs/sft_text.yaml               # 실제 학습
+
+# 2차 — 멀티모달 SFT (설진+약초 통합, 1차 replay 8.8% 포함)
+PYTHONHASHSEED=0 PYTHONPATH=src .venv/bin/python -m hanmed.training.train \
+    --config configs/sft_varco.yaml --dry_run
+PYTHONHASHSEED=0 PYTHONPATH=src .venv/bin/python -m hanmed.training.train \
+    --config configs/sft_varco.yaml --max_steps 2 --max_samples 16   # smoke (모델 로드+forward+LoRA)
+PYTHONHASHSEED=0 PYTHONPATH=src .venv/bin/python -m hanmed.training.train \
+    --config configs/sft_varco.yaml               # 실제 학습
+```
+
+두 `--dry_run` 커맨드 모두 실측 확인됨 — 1차는 `train=79526`, 2차는 `train=44951`(tongue=4769, herb=36240, text=3942) 데이터셋을 로드하고 콜레이트까지 통과한다.
+
+### 평가
+
+```bash
+# 벤치 빌드 (필요 시 재생성)
+PYTHONHASHSEED=0 PYTHONPATH=src .venv/bin/python -m hanmed.bench.build_bench --out data/eval/hanmed_bench
+
+# 채점 — 골드 기반 모의예측으로 채점기 자체를 검증
+PYTHONHASHSEED=0 PYTHONPATH=src .venv/bin/python -m hanmed.bench.run_eval --demo --track track1
+# 실제 예측 채점
+PYTHONHASHSEED=0 PYTHONPATH=src .venv/bin/python -m hanmed.bench.run_eval --pred <예측.jsonl> --track all
+```
+
+`run_eval.py --demo --track track1` 실행 확인됨(P/R/F1 정상 산출).
 
 ---
 
-## 0. 현재 상태 & 버전 히스토리
+## 모듈 지도 (`src/hanmed/`)
 
-> **운영 중 (서빙):** **ver8.1** — Gemma-3-12B-IT + ver8.1 LoRA(merged) + RAG sidecar.
-> `experiments/dongui_bogam/docker/compose.ver8_1.yml` 로 기동, served model `hanmed-ver8_1`.
->
-> **진행 중 라운드:** **ver8.2** — 친절체(친절한 설명 톤) SFT 라운드. 어댑터·merged 가중치는 디스크에 존재하나
-> `friendly_tone_eval.json` 결과 `overall: FAIL` (friendly_explanation 0.71 < 목표 0.80) — 아직 반복 중.
+| 모듈 | 담당 |
+|---|---|
+| `corpus/` | 원천 zip → label_index parquet 보완, 의방유취 등 한문 원문 → 한국어 번역(GPT API, temperature 0 직역) |
+| `knowledge/` | 종 단위 지식 카드(`annotate.py`) · 근거 사전 SQLite 빌드/조회(`build_ontology.py`) · 학명 크로스워크(`crosswalk.py`) · 한자 독음 링크 확장(`link_species.py`) |
+| `stage1_llm/` | 1차 텍스트 SFT 렌더러(`build.py`) — 고전 번역문을 instruct 포맷으로 감싼다. 답변은 원문 verbatim, 창작 0 |
+| `stage2_vlm/` | 2차 멀티모달 SFT 빌더 — 약초(`build_herb.py`) · 설진(`build_tongue.py`) · WebDataset 샤딩(`shard.py`) · 이미지 스테이징(`stage_images.py`); `_ablation/`에 CPT 경로(기본 미사용, ablation 보존용) |
+| `training/` | 단일 트레이너 `train.py` — config 키로 1차/2차 분기, LoRA(rank64 rslora), 균형 샘플러, 4bit/bf16 겸용 |
+| `shared/` | 라벨 인덱스(`label_index.py`) · 부위 어휘 단일 진실(`parts.py`) · tar 샤드 랜덤 액세스 리더(`shard_image_reader.py`) |
+| `gate/` | 추론 시점 검증 — 1단(KB 조회) 구현됨(`verify.py`); 2단(NLI 함의)·3단(불확실성 탐지)은 미구현 |
+| `bench/` | 평가셋 빌더(`build_bench.py`) · 채점기(`run_eval.py`) · 동결 SigLIP linear probe(`siglip_probe.py`) |
 
-프로젝트는 **26권 다권 CPT → 단권 SFT → 단권 RAG** 로 좁혀져 왔다. 현재 운영 시스템은 동의보감(book_008) 단권 RAG 이며, 26권 통합 코퍼스는 ver4 시기 산출물로 저장소에 보존돼 있다.
+---
 
-| 버전 | Paradigm | Base | 데이터 | 상태 |
-|---|---|---|---|---|
-| v0.1 (ver4 P-A+) | CPT (LoRA r=32) | Bllossom-8B | 26권 mix, 20.4M tok cap | 과거 |
-| Phase A' (ver4 §08) | CPT 단권 | Bllossom-8B | book_008, 5M tok cap | 과거 비교군 |
-| ver5 v3.1 | Fresh SFT (TRL) | Bllossom-8B | `phaseB_qa_diverse_v3_1` (21,475쌍) | 과거 운영 |
-| ver6 | SFT, **base 교체** | **Gemma-3-12B-IT** | `phaseB_qa_v6_corpus` (~18,690행) | 환각·반복 수정 라운드 |
-| v7 | SFT | Gemma-3-12B-IT | `phaseB_qa_v7_corpus` (17,733행) | 매핑 방향 gap 잔존 |
-| ver8 | 데이터 전면 재구축 (설계) | Gemma-3-12B-IT | 76,788행 목표 | **설계 문서만** (v8 builder 미구현) |
-| **ver8.1** | SFT + **RAG 배포** | Gemma-3-12B-IT | `phaseB_qa_v8_1_corpus` (34,039행, audit 수렴) | **서빙 중** |
-| **ver8.2** | 친절체 SFT 라운드 | Gemma-3-12B-IT | `phaseB_qa_v8_2_corpus` (train 30,181 / val 5,327) | 진행 중 (eval 미통과) |
+## 데이터
 
-전환 근거:
+- **종 지식 카드** `data/annotations/species_annotation.jsonl` — 206종. `knowledge_status` 분포(근거 사전 실측): `linked` 80 · `ambiguous` 43 · `unlinked` 83. `tox_status` 분포: `unverified` 104 · `safe_documented` 65 · `toxic` 37.
+- **이미지** 원천 라벨 인덱스 기준 651,415장(151/612 데이터셋 합산, `data/shards/herb_shard_index.json`).
+- **1차 SFT** `data/sft/text_train.jsonl` 79,526행 / `text_val.jsonl` 813행 / `text_replay.jsonl`(2차용) 3,942행.
+- **2차 SFT** 설진 `data/sft/tongue_sft/` train 4,769 · val 556 · test 556. 약초 `data/sft/mm_train_resolved.jsonl` 36,240행 / `mm_val_resolved.jsonl` 4,716행(이미지가 실제로 샤드에 있는 행만; `mm_train.jsonl` 51,640행 중 이미지 미확보분은 제외됨).
+- **근거 사전** `data/ontology.sqlite` — `fact` 7,353건(전부 (book_id, vol, seq) 출처 보유), `species_herb` 링크 81건.
 
-- **ver4 → ver5**: CPT 한계 3중 확증(질문 표현 fragility / safety refusal 0% / 재실행 비결정성) — [`docs/ver5/01_experimental_evidence.md`](docs/ver5/01_experimental_evidence.md)
-- **ver5 → ver6**: SFT 환각(F1)·반복(F3) 공동 원인 + base 모델 교체 (Bllossom-8B → Gemma-3-12B-IT) — [`docs/ver6/00_halluc_repetition_fix_plan.md`](docs/ver6/00_halluc_repetition_fix_plan.md)
-- **v7 → ver8**: v7 코퍼스가 사실상 단방향 사전(name→body) — 역방향 임상 추론 신호 ~0–1% — [`docs/ver8/02_v7_gap_analysis.md`](docs/ver8/02_v7_gap_analysis.md)
-- **ver8 → ver8.1**: v8 builder 미구현 상태에서, v7 builder 산출물에 `sft-quality-fix` 하네스 2라운드 audit/fix 적용 → 수렴 → 학습·RAG 배포 — [`docs/ver8.1/04_round_2_log_and_convergence.md`](docs/ver8.1/04_round_2_log_and_convergence.md)
-- **ver8.1 → ver8.2**: ver8.1 LoRA 가 base Gemma 의 친절한 표현력을 한문 직역체로 좁힘(distribution narrowing) → 친절체 재학습 라운드 — [`docs/ver8.2/00_friendly_tone_plan.md`](docs/ver8.2/00_friendly_tone_plan.md)
+---
 
-## 1. 현재 시스템 개요
+## 벤치마크 — `data/eval/hanmed_bench`
 
-| 구분 | ver8.1 (서빙 중) | ver8.2 (진행 중) |
+5트랙, 총 4,848문항(`manifest.json` 실측). 원래 6트랙 설계였으나 **track5(KISTI 색상 baseline)는 실채점 기능이 없어 삭제**했다 — `score_track5`가 예측을 보지 않고 상수만 반환했고 gold 값이 전부 `[추정]` placeholder였다. 삭제 근거는 `claudedocs/hanmed_benchmark_design.md`.
+
+| 트랙 | n | 측정 |
 |---|---|---|
-| Base | [`google/gemma-3-12b-it`](https://huggingface.co/google/gemma-3-12b-it) (로컬 `models/gemma-3-12b-it`, 262,144 vocab, ~23 GB / 5 shards) | 동일 |
-| Adapter | LoRA r=16, α=32 · 7 proj (q/k/v/o/gate/up/down, embed 제외) | LoRA r=32, α=64 · 7 proj |
-| Objective | TRL SFT (completion-only loss, `--preset gemma`) | 동일 |
-| 학습 데이터 | `phaseB_qa_v8_1_corpus.jsonl` (34,039쌍, train 28,933 / val 5,106) | `phaseB_qa_v8_2_corpus.jsonl` (train 30,181 / val 5,327) |
-| Epochs / LR | 3 / 1e-4 | 2 / 2e-5 |
-| Precision | bf16 | bf16 |
-| Context | 8,192 (base) / 4,096 (서빙) | 동일 |
-| Merged 가중치 | `experiments/dongui_bogam/outputs_ver8_1_gemma_v1/merged/` (~24 GB) | `experiments/dongui_bogam/outputs_ver8_2_gemma_v1/{adapter,merged,merged_text}/` |
-| 서빙 모델명 | `hanmed-ver8_1` | (ver8.2 수렴 시 re-merge 예정) |
-| 서빙 방식 | RAG sidecar (FastAPI :8080) + vLLM 컨테이너 (:8000) | 동일 — vLLM 만 swap, RAG sidecar 유지 |
-
-핵심은 **base 모델이 답을 "아는" 것이 아니라, RAG 가 동의보감 원문 발췌를 찾아 LLM 에 컨텍스트로 넣고 LLM 은 그 발췌만으로 답하게 강제**하는 구조다. LoRA SFT 는 답변의 형식·톤(편명 요약 / 처방 구조 / 친절체)을 학습할 뿐, 사실 자체는 검색 발췌에서 온다.
-
-## 2. 아키텍처 & 작동 흐름
-
-### 2.1 전체 파이프라인 (build → serve)
-
-```mermaid
-flowchart TD
-    A["mediclassics.kr 동의보감 book_008<br/>23권 · 34,040 레코드"] -->|"크롤 (rate-limited 병렬)"| B["data/raw/mediclassics_unified/book_008/vol_*.jsonl<br/>한문 original + 국역 trans_ko 병렬"]
-    B --> C{"두 갈래"}
-
-    C -->|"SFT 학습 경로"| D["v7 builder<br/>build_sft_full_corpus.py + augment_sft_v7.py<br/>→ phaseB_qa_full_corpus.jsonl (34,039쌍)"]
-    D --> E["sft-quality-fix 하네스<br/>round_1 → round_2 audit/fix<br/>(entity mask · dosage mask · format id)"]
-    E --> F["phaseB_qa_v8_1_corpus.jsonl<br/>34,039쌍 · audit 수렴 (0 FAIL)"]
-    F --> G["ver8.2 친절체 증강<br/>gold 100행 + base Gemma rewrite ~10k행<br/>→ phaseB_qa_v8_2_corpus.jsonl"]
-    G --> H["sft_trainer.py --preset gemma<br/>Gemma-3-12B-IT + LoRA · single-GPU"]
-    H --> I["build_merged_model_ver8_1.py<br/>→ outputs_ver8_*_gemma_v1/merged (~24 GB)"]
-
-    C -->|"RAG 인덱스 경로"| J["build_rag_index.py<br/>BAAI/bge-m3 인코딩 (1024-dim)"]
-    J --> K["data/rag/book_008.index (FAISS IndexFlatIP, 139 MB)<br/>+ book_008.meta.jsonl (34,040 벡터)"]
-
-    I --> L["vLLM 컨테이너<br/>hanmed_vllm_ver8_1 :8000 (GPU, 내부)"]
-    K --> M["RAG sidecar<br/>hanmed_rag :8080 (FastAPI, CPU, 공개)"]
-    L --> M
-    M --> N["CLI 3종<br/>hanmed-bogam · -voice · -hologram"]
-```
-
-### 2.2 RAG 요청 흐름 (`POST /rag/answer`)
-
-검색·안전·생성을 한 번의 요청 안에서 처리한다. 사용자는 LLM 에 직접 닿지 않고 항상 sidecar 를 거친다.
-
-```mermaid
-flowchart TD
-    Q["사용자 질의"] --> PRE{"pre_check<br/>UNSAFE 패턴 매치?"}
-    PRE -->|"매치 (자가진단·복용량·임신/소아·자해 등)"| REF["REFUSAL_TEMPLATE 반환<br/>mode=REFUSED · 검색/LLM 호출 없음"]
-    PRE -->|"통과"| CI["is_clinical_intent<br/>→ 임상 의도 시 dosage-mask 플래그"]
-    CI --> HS["hybrid_search"]
-
-    subgraph HS_DETAIL["RagCore.hybrid_search"]
-        EN["extract_names<br/>한자 변형 정규화 + KO↔한자 alias 확장"]
-        EN --> BS["boost_search (lexical)<br/>up_path_nm leaf 어휘 매칭<br/>湯液篇 슬롯 1개 보장"]
-        EN --> DS["dense search<br/>bge-m3 인코딩 → FAISS IndexFlatIP (k×2)"]
-        BS --> FU["fusion<br/>boost 우선 concat → top-k 절단"]
-        DS --> FU
-    end
-
-    HS --> EX["build_excerpt_block<br/>발췌 N개 조립 → [동의보감 발췌] ... [질문] ..."]
-    EX --> GEN["SYSTEM_RAG (grounding 강제 system prompt)<br/>→ vLLM /v1/chat/completions<br/>Gemma-3-12B · temp 0.0 · rep_penalty 1.1"]
-    GEN --> POST["post_check<br/>임상 의도 시 용량 표현 [MASKED] 치환"]
-    POST --> RESP["AnswerResponse<br/>answer · extracted_names · retrieved[] · safety · mode=STRICT · elapsed_ms"]
-    REF --> RESP
-```
-
-### 2.3 단계별 역할
-
-| 단계 | 코드 | 입력 | 출력 | 핵심 역할 |
-|---|---|---|---|---|
-| 수집 | `src/data/crawler/mediclassics_orchestrator.py` | book_id | `data/raw/mediclassics_unified/book_008/vol_*.jsonl` | 권별 병렬 크롤, content_seq resume |
-| SFT 코퍼스 빌드 | `scripts/build_sft_full_corpus.py` + `scripts/augment_sft_v7.py` | raw jsonl | `phaseB_qa_full_corpus.jsonl` | book_008 → Q/A 쌍 (v7 builder) |
-| 품질 audit/fix | `sft-quality-fix` 하네스 (`docs/ver8.1/`) | full_corpus | `phaseB_qa_v8_1_corpus.jsonl` | 10차원 감사 + 행 단위 수정, 2라운드 수렴 |
-| 친절체 증강 | ver8.2 rewrite 파이프라인 (`docs/ver8.2/`) | v8_1 corpus | `phaseB_qa_v8_2_corpus.jsonl` | gold 100행 + base Gemma rewrite 혼합 |
-| 학습 | `experiments/dongui_bogam/src/training/sft_trainer.py` | v8_x corpus | LoRA adapter | TRL SFT, `--preset gemma`, single-GPU |
-| 병합 | `experiments/dongui_bogam/scripts/build_merged_model_ver8_1.py` | adapter | merged HF model | `peft.merge_and_unload` |
-| RAG 인덱스 | `scripts/build_rag_index.py` | book_008 raw jsonl | `data/rag/book_008.{index,meta.jsonl}` | bge-m3 인코딩 → FAISS IndexFlatIP |
-| 서빙 (LLM) | `experiments/dongui_bogam/docker/compose.ver8_1.yml` (`hanmed_vllm_ver8_1`) | merged model | OpenAI 호환 API (:8000, 내부) | vLLM, bf16, max_num_seqs 8 |
-| 서빙 (RAG) | `experiments/dongui_bogam/rag_service/` (`hanmed_rag`) | FAISS index + meta | `POST /rag/answer` (:8080, 공개) | 검색 + safety + LLM 호출 오케스트레이션 |
-| 클라이언트 | `experiments/dongui_bogam/bogam_cli/` | stdin / 마이크 | 텍스트·음성 응답 | 텍스트 REPL + 음성 자비스 (§4) |
-
-## 3. RAG 서비스
-
-`experiments/dongui_bogam/rag_service/` — FastAPI CPU sidecar. GPU vLLM 컨테이너 앞단에 붙어 검색·안전·생성을 묶는다.
-
-### 3.1 인덱스
-
-| 항목 | 값 |
-|---|---|
-| 빌드 스크립트 | `scripts/build_rag_index.py` |
-| 입력 | `data/raw/mediclassics_unified/book_008/vol_01~23.jsonl` (34,040 레코드) |
-| 청킹 | **없음** — 레코드 1개(원문 1 content_seq) = 벡터 1개 |
-| 임베딩 텍스트 | `up_path_nm` + `trans_ko` + `original`(국역과 다를 때만) 연결 |
-| 인코더 | `BAAI/bge-m3` (1024-dim, 다국어, 한자+한국어 강함), `normalize_embeddings=True` |
-| 인덱스 | FAISS `IndexFlatIP` — 정규화 벡터 내적 = 코사인. 34,040 벡터는 flat 으로도 충분히 빠름 |
-| 산출 | `data/rag/book_008.index` (139 MB) · `book_008.meta.jsonl` (15 MB, 34,040행) |
-
-### 3.2 엔드포인트
-
-| 메서드 | 경로 | 설명 |
-|---|---|---|
-| `GET` | `/health` | `{"rag": "ok", "vllm": <status>}` — vLLM 업스트림 health 동시 확인 |
-| `GET` | `/rag/retrieve?query=&k=5&boost_k=2` | 검색만 (LLM 호출 없음) — 디버그용 |
-| `POST` | `/rag/answer` | 메인 파이프라인. req `{query, k=5, boost_k=2}` → resp `{answer, extracted_names, retrieved[], safety, mode, elapsed_ms, prompt_tokens}` |
+| track1_tongue_byeonjeung | 556 | 설진 다중라벨 P/R/F1(카테고리별) + 변증 부분문자열 recall |
+| track2_donguibogam_citation | 544 (골드 인용 937) | 동의보감 인용 precision/recall(글자단위+복합키). 골드 인용 전량이 원문에 부분문자열로 grounding 검증됨(grounding_rate=1.0) |
+| track3_abstain | 68 | 가짜 약초명·가짜 설진 소견·위험 요청 등에 대한 보류 정확도, 적정/부적정 보류율(over-refusal 포함) |
+| track4_herb_toxic_id | 90 (독초 30 / 비독초 60) | 종 top-1 정확도 + 독초 per-class P/R. text-only(학명 질문)라 이미지 능력은 측정하지 않음 |
+| track6_herb_image | 3,590 (148종) | 종 top-1 + 독성 라벨 정확도 + abstain 판정, probe_type(species_id/toxicity/efficacy_abstain/answerable_control)별 개별 보고. 독성 다수결 baseline 59.17% |
 
-### 3.3 검색 로직 (`rag_core.py`)
+---
 
-1. **한자 정규화 + 이름 추출** — `蔘→參` 등 변형 한자 통일, 정규식으로 처방/본초명 후보 추출, KO↔한자 alias 양방향 확장(`사물탕↔四物湯`, `인삼↔人參` 등 소규모 하드코딩 표).
-2. **boost (lexical)** — 34,040 meta 레코드의 `up_path_nm` leaf 를 어휘 매칭. `湯液篇`(본초) 항목은 슬롯 1개 보장. body 30자 미만 레코드는 제외.
-3. **dense** — 원 질의를 bge-m3 로 인코딩 → FAISS 에서 `k×2` 후보 검색, boost 중복 제거.
-4. **fusion** — boost 결과를 `sim=1.0` 으로 앞에 놓고 dense 를 FAISS 순위대로 이어붙여 top-k 절단. **학습형 reranker 없음** — boost 우선 concat 이 전부.
-5. **프롬프트 조립** — 발췌를 `[N] {경로} ({level})\n{국역}` 형식으로 합쳐 `SYSTEM_RAG` + 발췌 + 질문 → vLLM `/v1/chat/completions`.
+## 안전 설계
 
-### 3.4 안전 계층 (`src/hanmed_cli/safety.py`)
+이 프로젝트가 존재하는 이유가 이 절이다: **검증되지 않은 것을 안전하다고 말하면 안 된다.**
 
-| 계층 | 동작 |
-|---|---|
-| `pre_check` | UNSAFE 정규식(자가진단·복용량·임신/소아 복용·자해·구체 질환 치료 등) 매치 → 검색·LLM 호출 없이 즉시 거절, `mode=REFUSED` |
-| `is_clinical_intent` | 약한 임상 의도 정규식 — 거절하진 않고 `post_check` 의 용량 마스킹 플래그만 세움 |
-| `post_check` | 임상 의도 플래그 시 용량 단위(돈/푼/냥/g…)·"각 N단위"·복용 동작 표현을 `[MASKED]` 로 치환 |
+### 3값 이산 라벨, 폴백 없음
 
-### 3.5 주요 설정 (`rag_service/settings.py`, env override 가능)
+`tox_status`는 `toxic` / `safe_documented` / `unverified` 셋 중 하나이며 확률이 아니다. `unverified`를 "안전"으로 읽는 것이 이 프로젝트에서 가장 흔한 오독이다. `stage2_vlm/build_herb.py`의 `render_T2`는 이 3값을 그대로 분기하며 **폴백이 없다** — `tox_status`가 없거나 인식 불가한 값이면 `ValueError`로 죽는다. 이전 폴백은 `is_poisonous`(bool)를 봤는데 이 라벨이 "미검증"과 "무독 확인"을 구분하지 못해, `unverified` 8,085행 전부가 "독초로 분류되지 않습니다"라는 안전 단정으로 렌더되고 있었다 — fail-open 결함이었고 지금은 제거됐다.
 
-| 키 | 기본값 | 키 | 기본값 |
-|---|---|---|---|
-| `vllm_url` | `http://hanmed_vllm_ver8_1:8000` | `top_k` | `5` |
-| `vllm_model` | `hanmed-ver8_1` | `boost_k` | `2` |
-| `encoder_name` | `BAAI/bge-m3` (CPU) | `min_body_len` | `30` |
-| `faiss_index_path` | `/rag_data/book_008.index` | `max_tokens` | `400` |
-| `faiss_meta_path` | `/rag_data/book_008.meta.jsonl` | `temperature` | `0.0` (greedy) |
-| `vllm_timeout_s` | `60.0` | `repetition_penalty` | `1.1` |
+### 게이트 1단은 독성 판정을 단독으로 책임진다
 
-> **연결 구조**: RAG sidecar 는 로컬 GPU 를 쓰지 않는다. bge-m3 임베딩만 컨테이너 내 CPU 에서 돌리고, 생성은 별도 GPU vLLM 컨테이너(`hanmed_vllm_ver8_1:8000`, 도커 브리지 네트워크 내부 — 호스트 미노출)로 httpx POST 한다.
+`src/hanmed/gate/verify.py`의 `verify_claim`은 독성 술어(`독성`)를 만나면 고전 본문 대조 없이 `species.tox_status` 라벨만 답한다. 동의보감이 龍葵(까마중)를 무독이라 적어도, 현대 주석이 `toxic`이면 `toxic`이다. 최악의 실패 모드(독초를 안전하다고 답함)와 직결되므로 여기엔 확률 판정도 문헌 대조도 개입시키지 않는다. 효능·주치 등 다른 술어는 KB 조회로 `supported`/`unsupported`/`no_knowledge`를 매기고, `no_knowledge`(링크 없음)면 그 주장 자체를 유보로 치환한다.
 
-## 4. 음성 자비스 (voice JARVIS)
+### 자동 링크는 기본적으로 신뢰하지 않는다
 
-`experiments/dongui_bogam/bogam_cli/` — 텍스트 RAG REPL 에 STT·TTS 를 붙인 음성 인터페이스. 두뇌(RAG sidecar)는 그대로 두고 양 끝만 음성으로 바꾼다. 상세: [`experiments/dongui_bogam/README.md`](experiments/dongui_bogam/README.md).
+한자 독음 대조로 종↔표제어 링크를 80→107종으로 자동 확장했으나, 27종(현재 29종) 전수 검사에서 오류율 26%가 나왔다 — 서양등골나물(국화과 독초)이 메밀의 표제어(蕎麥)에 연결되는 식이었다. 독성 충돌 필터로는 이 오류가 안 걸린다(전부 `tox_status=unverified`). [ADR-0001](docs/adr/0001-toxicity-conflict-holds-auto-links.md)·[ADR-0002](docs/adr/0002-reading-links-are-recorded-not-served.md)에 따라 `link_grade=reading`은 `candidate`와 동일하게 취급되어 **기록만 하고 게이트가 쓰지 않는다**. 사람이 확인한 `exact_hanja` 링크만 게이트가 근거로 낸다. 독성 충돌 표시 종은 8건이며 사람 검토용으로 유지된다.
 
-### 4.1 파이프라인
+### 답변 게이트
 
-```mermaid
-flowchart LR
-    MIC["🎤 마이크 녹음<br/>push-to-talk"] --> STT["faster-whisper STT<br/>large-v3-turbo · ko · VAD"]
-    STT --> RAG["POST :8080/rag/answer<br/>RAG sidecar (§3)"]
-    RAG --> CLEAN["clean_for_speech<br/>[N] 인용마커·한자·빈괄호 제거<br/>'풀이:' → 구어 전환구"]
-    CLEAN --> TTS["TTS<br/>openai gpt-4o-mini-tts (기본)<br/>키 없음·API 오류 시 edge-tts 폴백"]
-    TTS --> PLAY["🔊 재생<br/>+ 오디오 진폭 파형 시각화"]
-    PLAY -.->|"hologram 상태: idle → listening → thinking → speaking"| MIC
-```
+`gate.verify.gate_answer`는 판정을 문장으로 바꾼다 — `no_knowledge`는 "문헌 기록이 없어 답변을 유보합니다", `supported`는 근거(권·seq)를 붙이고, `unsupported`는 "문헌 근거를 확인하지 못했습니다"로 유보한다. 2단(NLI 함의 판정)이 아직 없어 `unsupported`도 잠정적으로 유보 처리한다.
 
-### 4.2 Entry point 3종 (`experiments/dongui_bogam/pyproject.toml`)
+---
 
-| Entry point | 모듈 | 설명 |
-|---|---|---|
-| `hanmed-bogam` | `bogam_cli.chat:main` | 텍스트 RAG REPL — Rich 기반, `POST /rag/answer` 클라이언트. `--show-retrieved` 로 발췌 표 |
-| `hanmed-bogam-voice` | `bogam_cli.voice:main` | 터미널 음성 REPL — 거북이 ANSI 마스코트 + 사운드웨이브. `--device` 기본 `cuda`(서버) |
-| `hanmed-bogam-hologram` | `bogam_cli.hologram_app:main` | pywebview 홀로그램 GUI — 프레임리스·항상 위 창, 클릭하여 대화. `--device` 기본 `cpu`(맥) |
+## 알려진 한계
 
-세 entry point 모두 동일한 `/rag/answer` 두뇌를 공유한다 (`voice.py`/`hologram_app.py` 가 `chat.py` 의 클라이언트를 재사용).
+- **62/206종에 학습 이미지가 없다.** 612 데이터셋이 부분 샤딩(121종 중 30종만 로컬 확보)이라, 종 지식 카드는 206종에 있지만 실제 이미지가 붙은 종은 144종뿐이다(`mm_train_resolved.jsonl` ∪ `mm_val_resolved.jsonl` 기준 실측). `stage2_vlm/build_herb.py`의 `write_resolved`가 이 필터링을 수행한다.
+- **괄호가 든 종명 4종이 경로 라운드트립 불일치로 드롭된다.** `당백출(큰꽃삽주)` · `망강남(석결명)` · `지리강활(개당귀)` · `파(실파)` — SFT 빌더(`build_herb.py`)는 `species_annotation.jsonl`의 원본 종명(괄호 포함)으로 논리 경로를 만드는데, 샤드 인덱스는 `shard.py:59`의 `re.sub(r"[^0-9A-Za-z가-힣_-]", "_", s)`가 괄호를 밑줄로 바꿔 저장한다(`064_당백출(큰꽃삽주)` vs 인덱스의 `064_당백출_큰꽃삽주`). 두 경로가 문자열로 어긋나 이 4종은 `mm_*_resolved.jsonl`에서 전량 제외된다.
+- **게이트 2단·3단은 미구현이다.** 1단(KB 조회)만 동작하며, `verify.py`의 `unsupported` 처리는 "2단 미구현이라 아직 유보한다"는 잠정 조치다. 3단(불확실성 탐지)은 `bench/siglip_probe.py`의 동결 SigLIP top-k 마진을 근거로 설계만 되어 있다(`docs/adr/0003`).
+- **`uv sync`로 이 venv를 재구성할 수 없다.** 위 Quick Start 참고.
 
-### 4.3 홀로그램 GUI
+---
 
-pywebview 데스크톱 앱 (`bogam_cli/hologram/index.html`). 프레임리스·`on_top` 창에 사이안 글로우/스캔라인 비주얼과 거북이 마스코트가 **idle/listening/thinking/speaking** 상태별로 애니메이션된다. 홀로그램을 클릭하면 녹음 시작, 다시 클릭하면 종료 → 처리 → 답변. 재생 중 오디오 진폭이 파형으로 시각화된다. macOS 세그폴트 회피를 위해 무거운 네이티브 라이브러리는 lazy import.
+## 문서
 
-### 4.4 SSH 터널 (off-server 실행)
+- [`CONTEXT.md`](CONTEXT.md) — 용어집(종/표제어/링크, knowledge_status, tox_status, 게이트 판정값 등)
+- [`claudedocs/vlm_plan/`](claudedocs/vlm_plan/) — 설계 전체. [`00_README.md`](claudedocs/vlm_plan/00_README.md)가 문서 지도, [`02_decisions.md`](claudedocs/vlm_plan/02_decisions.md)가 확정 결정과 근거
+- [`docs/adr/`](docs/adr/) — 결정 기록(ADR-0001 독성 충돌, ADR-0002 독음 링크, ADR-0003 별도 분류기 폐기)
 
-GUI/음성 CLI 를 RAG 서버와 다른 머신(맥)에서 띄울 때는 서버의 8080 포트로 **SSH 로컬 포워딩**을 열어 둔다:
-
-```bash
-# 맥에서 — 서버 8080 → 맥 localhost:8080
-ssh -L 8080:localhost:8080 <user>@<서버>
-# 터널을 띄운 채로
-hanmed-bogam-hologram --device cpu
-```
-
-`--endpoint` 기본값이 `http://localhost:8080` 이라 터널을 통해 sidecar 에 닿는다. 터널이 없으면 창에 `⚠ RAG 서버 연결 안 됨 — SSH 터널(8080) 확인` 경고가 뜬다.
-
-### 4.5 설치
-
-음성 기능은 `voice` optional-dependency extra (라이브 녹음·재생은 PortAudio 필요 — 맥 권장):
-
-```bash
-uv pip install -e "experiments/dongui_bogam[voice]"
-```
-
-`voice` extra: `faster-whisper`, `edge-tts`, `openai`, `pywebview`, `sounddevice`, `soundfile`.
-
-## 5. 데이터 스펙
-
-### 5.1 코퍼스 — 동의보감 (book_008)
-
-| 항목 | 값 |
-|---|---|
-| Source | KIOM mediclassics.kr 한의학고전DB |
-| 원문 | 23권 · **34,040 레코드** (한문 `original` + 국역 `trans_ko` 병렬), 5편(내경·외형·잡병·탕액·침구) |
-| ver8.1 SFT 코퍼스 | `phaseB_qa_v8_1_corpus.jsonl` — 34,039쌍, raw 커버리지 99.997% (누락 1건 = `vol_18/seq_984` 빈 부적 레코드) |
-| ver8.2 SFT 코퍼스 | `phaseB_qa_v8_2_corpus.jsonl` — train 30,181 / val 5,327 (ver8.1 + 친절체 증강분) |
-| RAG 인덱스 | `data/rag/book_008.{index,meta.jsonl}` — 34,040 벡터 |
-
-> 26권 통합 코퍼스(ver4 시기, `data/raw/mediclassics_unified/` 의 나머지 book)는 저장소에 보존돼 있으나 현 운영 시스템(ver8.x)은 동의보감 단권만 사용한다.
-
-### 5.2 ver8.1 코퍼스 분포 & audit 결과
-
-q_format 분포: 병증 17,085 / 편명 11,078 / 본문 5,319 / 서문 465 / 총목 92.
-
-`sft-quality-fix` 하네스 2라운드 후 audit (0 FAIL):
-
-| 차원 | 결과 |
-|---|---|
-| literal_quote | pass (0.9933) |
-| entity_whitelist | pass (deny_hits 0) |
-| dosage_leak | warn (22행 / 0.06% — 전부 고전 인용 내부) |
-| disclaimer / format_diversity / near_duplicate / length / atomic_fact | pass |
-
-### 5.3 Factsheet
-
-`data/facts/core_factsheet.yaml` — 26권 수기 검증 fact sheet (저자·왕대·연도·장르·주요 처방). book_008 동의보감 항목은 저자 허준(許浚)·선조 명·1610 편찬·1613 간행·5편 구성 등 검증값 보유.
-
-### 5.4 데이터 포맷
-
-**raw** (`mediclassics_unified/book_008/vol_*.jsonl`):
-```json
-{"book_id": 8, "volume_id": 1, "content_seq": 138,
- "content_level": "ZZ", "up_path_nm": "內景篇卷之一 > 東醫寶鑑序",
- "original": "乾鑿度云 …", "trans_ko": "《건착도》에 …"}
-```
-
-**SFT 쌍** (`phaseB_qa_v8_1_corpus.jsonl`): `id, category, subcat, up_path_nm, question, assistant, messages` + `q_format`/`a_format` enum.
-
-**RAG meta** (`book_008.meta.jsonl`, 벡터 1개당 1행): `id, volume_id, content_seq, content_level, up_path_nm, trans_ko, original`.
-
-## 6. 학습 프로토콜
-
-| 하이퍼파라미터 | ver8.1 | ver8.2 |
-|---|---|---|
-| Trainer | `sft_trainer.py --preset gemma` (TRL SFTTrainer, completion-only loss) | 동일 |
-| Base | `models/gemma-3-12b-it` | 동일 |
-| LoRA | r=16, α=32 · q/k/v/o/gate/up/down (embed/lm_head 제외) | r=32, α=64 · 동일 target |
-| Epochs / LR | 3 / 1e-4 | 2 / 2e-5 |
-| `response_template` | `<start_of_turn>model\n` | 동일 |
-| max_seq_len | 4,096 | 4,096 |
-| GPU | **single-GPU** (DDP 첫 step hang 으로 단일 GPU 폴백) | 동일 |
-| Precision | bf16 | bf16 |
-| 산출 | `outputs_ver8_1_gemma_v1/{adapter,merged}` | `outputs_ver8_2_gemma_v1/{adapter,merged,merged_text}` |
-
-> ver8.2 의 `friendly_tone_eval.json` 은 현재 `overall: FAIL` (friendly_explanation 0.71 < 목표 0.80, body_preservation FAIL; disclaimer·hanja·safety 회귀는 PASS). 친절체 라운드는 아직 반복 중이며, 서빙은 ver8.1 이 담당한다.
-
-## 7. 서빙 배포
-
-### 7.1 서빙 스택 (`experiments/dongui_bogam/docker/compose.ver8_1.yml`)
-
-도커 브리지 네트워크 위에 컨테이너 2개:
-
-| 서비스 | 역할 | 포트 | 디바이스 |
-|---|---|---|---|
-| `hanmed_rag` | FastAPI RAG sidecar (검색 + safety + LLM 호출) | **8080 공개** | CPU (bge-m3 임베딩) |
-| `hanmed_vllm_ver8_1` | vLLM — Gemma-3-12B + ver8.1 LoRA(merged) 서빙 | 8000 내부 (호스트 미노출) | GPU 0 |
-
-vLLM 옵션: `--served-model-name=hanmed-ver8_1 --dtype=bfloat16 --max-model-len=4096 --max-num-seqs=8 --gpu-memory-utilization=0.85`. `hanmed_rag` 는 `depends_on: hanmed_vllm_ver8_1 (service_healthy)` 로 vLLM health 를 기다린다.
-
-### 7.2 배포 절차
-
-```bash
-# (저장소 최상위에서 실행 — 스크립트 기본 경로가 repo root 기준)
-
-# 1. adapter → merged 모델 (학습 완료 후, 기본 입출력 = outputs_ver8_1_gemma_v1/{adapter,merged})
-PYTHONHASHSEED=0 .venv/bin/python experiments/dongui_bogam/scripts/build_merged_model_ver8_1.py
-
-# 2. RAG 인덱스 빌드 (최초 1회 — data/rag/book_008.{index,meta.jsonl} 생성)
-CUDA_VISIBLE_DEVICES=0 .venv/bin/python scripts/build_rag_index.py
-
-# 3. 서빙 스택 기동 (vLLM + RAG sidecar)
-cd experiments/dongui_bogam/docker
-docker compose -f compose.ver8_1.yml up -d --build
-
-# 4. 헬스 확인 & 샘플 질의
-curl -sf http://localhost:8080/health
-curl -s http://localhost:8080/rag/answer \
-  -H 'Content-Type: application/json' \
-  -d '{"query":"동의보감 혈문의 사물탕은 어떤 처방인가?","k":5}' | jq -r '.answer'
-```
-
-스모크 테스트 절차: [`experiments/dongui_bogam/docker/SMOKE_TEST_ver8_1.md`](experiments/dongui_bogam/docker/SMOKE_TEST_ver8_1.md).
-
-> 저장소 최상위 `docker/` 의 compose 파일들(`docker-compose.{yml,merged,phaseA*,gemma,ver5_v3_1}.yml`)은 ver5 이하 레거시 서빙 경로다. 현 운영 스택은 `experiments/dongui_bogam/docker/compose.ver8_1.yml`.
-
-## 8. CLI 사용
-
-```bash
-# bogam_cli 설치 (RAG 연동 — 현 운영 CLI)
-uv pip install -e experiments/dongui_bogam              # 텍스트만
-uv pip install -e "experiments/dongui_bogam[voice]"     # 음성 자비스 포함
-
-# 텍스트 RAG REPL (RAG sidecar :8080 기동 전제)
-hanmed-bogam
-hanmed-bogam -q "사물탕의 구성원리는?"          # 1회 질의
-hanmed-bogam --show-retrieved                   # 발췌 표 표시
-
-# 음성 자비스 (§4)
-hanmed-bogam-voice --device cuda                # 터미널 음성 REPL (서버)
-hanmed-bogam-hologram --device cpu              # 홀로그램 GUI (맥, SSH 터널 필요)
-```
-
-REPL 슬래시 명령: `/help /retrieved /reset /exit`.
-
-> 저장소 최상위 `src/hanmed_cli/` 의 `hanmed` CLI 는 RAG 없이 vLLM 에 직접 붙는 ver4/ver5 시기 레거시 REPL 이다. 현 RAG 시스템 클라이언트는 `bogam_cli`.
-
-## 9. 리소스 요구사항
-
-### 9.1 학습 (one-time)
-
-| 항목 | 요구 |
-|---|---|
-| GPU | NVIDIA A6000 48 GB **1장** (DDP 미사용 — 첫 step hang 으로 single-GPU 폴백) |
-| 모델 | Gemma-3-12B-IT bf16 + LoRA + optimizer + activation checkpointing |
-| 디스크 | base ~23 GB + merged ~24 GB + 체크포인트 |
-
-### 9.2 서빙
-
-| 항목 | 요구 |
-|---|---|
-| GPU | **1장** — Gemma-3-12B-IT merged(~24 GB) bf16, `gpu-memory-utilization 0.85` |
-| 권장 | A6000 48 GB / A100 40 GB |
-| RAG sidecar | **CPU only** — bge-m3 임베딩(~2 GB) + FAISS index(139 MB) |
-| Docker + nvidia-container-toolkit | 필수 |
-
-### 9.3 클라이언트 (CLI)
-
-| 항목 | 요구 |
-|---|---|
-| Python | ≥ 3.10 |
-| 기본 의존성 | `httpx>=0.27 rich>=13` |
-| `voice` extra | `faster-whisper edge-tts openai pywebview sounddevice soundfile` (라이브 녹음·재생은 PortAudio — 맥 권장) |
-| 네트워크 | RAG sidecar(`--endpoint`, 기본 `:8080`) 도달 가능 (off-server 시 SSH 터널) |
-
-## 10. 재현성
-
-| 항목 | 보장 방식 |
-|---|---|
-| PYTHONHASHSEED | 데이터 스크립트 `PYTHONHASHSEED=0` prefix 필수 |
-| 데이터 무결성 | `phaseB_qa_v8_1_corpus.stats.json` 에 SHA256·행수·raw 커버리지 기록 |
-| audit trail | `sft-quality-fix` 하네스 round_1/round_2 supervisor 보고서 + `final_report.md` |
-| 학습 config | `outputs_ver8_*/train_manifest.json` 에 base·데이터·HP 전체 기록 |
-| RAG 결정성 | 생성 `temperature=0.0` (greedy), FAISS `IndexFlatIP` 는 exact (근사 없음) |
-
-## 11. 디렉토리 구조
-
-```
-korean-medicine-llm/
-├── README.md                       # 이 파일
-├── pyproject.toml                  # 레거시 hanmed CLI 엔트리 (ver4/5)
-│
-├── docs/
-│   ├── 01_overview ~ 09_roadmap/    # 주제별 원자 문서 (r0)
-│   ├── ver2/, ver3/, ver4/         # 초기 라운드 (역사)
-│   ├── ver5/                       # Bllossom SFT 전환 (과거 운영)
-│   ├── ver6/                       # Gemma-3-12B base 교체
-│   │   ├── 00_halluc_repetition_fix_plan.md
-│   │   └── appendix_bllossom_fallback.md
-│   ├── ver8/                       # 데이터 전면 재구축 (설계)
-│   │   ├── 00_data_construction_plan.md
-│   │   ├── 01_raw_data_schema.md
-│   │   └── 02_v7_gap_analysis.md
-│   ├── ver8.1/                     # ★ audit/fix 라운드 → 현 서빙 코퍼스
-│   │   ├── README.md
-│   │   ├── 00_data_construction_plan.md
-│   │   ├── 01_round_1_audit_and_fix_log.md
-│   │   ├── 02_round_2_backlog.md
-│   │   ├── 03_v8_builder_revision_targets.md
-│   │   └── 04_round_2_log_and_convergence.md   # 수렴 보고서
-│   └── ver8.2/                     # ★ 친절체 SFT 라운드 (진행 중)
-│       └── 00_friendly_tone_plan.md
-│
-├── src/
-│   ├── data/
-│   │   ├── crawler/mediclassics_orchestrator.py
-│   │   ├── builder/{extract_corpora,preprocess,tokenizer_extend}.py
-│   │   └── synth/expand_facts.py
-│   ├── training/{cpt_trainer,sft_trainer}.py    # 레거시 (ver4/5)
-│   ├── hanmed_cli/                 # 레거시 CLI (vLLM 직결, RAG 없음)
-│   └── utils/seed.py
-│
-├── scripts/
-│   ├── build_sft_full_corpus.py / augment_sft_v7.py   # v7 builder (현 코퍼스 기반)
-│   ├── build_rag_index.py          # ★ FAISS 인덱스 빌드
-│   ├── build_merged_model.py
-│   ├── probe_ver8_1_rag*.py        # RAG 오프라인 평가 하네스 (v1~v4 + info)
-│   └── (audit/verify/probe/meta 스크립트)
-│
-├── data/
-│   ├── raw/mediclassics_unified/   # 26권 크롤 결과 (book_008 = 동의보감)
-│   ├── sft/                        # SFT 코퍼스 (phaseB_qa_v8_1/v8_2_corpus.jsonl 등)
-│   ├── rag/                        # ★ book_008.index (FAISS) + book_008.meta.jsonl
-│   ├── facts/core_factsheet.yaml
-│   └── stats/, tokenizer/
-│
-├── experiments/
-│   └── dongui_bogam/               # ★ 현 운영 시스템 (book_008 단권 RAG)
-│       ├── README.md
-│       ├── pyproject.toml          # bogam_cli entry points 3종
-│       ├── bogam_cli/              # ★ 텍스트 REPL + 음성 자비스 + 홀로그램
-│       │   ├── chat.py voice.py hologram_app.py stt.py tts.py
-│       │   └── hologram/index.html + turtle_*.png
-│       ├── rag_service/            # ★ FastAPI RAG sidecar
-│       │   ├── main.py rag_core.py settings.py requirements.txt
-│       ├── docker/
-│       │   ├── compose.ver8_1.yml  # ★ 현 서빙 스택 (vLLM + RAG)
-│       │   ├── Dockerfile.vllm Dockerfile.rag SMOKE_TEST_ver8_1.md
-│       ├── src/training/sft_trainer.py
-│       ├── scripts/build_merged_model_ver8_1.py
-│       ├── data/sft/               # phaseB_qa_v8_1/v8_2_corpus.jsonl + stats
-│       ├── docs/voice_jarvis_plan.md, voice_jarvis_visual_plan.md
-│       ├── eval/                   # friendly_tone_qaset.yaml, info_mode_prompts.yaml ...
-│       ├── outputs_ver8_1_gemma_v1/  # ★ 서빙 어댑터 + merged
-│       ├── outputs_ver8_2_gemma_v1/  # 친절체 라운드 어댑터 + merged + eval
-│       └── outputs_ver{5,6,7}_*, outputs_ver8_1_*_{failed,aborted}/  # 비활성
-│
-├── docker/                         # 레거시 compose (ver5 이하)
-└── models/gemma-3-12b-it/          # ver6+ base (~23 GB, 5 shards, gitignored)
-```
-
-## 12. 라이선스
-
-| 구성 | 라이선스 | 조건 |
-|---|---|---|
-| mediclassics 데이터 | KIOM 비상업 무료 이용 | 출처 표기 = "한의학고전DB (mediclassics.kr)". 상업 이용은 `kiombook@kiom.re.kr` 서면 문의 |
-| Gemma-3-12B-IT base | Gemma Terms of Use | Google Gemma 라이선스 준수 |
-| BAAI/bge-m3 인코더 | MIT | — |
-| HanMed adapter | 연구용 (기본) | 가공물 공개는 KIOM 사전 승인 |
-| 본 저장소 코드 | TBD | 연구·교육 목적 |
-
-## 13. 면책
-
-이 시스템은 **동의보감 고전 문헌 해제 도우미**이며 임상 진단·처방·의료 조언 도구가 아니다. 답변은 검색된 원문 발췌의 해제 보조일 뿐 의학적 판단의 근거가 될 수 없다. `pre_check`/`post_check` 안전 계층은 자가진단·복용량 질의를 거절·마스킹하지만 완전하지 않다. 자격 있는 한의사·의사와 상담하라.
-
-## 14. 문서 인덱스
-
-### 현재 (ver8.x RAG)
-- ver8 데이터 재구축 설계: [`docs/ver8/00_data_construction_plan.md`](docs/ver8/00_data_construction_plan.md) · raw 스키마 [`01_raw_data_schema.md`](docs/ver8/01_raw_data_schema.md) · v7 gap [`02_v7_gap_analysis.md`](docs/ver8/02_v7_gap_analysis.md)
-- ver8.1 audit/fix 라운드: [`docs/ver8.1/README.md`](docs/ver8.1/README.md) · 수렴 보고서 [`04_round_2_log_and_convergence.md`](docs/ver8.1/04_round_2_log_and_convergence.md)
-- ver8.2 친절체 라운드: [`docs/ver8.2/00_friendly_tone_plan.md`](docs/ver8.2/00_friendly_tone_plan.md)
-- 단권 실험·음성 자비스 상세: [`experiments/dongui_bogam/README.md`](experiments/dongui_bogam/README.md)
-- 음성 자비스 기획: [`experiments/dongui_bogam/docs/voice_jarvis_plan.md`](experiments/dongui_bogam/docs/voice_jarvis_plan.md) · 비주얼 [`voice_jarvis_visual_plan.md`](experiments/dongui_bogam/docs/voice_jarvis_visual_plan.md)
-
-### 전환 근거 (역사)
-- ver5 (Bllossom SFT): [`docs/ver5/README.md`](docs/ver5/README.md) · CPT 한계 실증 [`01_experimental_evidence.md`](docs/ver5/01_experimental_evidence.md)
-- ver6 (Gemma base 교체): [`docs/ver6/00_halluc_repetition_fix_plan.md`](docs/ver6/00_halluc_repetition_fix_plan.md) · Bllossom fallback [`appendix_bllossom_fallback.md`](docs/ver6/appendix_bllossom_fallback.md)
-- ver4 P-A+ CPT: [`docs/ver4/README.md`](docs/ver4/README.md) · CPT 방법론 노트 [`docs/research_hanmed_cpt_methodology_20260421.md`](docs/research_hanmed_cpt_methodology_20260421.md)
-
-### CLI & 시각 아이덴티티
-- 거북 mascot / Claude Code 스타일: [`docs/10_cli_visual_identity/`](docs/10_cli_visual_identity/)
+이전 세대(Gemma-3-12B 텍스트+RAG, archived)는 [`ver1/README.md`](ver1/README.md). 저장소 루트는 별개 프로젝트(HiPoDiT, 유전체 합성)이며 [`../README.md`](../README.md)에 있다.

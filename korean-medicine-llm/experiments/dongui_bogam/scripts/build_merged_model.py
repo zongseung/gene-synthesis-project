@@ -1,1 +1,0 @@
-../../scripts/build_merged_model.py

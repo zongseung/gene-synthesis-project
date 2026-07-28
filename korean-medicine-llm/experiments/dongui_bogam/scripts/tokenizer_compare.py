@@ -1,1 +1,0 @@
-../../../scripts/tokenizer_compare.py

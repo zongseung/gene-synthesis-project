@@ -1,1 +1,0 @@
-../../../scripts/build_sft_qa.py

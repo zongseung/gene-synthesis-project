@@ -1,1 +1,0 @@
-../../../scripts/fetch_book_metadata.py

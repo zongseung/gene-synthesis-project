@@ -28,7 +28,7 @@ env/
 notebooks/*.html
 
 # Data (large files, not tracked)
-data/
+/data/
 !data/.gitkeep
 
 # Model outputs (checkpoints, samples, evaluation results)
@@ -37,12 +37,15 @@ outputs/
 # wandb
 wandb/
 
-# uv
-uv.lock
-
 # Rust
 vcf_parser_rs/target/
 vcf_parser_rs/.venv/
+glm_pca_rs/target/
+glm_pca_rs/.venv/
+
+# Stray dataset artifacts (not project source, ~2.2-2.7GB each)
+/shezhen_datasets1.zip
+/shezhen_unzipped/
 
 # OS
 .DS_Store

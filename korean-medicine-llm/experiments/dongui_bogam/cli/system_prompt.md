@@ -1,1 +1,0 @@
-../../../src/hanmed_cli/prompts/system_v0.1.md

@@ -1,1 +1,0 @@
-../../../scripts/build_book008_splits.py
