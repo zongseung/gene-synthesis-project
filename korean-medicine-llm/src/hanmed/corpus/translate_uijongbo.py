@@ -10,7 +10,7 @@ resume: out jsonl 에 (volume_id, content_seq) 기록 → 재실행 시 done 스
 concurrency: ThreadPoolExecutor. 증분 기록(중간 중단 안전).
 
 사용:
-  PYTHONPATH=src .venv/bin/python -m hanmed_mm.data.translate_uijongbo \
+  PYTHONPATH=src .venv/bin/python -m hanmed.corpus.translate_uijongbo \
       --raw_dir ver1/data/raw/mediclassics_unified/book_056 \
       --out data/cpt/uijongbo_ko.jsonl --model gpt-4o-mini --workers 8 [--limit 20]
 """

@@ -14,7 +14,7 @@ label_zip 은 파일명이 아니라 **split 태그**로 쓰인다(build_sft_mm.
 로 태깅해 train/val 이미지가 겹치지 않게 한다. 물리 파일은 둘 다 VS_ zip 안에 있다.
 
 사용:
-  PYTHONPATH=src .venv/bin/python -m hanmed_mm.data.label_index_from_source \
+  PYTHONPATH=src .venv/bin/python -m hanmed.corpus.label_index_from_source \
       --split 2.Validation --out data/label_index/shards
 """
 from __future__ import annotations
