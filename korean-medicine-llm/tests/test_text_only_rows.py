@@ -7,7 +7,7 @@ import os
 
 import pytest
 
-from hanmed_mm.training.sft_train_varco import Collator, UnifiedMMDataset
+from hanmed.training.train import Collator, UnifiedMMDataset
 
 BASE = "models/VARCO-VISION-2.0-14B"
 

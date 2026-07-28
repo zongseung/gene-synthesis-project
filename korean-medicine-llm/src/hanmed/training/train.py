@@ -17,15 +17,15 @@
 
 사용:
   # dry-run (모델 없이 데이터셋/샘플러/콜레이트만)
-  PYTHONPATH=src .venv/bin/python -m hanmed_mm.training.sft_train_varco \
+  PYTHONPATH=src .venv/bin/python -m hanmed.training.train \
       --config configs/sft_varco.yaml --dry_run
 
   # smoke (모델 로드+forward+loss+LoRA, 2 step, 극소 샘플)
-  PYTHONPATH=src .venv/bin/python -m hanmed_mm.training.sft_train_varco \
+  PYTHONPATH=src .venv/bin/python -m hanmed.training.train \
       --config configs/sft_varco.yaml --max_steps 2 --max_samples 16
 
   # 실제 학습 (단일 A6000; 14B bf16 + LoRA + grad ckpt)
-  PYTHONPATH=src .venv/bin/python -m hanmed_mm.training.sft_train_varco \
+  PYTHONPATH=src .venv/bin/python -m hanmed.training.train \
       --config configs/sft_varco.yaml
 """
 from __future__ import annotations

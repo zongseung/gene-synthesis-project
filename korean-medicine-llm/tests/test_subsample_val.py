@@ -1,5 +1,5 @@
 """검증셋 부분표집 — 소스 비율을 유지하고 결정론적이어야 한다."""
-from hanmed_mm.training.sft_train_varco import subsample_val
+from hanmed.training.train import subsample_val
 
 
 def _rows(src, n):

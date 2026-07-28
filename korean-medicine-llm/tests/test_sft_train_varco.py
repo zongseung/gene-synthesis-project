@@ -2,7 +2,7 @@
 S5  — image=None(텍스트 전용) 행이 pixel_values 없이 배치로 만들어진다."""
 import pytest
 
-from hanmed_mm.training.sft_train_varco import load_kwargs
+from hanmed.training.train import load_kwargs
 
 
 @pytest.mark.parametrize("load_4bit", [True, False])
