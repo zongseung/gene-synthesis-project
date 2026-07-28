@@ -1,1 +1,0 @@
-../../../../docs/ver5/02_sft_design.md

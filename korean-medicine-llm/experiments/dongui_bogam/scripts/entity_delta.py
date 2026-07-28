@@ -1,1 +1,0 @@
-../../../scripts/entity_delta.py

@@ -1,1 +1,0 @@
-../../../../docs/ver5/04_trainer_spec.md

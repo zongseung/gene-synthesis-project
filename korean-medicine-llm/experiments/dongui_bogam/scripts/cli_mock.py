@@ -1,1 +1,0 @@
-../../../scripts/cli_mock.py

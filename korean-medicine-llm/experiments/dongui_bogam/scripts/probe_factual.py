@@ -1,1 +1,0 @@
-../../../scripts/probe_factual.py

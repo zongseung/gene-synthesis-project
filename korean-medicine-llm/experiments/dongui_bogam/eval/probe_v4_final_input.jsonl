@@ -1,4 +1,0 @@
-{"id":"Q1-author-period","category":"probe_v4_final","question":"동의보감(東醫寶鑑)을 편찬한 저자는 누구이며 어느 왕의 명으로 언제 완성되었나요? 한 단락으로 답하세요.","expected":"허준 / 선조 / 1610 완성, 1613 간행"}
-{"id":"Q2-pyeon","category":"probe_v4_final","question":"동의보감은 어떤 편들로 구성되어 있나요? 다섯 편을 모두 적어 주세요.","expected":"내경편·외형편·잡병편·탕액편·침구편"}
-{"id":"Q3-rank","category":"probe_v4_final","question":"동의보감 서문에서 허준에게 붙는 관직과 작호를 알려주세요.","expected":"어의, 양평군"}
-{"id":"Q4-five-viscera","category":"probe_v4_final","question":"한의학에서 말하는 오장(五臟)은 무엇인가요? 다섯 가지를 모두 답하세요.","expected":"간·심·비·폐·신"}

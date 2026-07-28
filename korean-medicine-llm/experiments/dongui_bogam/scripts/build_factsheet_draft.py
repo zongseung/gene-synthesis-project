@@ -1,1 +1,0 @@
-../../../scripts/build_factsheet_draft.py
