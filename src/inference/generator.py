@@ -146,6 +146,7 @@ def generate_samples(
     # Use checkpoint config if available, fall back to provided config
     model_config = checkpoint.get("config", config)
     model = HybridCNNDiTFiLM(model_config).to(device)
+    model.load_state_dict(checkpoint["model_state_dict"])
 
     # Load EMA parameters (preferred for inference)
     used_ema = False
@@ -158,7 +159,6 @@ def generate_samples(
         used_ema = True
         logger.info(f"EMA parameters loaded from {model_path}")
     else:
-        model.load_state_dict(checkpoint["model_state_dict"])
         logger.warning("EMA not found in checkpoint, using raw model weights")
 
     model.eval()

@@ -899,7 +899,7 @@ flowchart TD
         F5["Stratified split (train / test)<br/>seed = 20260327"]
     end
 
-    OUT["data/processed/<br/>gene_pca_features.pkl<br/>train_data.pkl · test_data.pkl<br/>normalization_stats.pkl<br/>label_hierarchy.pkl<br/>zero_mask.pt<br/>split_manifest.json"]
+    OUT["data/processed/<br/>gene_pca_features.pkl<br/>train_data.pkl · test_data.pkl<br/>normalization_stats.pkl<br/>label_hierarchy.pkl<br/>zero_mask.pt<br/>split_manifest.json<br/>cumulant_stats.npz"]
 
     VCF --> P1A --> P1B --> P1C --> P1D
     PANEL --> P1A
@@ -927,6 +927,7 @@ flowchart TD
 | `label_hierarchy.pkl` | dict (8 fields) | pop/superpop 매핑 전체 |
 | `zero_mask.pt` | (gene_size, K) bool | 항상 0인 위치 마스크 |
 | `split_manifest.json` | dict | 재현성 보장용 split 기록 |
+| `cumulant_stats.npz` | train-only pop×gene×K 통계 | OC-FiLM 고차 누적량 통계 |
 
 ---
 
@@ -942,6 +943,11 @@ python src/preprocessing/merge_data.py --format pkl --maf 0.01
 
 # Phase 1: 전처리 (VCF → Gene PCA → 토큰화)
 python src/preprocessing/run_pipeline.py
+
+# Phase 1.5: train-only OC-FiLM 누적량 통계
+python -m src.preprocessing.cumulants \
+  --processed-dir data/processed \
+  --output data/processed/cumulant_stats.npz
 
 # Phase 2: 모델 shape 검증
 python -c "

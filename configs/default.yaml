@@ -31,6 +31,14 @@ model:
   # Population
   n_pops: 26
   n_superpops: 5
+  # Orthogonal Cumulant FiLM (train-only 3rd/4th cumulants)
+  cumulant_modulation:
+    enabled: true
+    stats_path: "data/processed/cumulant_stats.npz"
+    initial_gain: 0.0
+    max_gain: 0.25
+    value_clip: 4.0
+    correction_clip: 2.0
 
 # ── Diffusion ──
 diffusion:
@@ -59,8 +67,8 @@ training:
 
 # ── 실험 운영 ──
 experiment:
-  run_name: "20260428_glmpca_k4_sym_gpu1"
-  tags: ["baseline", "hybrid-genodit", "glm-pca", "k4", "sym-fix"]
+  run_name: "20260730_oc_film_k4"
+  tags: ["oc-film", "hybrid-genodit", "glm-pca", "k4", "cumulant"]
   save_top_k_checkpoints: 3
   export_policy: "internal_only"
 
@@ -87,4 +95,4 @@ aux_loss:
   warmup_epochs: 20
 
 # ── 저장 ──
-save_dir: "outputs/20260428_glmpca_k4_sym_gpu1"
+save_dir: "outputs/20260730_oc_film_k4"

@@ -20,6 +20,7 @@ from .modules.conditioning import (
     HierarchicalPopulationEmbedding,
     UnifiedFiLMGenerator,
 )
+from .modules.cumulant import OrthogonalCumulantModulation
 from .modules.cnn import CNNStemEncoder, CNNDecoder
 from .modules.dit import PatchEmbed1D, UnPatchify1D, DiTCore
 
@@ -59,6 +60,7 @@ class HybridCNNDiTFiLM(nn.Module):
         patch_size = model_cfg.get("patch_size", 16)
         n_pops = model_cfg.get("n_pops", 26)
         n_superpops = model_cfg.get("n_superpops", 5)
+        diffusion_cfg = config.get("diffusion", {})
 
         pop_to_superpop = model_cfg.get("pop_to_superpop", None)
         if pop_to_superpop is None:
@@ -81,6 +83,29 @@ class HybridCNNDiTFiLM(nn.Module):
         )
 
         # --- Build submodules ---
+
+        # Optional train-only higher-cumulant correction. Its residual gain is
+        # zero-initialized, so enabling it starts from the baseline model.
+        cumulant_cfg = model_cfg.get("cumulant_modulation", {})
+        self.cumulant_modulation = None
+        if cumulant_cfg.get("enabled", False):
+            stats_path = cumulant_cfg.get("stats_path")
+            if not stats_path:
+                raise ValueError(
+                    "model.cumulant_modulation.stats_path is required when enabled"
+                )
+            self.cumulant_modulation = OrthogonalCumulantModulation(
+                n_pops=n_pops,
+                n_channels=self.in_channels,
+                gene_size=self.gene_size,
+                timesteps=diffusion_cfg.get("max_timesteps", 1000),
+                schedule_type=diffusion_cfg.get("noise_schedule", "cosine"),
+                stats_path=stats_path,
+                initial_gain=cumulant_cfg.get("initial_gain", 0.0),
+                max_gain=cumulant_cfg.get("max_gain", 0.25),
+                value_clip=cumulant_cfg.get("value_clip", 4.0),
+                correction_clip=cumulant_cfg.get("correction_clip", 2.0),
+            )
 
         # Population embedding (hierarchical: pop + superpop)
         self.pop_embedding = HierarchicalPopulationEmbedding(
@@ -189,6 +214,9 @@ class HybridCNNDiTFiLM(nn.Module):
         assert x.shape[2] == self.gene_size, (
             f"Gene size mismatch: expected {self.gene_size}, got {x.shape[2]}"
         )
+
+        if self.cumulant_modulation is not None:
+            x = self.cumulant_modulation(x, t, y)
 
         # --- Conditioning ---
         pop_emb = self.pop_embedding(y)
