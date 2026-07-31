@@ -2,9 +2,21 @@
 
 from __future__ import annotations
 
+import argparse
 import hashlib
+import json
+import os
+import time
+from pathlib import Path
 
 from hanmed.bench import SIGN_META
+from hanmed.bench.run_eval import (
+    index_by_id,
+    load_jsonl,
+    score_track1,
+    score_track3,
+    score_track6,
+)
 
 
 HERB_QUOTAS = [
@@ -114,3 +126,241 @@ def parse_tox_status(text: str) -> str:
     ):
         return "safe_documented"
     return ""
+
+
+def build_prediction(row: dict, answer: str, species: list[str]) -> dict:
+    track = {
+        "tongue_byeonjeung": "track1",
+        "abstain": "track3",
+        "herb_image": "track6",
+    }[row["track"]]
+    pred = {"id": row["id"], "track": track}
+    if row.get("probe_type"):
+        pred["probe_type"] = row["probe_type"]
+    pred["answer_text"] = answer
+    if track == "track1":
+        pred["signs"] = parse_tongue(answer)
+    elif row["probe_type"] == "species_id":
+        pred["species_ko"] = parse_species(answer, species)
+    elif row["probe_type"] == "toxicity":
+        pred["tox_status"] = parse_tox_status(answer)
+    return pred
+
+
+def compact_records(records: list[dict]) -> list[dict]:
+    latest = {}
+    for record in records:
+        latest[record["id"]] = record
+    return list(latest.values())
+
+
+def _load_images(rows: list[dict], cfg: dict) -> dict:
+    from PIL import Image
+    from hanmed.shared.shard_image_reader import ShardImageReader
+    from hanmed.training.train import _resolve_tongue
+
+    reader = ShardImageReader(cfg["herb_shard_index"], cfg["herb_shard_dir"])
+    images = {}
+    for row in rows:
+        if row["track"] == "tongue_byeonjeung":
+            path = _resolve_tongue(row["image"], cfg["tongue_image_root"])
+            if not os.path.exists(path):
+                raise FileNotFoundError(path)
+            with Image.open(path) as image:
+                images[row["id"]] = image.convert("RGB")
+        else:
+            image = reader.get(row["image"])
+            if image is None:
+                raise FileNotFoundError(row["image"])
+            images[row["id"]] = image
+    return images
+
+
+def _load_model(cfg: dict, adapter: Path):
+    from peft import PeftModel
+    from transformers import AutoProcessor, LlavaOnevisionForConditionalGeneration
+    from hanmed.training.train import load_kwargs
+
+    processor = AutoProcessor.from_pretrained(cfg["base_model"])
+    model = LlavaOnevisionForConditionalGeneration.from_pretrained(
+        cfg["base_model"], **load_kwargs(True)
+    )
+    model = PeftModel.from_pretrained(model, str(adapter)).eval()
+    model.config.use_cache = True
+    return processor, model
+
+
+def _generate(processor, model, question: str, image=None) -> tuple[str, float]:
+    import torch
+
+    content = [{"type": "text", "text": question}]
+    if image is not None:
+        content.insert(0, {"type": "image"})
+    messages = [{"role": "user", "content": content}]
+    prompt = processor.apply_chat_template(
+        messages, tokenize=False, add_generation_prompt=True
+    )
+    inputs = processor(
+        text=prompt,
+        images=[image] if image is not None else None,
+        return_tensors="pt",
+    ).to(model.device, torch.bfloat16)
+    started = time.perf_counter()
+    with torch.inference_mode():
+        output = model.generate(
+            **inputs,
+            max_new_tokens=256,
+            do_sample=False,
+            repetition_penalty=1.1,
+            no_repeat_ngram_size=6,
+            use_cache=True,
+        )
+    latency = time.perf_counter() - started
+    generated = output[0, inputs["input_ids"].shape[1] :]
+    return processor.decode(generated, skip_special_tokens=True).strip(), latency
+
+
+def _read_records(path: Path) -> list[dict]:
+    return load_jsonl(str(path)) if path.exists() else []
+
+
+def _atomic_json(path: Path, value) -> None:
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _atomic_jsonl(path: Path, records: list[dict]) -> None:
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with tmp.open("w", encoding="utf-8") as handle:
+        for record in records:
+            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+    os.replace(tmp, path)
+
+
+def _loss_history(cfg: dict) -> dict:
+    state_path = Path(cfg["output_dir"]) / "checkpoint-2810" / "trainer_state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    evals = [
+        {"step": row["step"], "epoch": row["epoch"], "eval_loss": row["eval_loss"]}
+        for row in state["log_history"]
+        if "eval_loss" in row
+    ]
+    final = next(row for row in reversed(state["log_history"]) if "train_loss" in row)
+    return {"train_loss": final["train_loss"], "eval": evals}
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--config", default="configs/sft_varco.yaml")
+    parser.add_argument("--adapter", type=Path, default=Path("outputs/sft_varco/adapter"))
+    parser.add_argument("--bench-dir", type=Path, default=Path("data/eval/hanmed_bench"))
+    parser.add_argument(
+        "--output-dir", type=Path, default=Path("outputs/eval/sft_varco_quick")
+    )
+    parser.add_argument("--smoke", action="store_true")
+    return parser.parse_args()
+
+
+def main() -> int:
+    from hanmed.training.train import load_config
+
+    args = parse_args()
+    cfg = load_config(args.config)
+    required = [
+        args.adapter,
+        args.bench_dir / "track1_tongue_byeonjeung.jsonl",
+        args.bench_dir / "track3_abstain.jsonl",
+        args.bench_dir / "track6_herb_image.jsonl",
+    ]
+    missing = [str(path) for path in required if not Path(path).exists()]
+    if missing:
+        raise FileNotFoundError(", ".join(missing))
+
+    track1 = load_jsonl(str(required[1]))
+    track3 = load_jsonl(str(required[2]))
+    track6 = load_jsonl(str(required[3]))
+    selected_track1, selected_track6 = select_quick_rows(track1, track6)
+    selected_track3 = sorted(track3, key=lambda row: _rank(row, 42))
+    if args.smoke:
+        selected_track1, selected_track3, selected_track6 = (
+            selected_track1[:1],
+            selected_track3[:1],
+            [],
+        )
+    selected = selected_track3 + selected_track1 + selected_track6
+    species = sorted({row["species_ko"] for row in track6})
+
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    predictions_path = args.output_dir / "predictions.jsonl"
+    records = _read_records(predictions_path)
+    latest = {record["id"]: record for record in records}
+    completed = {record_id for record_id, record in latest.items() if not record.get("error")}
+    pending = [row for row in selected if row["id"] not in completed]
+    image_rows = [row for row in pending if row.get("image")]
+    images = _load_images(image_rows, cfg)
+
+    if pending:
+        print(f"loading model: {cfg['base_model']} + {args.adapter}", flush=True)
+        processor, model = _load_model(cfg, args.adapter)
+        with predictions_path.open("a", encoding="utf-8") as handle:
+            for index, row in enumerate(pending, 1):
+                try:
+                    answer, latency = _generate(
+                        processor, model, row["question"], images.get(row["id"])
+                    )
+                    if not answer:
+                        raise RuntimeError("empty model answer")
+                    record = build_prediction(row, answer, species)
+                    record["latency_sec"] = round(latency, 3)
+                    print(
+                        f"[{index}/{len(pending)}] {row['id']} {latency:.1f}s {answer[:80]!r}",
+                        flush=True,
+                    )
+                except Exception as error:
+                    record = {
+                        "id": row["id"],
+                        "track": row["track"],
+                        "error": f"{type(error).__name__}: {error}",
+                    }
+                    print(f"[{index}/{len(pending)}] {row['id']} ERROR {record['error']}", flush=True)
+                records.append(record)
+                handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+                handle.flush()
+
+    compacted = compact_records(records)
+    selected_ids = {row["id"] for row in selected}
+    compacted = [record for record in compacted if record["id"] in selected_ids]
+    _atomic_jsonl(predictions_path, compacted)
+    predictions = index_by_id(compacted)
+    latencies = [record["latency_sec"] for record in compacted if "latency_sec" in record]
+    report = {
+        "adapter": str(args.adapter),
+        "generation": {
+            "do_sample": False,
+            "max_new_tokens": 256,
+            "repetition_penalty": 1.1,
+            "no_repeat_ngram_size": 6,
+        },
+        "loss": _loss_history(cfg),
+        "counts": {
+            "predictions": len(compacted),
+            "errors": sum(bool(record.get("error")) for record in compacted),
+            "track3": len(selected_track3),
+            "track1": len(selected_track1),
+            "track6": len(selected_track6),
+        },
+        "mean_latency_sec": round(sum(latencies) / len(latencies), 3) if latencies else None,
+        "metrics": {
+            "track3": score_track3(selected_track3, predictions),
+            "track1": score_track1(selected_track1, predictions),
+            "track6": score_track6(selected_track6, predictions),
+        },
+    }
+    _atomic_json(args.output_dir / "report.json", report)
+    print(json.dumps(report, ensure_ascii=False, indent=2), flush=True)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -50,3 +50,22 @@ def test_quick_selection_is_deterministic_and_stratified():
     assert collections.Counter(
         row["gold"] for row in herb if row["probe_type"] == "toxicity"
     ) == {"toxic": 2, "safe_documented": 2, "unverified": 2}
+
+
+def test_prediction_schema_and_compaction():
+    row = {"id": "t3", "track": "abstain", "probe_type": "fake_herb"}
+    assert quick_eval.build_prediction(
+        row, "근거가 없어 답변을 보류합니다.", []
+    ) == {
+        "id": "t3",
+        "track": "track3",
+        "probe_type": "fake_herb",
+        "answer_text": "근거가 없어 답변을 보류합니다.",
+    }
+    assert quick_eval.compact_records(
+        [
+            {"id": "a", "error": "first"},
+            {"id": "a", "answer_text": "ok"},
+            {"id": "b", "answer_text": "done"},
+        ]
+    ) == [{"id": "a", "answer_text": "ok"}, {"id": "b", "answer_text": "done"}]
