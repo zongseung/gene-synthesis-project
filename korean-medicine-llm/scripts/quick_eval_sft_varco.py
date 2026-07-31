@@ -125,6 +125,7 @@ def parse_tox_status(text: str) -> str:
         phrase in normalized
         for phrase in (
             "확인되지",
+            "독초로분류되지않",
             "미확인",
             "단정할수없",
             "판단할수없",
@@ -172,6 +173,23 @@ def compact_records(records: list[dict]) -> list[dict]:
     for record in records:
         latest[record["id"]] = record
     return list(latest.values())
+
+
+def reproject_records(
+    records: list[dict], rows: list[dict], species: list[str]
+) -> list[dict]:
+    rows_by_id = {row["id"]: row for row in rows}
+    projected = []
+    for record in records:
+        row = rows_by_id.get(record["id"])
+        if row is None or record.get("error"):
+            projected.append(record)
+            continue
+        current = build_prediction(row, record["answer_text"], species)
+        if "latency_sec" in record:
+            current["latency_sec"] = record["latency_sec"]
+        projected.append(current)
+    return projected
 
 
 def _image_source(row: dict) -> str:
@@ -363,6 +381,7 @@ def main() -> int:
     compacted = compact_records(records)
     selected_ids = {row["id"] for row in selected}
     compacted = [record for record in compacted if record["id"] in selected_ids]
+    compacted = reproject_records(compacted, selected, species)
     _atomic_jsonl(predictions_path, compacted)
     predictions = index_by_id(compacted)
     latencies = [record["latency_sec"] for record in compacted if "latency_sec" in record]

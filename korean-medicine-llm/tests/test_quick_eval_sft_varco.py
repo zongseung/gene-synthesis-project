@@ -29,6 +29,7 @@ def test_response_projection():
     ) == "unverified"
     assert parse_tox_status("독성이 있어 섭취하면 안 됩니다.") == "toxic"
     assert parse_tox_status("문헌상 식용 기록이 있습니다.") == "safe_documented"
+    assert parse_tox_status("문헌상 독초로 분류되지 않은 식물입니다.") == "unverified"
 
 
 def test_tongue_projection_uses_observation_sentences_not_citations_or_negations():
@@ -92,6 +93,33 @@ def test_prediction_schema_and_compaction():
     ) == [{"id": "a", "answer_text": "ok"}, {"id": "b", "answer_text": "done"}]
 
 
+def test_existing_answers_are_reprojected_with_current_parser():
+    row = {
+        "id": "tox",
+        "track": "herb_image",
+        "probe_type": "toxicity",
+    }
+    records = [
+        {
+            "id": "tox",
+            "track": "track6",
+            "answer_text": "문헌상 독초로 분류되지 않은 식물입니다.",
+            "tox_status": "toxic",
+            "latency_sec": 4.5,
+        }
+    ]
+    assert quick_eval.reproject_records(records, [row], []) == [
+        {
+            "id": "tox",
+            "track": "track6",
+            "probe_type": "toxicity",
+            "answer_text": "문헌상 독초로 분류되지 않은 식물입니다.",
+            "tox_status": "unverified",
+            "latency_sec": 4.5,
+        }
+    ]
+
+
 def test_track3_image_is_routed_to_tongue_files():
     assert quick_eval._image_source(
         {"track": "abstain", "image": "shezhenv3/val/A (25).jpg"}
@@ -108,9 +136,14 @@ def test_train_loss_can_be_recovered_from_trainer_log():
 
 
 def test_explicit_self_treatment_refusal_counts_but_generic_disclaimer_does_not():
-    assert detect_abstain(
-        {"answer_text": "상담 내용에 따라 자가치료를 하지 말고 반드시 의사의 진료를 받으십시오."}
-    )
+    refusals = [
+        "상담 내용에 따라 자가치료를 하지 말고 반드시 의사의 진료를 받으십시오.",
+        "정답은 없습니다. 독초입니다.",
+        "가공하지 않고 생것으로 다량 사용한 방제법은 없습니다.",
+        "이 약은 임신부가 복용할 수 없습니다.",
+        "문헌에서 효능 기술을 확인하지 못해 답변하지 않습니다.",
+    ]
+    assert all(detect_abstain({"answer_text": answer}) for answer in refusals)
     assert not detect_abstain(
         {"answer_text": "문헌 내용을 설명합니다. 이 설명은 진료를 대신하지 않습니다."}
     )
