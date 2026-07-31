@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import time
 from pathlib import Path
 
@@ -80,9 +81,28 @@ def select_quick_rows(
     return tongue, herb
 
 
+def select_smoke_rows(
+    track1: list[dict], track3: list[dict], seed: int = 42
+) -> tuple[list[dict], list[dict]]:
+    tongue = sorted(track1, key=lambda row: _rank(row, seed))[:1]
+    safety = [
+        row
+        for row in sorted(track3, key=lambda item: _rank(item, seed))
+        if not row.get("image")
+    ][:1]
+    return tongue, safety
+
+
 def parse_tongue(text: str) -> list[str]:
-    normalized = _norm(text)
-    # ponytail: 어휘 투영은 부정문을 완전히 해석하지 않는다. 파싱 오류가 지배적이면 JSON 제약 생성으로 교체.
+    sentences = [sentence for sentence in re.split(r"[.!?。\n]+", text) if sentence.strip()]
+    observations = []
+    for sentence in sentences:
+        normalized_sentence = _norm(sentence)
+        if any(marker in normalized_sentence for marker in ("관찰", "보이", "보인", "나타", "뚜렷", "소견", "확인")):
+            if not any(negation in normalized_sentence for negation in ("않", "없", "아니", "미관찰")):
+                observations.append(sentence)
+    normalized = _norm(" ".join(observations or sentences[:1]))
+    # ponytail: 문장 어휘 투영이다. 파싱 오류가 지배적이면 JSON 제약 생성으로 교체.
     return [
         sign
         for sign in SIGN_META
@@ -154,6 +174,10 @@ def compact_records(records: list[dict]) -> list[dict]:
     return list(latest.values())
 
 
+def _image_source(row: dict) -> str:
+    return "tongue" if row["image"].startswith("shezhenv3/") else "herb"
+
+
 def _load_images(rows: list[dict], cfg: dict) -> dict:
     from PIL import Image
     from hanmed.shared.shard_image_reader import ShardImageReader
@@ -162,7 +186,7 @@ def _load_images(rows: list[dict], cfg: dict) -> dict:
     reader = ShardImageReader(cfg["herb_shard_index"], cfg["herb_shard_dir"])
     images = {}
     for row in rows:
-        if row["track"] == "tongue_byeonjeung":
+        if _image_source(row) == "tongue":
             path = _resolve_tongue(row["image"], cfg["tongue_image_root"])
             if not os.path.exists(path):
                 raise FileNotFoundError(path)
@@ -238,6 +262,11 @@ def _atomic_jsonl(path: Path, records: list[dict]) -> None:
     os.replace(tmp, path)
 
 
+def _parse_train_loss(text: str) -> float | None:
+    matches = re.findall(r"['\"]train_loss['\"]\s*:\s*['\"]?([0-9.eE+-]+)", text)
+    return float(matches[-1]) if matches else None
+
+
 def _loss_history(cfg: dict) -> dict:
     state_path = Path(cfg["output_dir"]) / "checkpoint-2810" / "trainer_state.json"
     state = json.loads(state_path.read_text(encoding="utf-8"))
@@ -246,8 +275,14 @@ def _loss_history(cfg: dict) -> dict:
         for row in state["log_history"]
         if "eval_loss" in row
     ]
-    final = next(row for row in reversed(state["log_history"]) if "train_loss" in row)
-    return {"train_loss": final["train_loss"], "eval": evals}
+    final = next(
+        (row["train_loss"] for row in reversed(state["log_history"]) if "train_loss" in row),
+        None,
+    )
+    log_path = Path("logs/sft_mm_run2.log")
+    if final is None and log_path.exists():
+        final = _parse_train_loss(log_path.read_text(encoding="utf-8", errors="replace"))
+    return {"train_loss": final, "eval": evals}
 
 
 def parse_args() -> argparse.Namespace:
@@ -283,11 +318,8 @@ def main() -> int:
     selected_track1, selected_track6 = select_quick_rows(track1, track6)
     selected_track3 = sorted(track3, key=lambda row: _rank(row, 42))
     if args.smoke:
-        selected_track1, selected_track3, selected_track6 = (
-            selected_track1[:1],
-            selected_track3[:1],
-            [],
-        )
+        selected_track1, selected_track3 = select_smoke_rows(track1, track3)
+        selected_track6 = []
     selected = selected_track3 + selected_track1 + selected_track6
     species = sorted({row["species_ko"] for row in track6})
 

@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - Use `outputs/sft_varco/adapter` with local `models/VARCO-VISION-2.0-14B` in 4-bit NF4 mode.
-- Evaluate all 68 track3 rows, 15 track1 rows, and 15 unique-image track6 rows with seed 42.
+- Evaluate all 68 track3 rows (44 text-only, 24 tongue-image), 15 track1 rows, and 15 unique-image track6 rows with seed 42.
 - Track6 quotas are 3 species-ID, 6 toxicity (2 per status), 3 efficacy-abstain, and 3 answerable-control.
 - Keep benchmark-style prompts and deterministic greedy generation with repetition penalty 1.1 and no-repeat 6-gram.
 - Reuse `score_track1`, `score_track3`, `score_track6`, `_resolve_tongue`, and `ShardImageReader`; add no dependency.
@@ -192,7 +192,7 @@ Index predictions by ID and call `score_track3(all_track3, preds)`, `score_track
 
 - [ ] **Step 6: Add CLI validation**
 
-Support `--config`, `--adapter`, `--bench-dir`, `--output-dir`, and `--smoke`. Defaults point to the approved paths. `--smoke` selects the first ranked track3 row and first ranked track1 row, writes to the supplied smoke output directory, and still exercises both text and image generation.
+Support `--config`, `--adapter`, `--bench-dir`, `--output-dir`, and `--smoke`. Defaults point to the approved paths. `--smoke` selects the first ranked text-only track3 row and first ranked track1 row, writes to the supplied smoke output directory, and exercises both text and image generation.
 
 - [ ] **Step 7: Run unit and existing benchmark tests**
 

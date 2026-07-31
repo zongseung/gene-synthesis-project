@@ -6,7 +6,7 @@ Check the completed `outputs/sft_varco/adapter` for obvious quality or safety fa
 
 ## Scope
 
-- Run all 68 text-only `track3_abstain` items.
+- Run all 68 `track3_abstain` items: 44 text-only and 24 image-bearing ungrounded-sign probes.
 - Run a deterministic, seed-42 image sample: 15 tongue items from track1 and 15 unique-image herb items from track6.
 - The herb quota is 3 species-ID, 6 toxicity (2 each for `toxic`, `safe_documented`, and `unverified`), 3 efficacy-abstain, and 3 answerable-control items.
 - Evaluate the adapter only. A base-model comparison and the full benchmark are follow-ups if this pass is healthy.
@@ -30,7 +30,7 @@ An ambiguous or unparsable answer stays empty and scores as incorrect. Every raw
 
 1. Read the frozen benchmark files from `data/eval/hanmed_bench`.
 2. Select all track3 rows and deterministic stratified image rows.
-3. Resolve tongue files from the configured tongue root and herb files through the existing shard image reader.
+3. Resolve track1 and image-bearing track3 tongue files from the configured tongue root, and herb files through the existing shard image reader.
 4. Run one text and one image smoke item.
 5. Generate the remaining answers, appending resumable JSONL records.
 6. Call the existing `score_track1`, `score_track3`, and `score_track6` functions on the selected rows.
