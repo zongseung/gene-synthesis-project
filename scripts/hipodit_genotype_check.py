@@ -4,14 +4,13 @@
 # dependencies = []
 # ///
 # ─── How to run ───
-# Imported by hipodit_rebuild_train.py for `evaluate_genotypes`; the Phase 1 decoder
-# comparison is: python scripts/hipodit_genotype_check.py oracle --prepared-dir P --output-dir O
+# Imported by hipodit_rebuild_train.py for `evaluate_genotypes`; the Phase 1 Gate 1' oracle is:
+#   python scripts/hipodit_genotype_check.py oracle --prepared-dir P --output-dir O [--arms t]
 from __future__ import annotations
 
 import argparse
 import csv
 import hashlib
-import itertools
 import json
 import pickle
 import sys
@@ -32,6 +31,17 @@ DISTANCE_BINS = 4
 PAIR_OFFSETS = (1, 2, 4)
 MAF_BIN_EDGES = (0.05, 0.2)
 SOURCE_FILES = ("src/models/genotype_decoder.py", "scripts/hipodit_genotype_check.py")
+ABLATION_COLUMNS = ("arm", "nll_per_call", "af_mae", "cohort_af_mae", "genotype_proportion_tv",
+                    "heterozygosity_mae", "ld_r2_mae", "local_dosage_covariance_mae")
+STRATA_COLUMNS = ("arm", "stratum_type", "stratum", "n", "value")
+# Plan rev.2 §9.3 arms: reported name -> (decoder arm, tilt scope).
+TILT_ARMS = {"B0": ("B0", "none"), "B1": ("B1", "none"), "T": ("T", "snp"),
+             "T_superpop": ("T", "superpop"), "T_cohort": ("T", "cohort")}
+# Plan rev.2 §9.4 Gate 1' for T against B0: (metric, factor on B0, strict inequality).
+GATE1_PRIME_RULES = (("nll_per_call", 1.0, True), ("heterozygosity_mae", 1.0, True),
+                     ("cohort_af_mae", 1.05, False), ("af_mae", 1.05, False))
+DESCRIPTIVE_METRICS = ("ld_r2_mae", "ld_r2_mae_by_bin", "local_dosage_covariance_mae")
+CONTROL_METRICS = ("af_mae", "heterozygosity_mae")
 
 
 def _atomic_json(path: Path, value: dict) -> None:
@@ -40,12 +50,15 @@ def _atomic_json(path: Path, value: dict) -> None:
     temporary.replace(path)
 
 
+def _variant_values(genes: list[dict], name: str) -> np.ndarray:
+    return np.array([variant[name] for gene in genes for variant in gene["variants"]],
+                    dtype=np.float64)
+
+
 def panel_positions(prepared_dir: Path) -> np.ndarray:
     """Reference positions in panel order, one per variant column."""
     with (Path(prepared_dir) / "gene_variant_map.json").open() as handle:
-        genes = json.load(handle)["genes"]
-    return np.array([variant["position"] for gene in genes for variant in gene["variants"]],
-                    dtype=np.float64)
+        return _variant_values(json.load(handle)["genes"], "position")
 
 
 def _pairs(offsets: np.ndarray) -> list[tuple[int, int]]:
@@ -82,6 +95,9 @@ def genotype_metrics(real: np.ndarray, generated: np.ndarray, *, offsets: np.nda
     covariance_errors, r2_errors = [], []
     binned: list[list[float]] = [[] for _ in range(len(edges) + 1)]
     skipped = 0
+    # Row-paired draws (evaluate_genotypes) share the real missingness mask; pooled draws use
+    # every generated row.
+    paired = len(generated) == len(real)
     # ponytail: one Python pass per column pair (~3 x SNPs); vectorize only if the panel
     # outgrows a chromosome-arm gene set.
     for left, right in _pairs(offsets):
@@ -89,7 +105,8 @@ def genotype_metrics(real: np.ndarray, generated: np.ndarray, *, offsets: np.nda
         if rows.sum() < 4:
             continue
         real_pair = np.cov(real[rows, left], real[rows, right], ddof=0)
-        generated_pair = np.cov(generated[:, left], generated[:, right], ddof=0)
+        kept = rows if paired else slice(None)
+        generated_pair = np.cov(generated[kept, left], generated[kept, right], ddof=0)
         covariance_errors.append(abs(real_pair[0, 1] - generated_pair[0, 1]))
         real_scale = real_pair[0, 0] * real_pair[1, 1]
         generated_scale = generated_pair[0, 0] * generated_pair[1, 1]
@@ -199,11 +216,11 @@ def load_panel(prepared_dir: Path) -> dict:
                                      expected_shape=(report["genes"], report["components"]))
     with (prepared_dir / "gene_variant_map.json").open() as handle:
         genes = json.load(handle)["genes"]
-    maf = np.array([variant["train_maf"] for gene in genes for variant in gene["variants"]])
+    maf = _variant_values(genes, "train_maf")
     return {
         "report": report, "parameters": parameters, "calls": calls, "offsets": offsets,
         "stats_fit_split": stats["fit_split"], "genes": genes,
-        "positions": panel_positions(prepared_dir),
+        "positions": _variant_values(genes, "position"),
         "maf_bin_of_snp": np.searchsorted(MAF_BIN_EDGES, maf, side="right"),
         "logits": base_logits(parameters, invert_normalization(dataset["x"], stats).astype(np.float64)),
         "labels": dataset["y"].astype(np.int64),
@@ -287,6 +304,53 @@ def study_manifest(prepared_dir: Path, panel: dict, pilot_dir: Path | None,
     }
 
 
+def load_superpop_of_cohort(prepared_dir: Path) -> np.ndarray:
+    """Superpopulation index of every cohort 0..25, from the prepared label hierarchy."""
+    with (Path(prepared_dir) / "label_hierarchy.pkl").open("rb") as handle:
+        mapping = pickle.load(handle)["pop_to_superpop"]
+    if set(mapping) != set(range(N_COHORTS)):
+        raise ValueError(f"pop_to_superpop must key every int cohort 0..{N_COHORTS - 1}")
+    return np.array([mapping[cohort] for cohort in range(N_COHORTS)], dtype=np.int64)
+
+
+def _across_seeds(values: list, reduce):
+    """Reduce same-shaped per-seed metrics leaf by leaf; a leaf missing in any seed is None."""
+    # ponytail: zip truncates ragged lists; only cohorts_not_estimable could be ragged, and it is
+    # always empty here because generated labels tile the real dev labels.
+    first = values[0]
+    if isinstance(first, dict):
+        return {key: _across_seeds([value[key] for value in values], reduce) for key in first}
+    if isinstance(first, list):
+        return [_across_seeds(list(column), reduce) for column in zip(*values)]
+    return None if any(value is None for value in values) else reduce(values)
+
+
+def seed_summary(per_seed: list[dict]) -> dict:
+    """Leafwise mean over metric seeds, with the ddof=1 SD once there are two seeds or more."""
+    def reduce(values: list) -> dict:
+        spread = {"sample_sd": float(np.std(values, ddof=1))} if len(values) > 1 else {}
+        return {"mean": float(np.mean(values)), **spread}
+    return _across_seeds(per_seed, reduce)
+
+
+def _point(result: dict) -> dict:
+    """One metric dict per result: the legacy single draw or the mean over metric seeds."""
+    if "sampled" in result:
+        return result["sampled"]
+    return _across_seeds(result["per_seed"], lambda values: float(np.mean(values)))
+
+
+def af_preservation(expected_af: np.ndarray, sampled_af: np.ndarray, n_samples: int) -> dict:
+    """Largest per-SNP gap between promised and sampled AF vs the largest 3-sigma draw noise."""
+    # ponytail: max gap vs max noise (brief §E) cannot flag a rare SNP drifting past its own
+    # 3 sigma; count per-SNP z-scores > 3 if that ever needs catching.
+    expected_af = np.asarray(expected_af, dtype=np.float64)
+    gap = float(np.abs(np.asarray(sampled_af, dtype=np.float64) - expected_af).max())
+    noise = float((3 * np.sqrt(expected_af * (1 - expected_af) / (2 * n_samples))).max())
+    return {"expected_af": expected_af.tolist(), "sampled_af_max_abs_diff": gap,
+            "draw_noise_3sigma": noise, "within_draw_noise": gap <= noise, "n_samples": n_samples}
+
+
 def _dev_nll(decoder, calls: np.ndarray, logits: np.ndarray, labels: np.ndarray,
              dev: np.ndarray) -> float:
     return float(np.nanmean(nll_calls(decoder, calls[dev], logits[dev], labels[dev])))
@@ -298,31 +362,59 @@ def _draw(decoder, logits: np.ndarray, labels: np.ndarray, draws: int, seed: int
     return np.concatenate([sample_calls(decoder, logits, labels, rng) for _ in range(draws)])
 
 
+def _sampled_metrics(panel: dict, generated: np.ndarray, dev_labels: np.ndarray, draws: int,
+                     edges: np.ndarray, cohorts: bool) -> dict:
+    cohort_labels = {"real_labels": dev_labels,
+                     "gen_labels": np.tile(dev_labels, draws)} if cohorts else {}
+    return genotype_metrics(panel["calls"][panel["dev_indices"]], generated,
+                            offsets=panel["offsets"], positions=panel["positions"], edges=edges,
+                            maf_bin_of_snp=panel["maf_bin_of_snp"], **cohort_labels)
+
+
+def _fit_record(decoder, calls: np.ndarray, logits: np.ndarray, labels: np.ndarray,
+                dev: np.ndarray) -> dict:
+    return {"nll_per_call": _dev_nll(decoder, calls, logits, labels, dev),
+            "train_nll_per_call": decoder.train_nll_per_call, "converged": decoder.converged,
+            "lambda_u": decoder.lambda_u, "lambda_a": decoder.lambda_a}
+
+
 def _evaluate_arm(decoder, panel: dict, calls: np.ndarray, logits: np.ndarray,
                   labels: np.ndarray, args, *, columns: np.ndarray | None = None,
                   cohorts: bool = True) -> dict:
-    """Dev per-call NLL plus pooled sampled metrics against the real dev calls."""
+    """Legacy: dev per-call NLL plus one seed's pooled sampled metrics against real dev calls."""
     dev = panel["dev_indices"]
     generated = _draw(decoder, logits[dev], labels[dev], args.draws, args.seed)
     if columns is not None:
         restored = np.empty_like(generated)
         restored[:, columns] = generated
         generated = restored
-    cohort_labels = {"real_labels": labels[dev],
-                     "gen_labels": np.tile(labels[dev], args.draws)} if cohorts else {}
-    sampled = genotype_metrics(panel["calls"][dev], generated, offsets=panel["offsets"],
-                               positions=panel["positions"], edges=decoder.bins.edges,
-                               maf_bin_of_snp=panel["maf_bin_of_snp"], **cohort_labels)
-    return {"nll_per_call": _dev_nll(decoder, calls, logits, labels, dev),
-            "train_nll_per_call": decoder.train_nll_per_call, "converged": decoder.converged,
-            "lambda_u": decoder.lambda_u, "lambda_a": decoder.lambda_a, "sampled": sampled}
+    return {**_fit_record(decoder, calls, logits, labels, dev),
+            "sampled": _sampled_metrics(panel, generated, labels[dev], args.draws,
+                                        decoder.bins.edges, cohorts)}
+
+
+def _evaluate_seeds(decoder, panel: dict, logits: np.ndarray, labels: np.ndarray, draws: int,
+                    seeds: list[int], *, cohorts: bool = True) -> tuple[dict, np.ndarray]:
+    """Dev NLL and per-seed pooled metrics, every arm on the same stream per seed, plus the AF
+    sampled over all draws of all seeds."""
+    dev = panel["dev_indices"]
+    per_seed, dosage = [], np.zeros(logits.shape[1])
+    for seed in seeds:
+        generated = _draw(decoder, logits[dev], labels[dev], draws, seed)
+        per_seed.append(_sampled_metrics(panel, generated, labels[dev], draws, decoder.bins.edges,
+                                         cohorts))
+        dosage += generated.sum(axis=0)
+    result = {**_fit_record(decoder, panel["calls"], logits, labels, dev),
+              "lambda_tilt": decoder.lambda_tilt, "tilt_scope": decoder.tilt_scope,
+              "per_seed": per_seed, "summary": seed_summary(per_seed)}
+    return result, dosage / (2 * len(dev) * draws * len(seeds))
 
 
 def _fit(arm: str, panel: dict, calls: np.ndarray, logits: np.ndarray, labels: np.ndarray,
-         lambda_u: float, lambda_a: float, n_bins: int):
+         lambda_u: float, lambda_a: float, n_bins: int, **tilt):
     return fit_decoder(arm, calls, logits, labels, panel["train_indices"], panel["positions"],
                        panel["offsets"], N_COHORTS, lambda_u=lambda_u, lambda_a=lambda_a,
-                       n_bins=n_bins)
+                       n_bins=n_bins, **tilt)
 
 
 def _gate1(arms: dict) -> dict:
@@ -346,6 +438,43 @@ def _gate1(arms: dict) -> dict:
     }
 
 
+def _gate1_prime_checks(candidate: dict, baseline: dict) -> list[bool]:
+    """Each Gate 1' rule on flat metric dicts that include nll_per_call; not estimable fails."""
+    checks = []
+    for metric, factor, strict in GATE1_PRIME_RULES:
+        value, reference = candidate.get(metric), baseline.get(metric)
+        checks.append(value is not None and reference is not None
+                      and (value < factor * reference if strict else value <= factor * reference))
+    return checks
+
+
+def _gate1_prime(arms: dict) -> dict:
+    """Plan rev.2 §9.4 Gate 1': T must beat B0 on dev NLL and heterozygosity MAE with at most a 5%
+    cohort and overall AF MAE loss. The seed mean decides; passing seeds are counted alongside."""
+    def flat(arm: str, metrics: dict) -> dict:
+        return {**metrics, "nll_per_call": arms[arm]["nll_per_call"]}
+
+    def shown(value) -> str:
+        return "not estimable" if value is None else f"{value:.6g}"
+
+    means = {arm: flat(arm, _point(arms[arm])) for arm in ("T", "B0")}
+    checks = _gate1_prime_checks(means["T"], means["B0"])
+    pass_seeds = sum(all(_gate1_prime_checks(flat("T", seed_t), flat("B0", seed_b0)))
+                     for seed_t, seed_b0 in zip(arms["T"]["per_seed"], arms["B0"]["per_seed"],
+                                                strict=True))
+    passed = all(checks)
+    return {
+        "passed": passed, "candidate": "T" if passed else "B0",
+        "reasons": [f"{metric}: T {shown(means['T'].get(metric))} {'<' if strict else '<='} "
+                    f"{'' if factor == 1 else f'{factor:g} x '}B0 {shown(means['B0'].get(metric))}"
+                    f" -> {'pass' if ok else 'fail'}"
+                    for (metric, factor, strict), ok in zip(GATE1_PRIME_RULES, checks)],
+        "pass_seeds": int(pass_seeds), "metric_seeds": len(arms["T"]["per_seed"]),
+        "descriptive_only": {metric: {arm: arms[arm]["summary"].get(metric) for arm in ("T", "B0")}
+                             for metric in DESCRIPTIVE_METRICS},
+    }
+
+
 def _named_results(arms: dict, controls: dict) -> list[tuple[str, dict]]:
     return [*arms.items(), *((f"{arm}_{control}", value) for control, block in controls.items()
                              for arm, value in block.items())]
@@ -354,11 +483,9 @@ def _named_results(arms: dict, controls: dict) -> list[tuple[str, dict]]:
 def _ablation_rows(arms: dict, controls: dict) -> list[dict]:
     rows = []
     for name, result in _named_results(arms, controls):
-        sampled = result["sampled"]
+        point = _point(result)
         rows.append({"arm": name, "nll_per_call": result["nll_per_call"],
-                     **{key: sampled.get(key) for key in
-                        ("af_mae", "cohort_af_mae", "genotype_proportion_tv",
-                         "heterozygosity_mae", "ld_r2_mae", "local_dosage_covariance_mae")}})
+                     **{key: point.get(key) for key in ABLATION_COLUMNS[2:]}})
     return rows
 
 
@@ -366,52 +493,75 @@ def _strata_rows(arms: dict, controls: dict, panel: dict) -> list[dict]:
     maf_sizes = np.bincount(panel["maf_bin_of_snp"], minlength=len(MAF_BIN_EDGES) + 1)
     strata = []
     for name, result in _named_results(arms, controls):
-        sampled = result["sampled"]
+        sampled = _point(result)
         for cohort, value in sampled.get("cohort_af_mae_by_cohort", {}).items():
             strata.append({"arm": name, "stratum_type": "cohort", "stratum": cohort,
                            "n": sampled["cohort_n_real"][cohort], "value": value})
         for index, value in enumerate(sampled.get("af_mae_by_maf_bin", [])):
             strata.append({"arm": name, "stratum_type": "maf_bin", "stratum": index,
                            "n": int(maf_sizes[index]), "value": value})
-        for index, value in enumerate(sampled["ld_r2_mae_by_bin"]):
+        for index, value in enumerate(sampled.get("ld_r2_mae_by_bin", [])):
             strata.append({"arm": name, "stratum_type": "distance_bin", "stratum": index,
                            "n": sampled["ld_pairs_by_bin"][index], "value": value})
     return strata
 
 
-def _write_csv(path: Path, rows: list[dict], fields: list[str]) -> None:
+def _write_csv(path: Path, rows: list[dict], fields: tuple[str, ...]) -> None:
     with path.open("w", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
         writer.writerows(rows)
 
 
-def run_oracle(args: argparse.Namespace) -> dict:
-    """Phase 0 freeze plus the Phase 1 B0-B3 dev comparison on real held-out factors."""
-    prepared_dir, output = args.prepared_dir.resolve(), args.output_dir.resolve()
-    if output.exists():
-        raise FileExistsError(output)
-    output.mkdir(parents=True)
-    panel = load_panel(prepared_dir)
-    assertions = phase0_assertions(panel, args.n_bins)
-    pilot_dir = args.pilot_dir.resolve() if args.pilot_dir else None
-    _atomic_json(output / "study_manifest.json",
-                 study_manifest(prepared_dir, panel, pilot_dir, assertions))
-
+def _tilt_study(panel: dict, args: argparse.Namespace, output: Path, seeds: list[int],
+                superpops: np.ndarray) -> tuple[dict, dict, dict]:
+    """Plan rev.2 §9.3 arms at fixed lambdas, the AF-preservation check, the label-shuffle
+    control and Gate 1'."""
     calls, logits, labels = panel["calls"], panel["logits"], panel["labels"]
-    bins = distance_bins(panel["positions"], panel["offsets"], args.n_bins)
-    grid = []
-    for lambda_u, lambda_a in itertools.product(args.lambda_grid, repeat=2):
-        decoder = _fit("B3", panel, calls, logits, labels, lambda_u, lambda_a, args.n_bins)
-        grid.append({"lambda_u": lambda_u, "lambda_a": lambda_a, "converged": decoder.converged,
-                     "dev_nll_per_call": _dev_nll(decoder, calls, logits, labels,
-                                                  panel["dev_indices"])})
-    chosen = min(grid, key=lambda entry: entry["dev_nll_per_call"])
+    dev = panel["dev_indices"]
+
+    def fit(name: str, fit_labels: np.ndarray):
+        arm, scope = TILT_ARMS[name]
+        return _fit(arm, panel, calls, logits, fit_labels, args.lambda_u, args.lambda_a,
+                    args.n_bins, tilt_scope=scope, lambda_tilt=args.lambda_tilt,
+                    superpop_of_cohort=superpops)
 
     arms = {}
+    for name in TILT_ARMS:
+        decoder = fit(name, labels)
+        decoder.save(output / f"decoder_{name}.npz")
+        arms[name], sampled_af = _evaluate_seeds(decoder, panel, logits, labels, args.draws, seeds)
+        if decoder.arm == "T":
+            # Arm T promises E[g] = 2 sigmoid(eta0 + u) exactly; its draws must reproduce this AF.
+            expected_af = expit(logits[dev] + decoder.cohort_offset[labels[dev]]).mean(axis=0)
+            arms[name]["af_preservation"] = af_preservation(
+                expected_af, sampled_af, len(dev) * args.draws * len(seeds))
+
+    shuffled = labels[np.random.default_rng(args.seed + 2).permutation(len(labels))]
+    controls = {"label_shuffle": {}}
+    for name in ("B1", "T"):
+        # Cohort metrics are meaningless under permuted labels, so only NLL, AF and het are kept.
+        result, _ = _evaluate_seeds(fit(name, shuffled), panel, logits, shuffled, args.draws, seeds,
+                                    cohorts=False)
+        controls["label_shuffle"][name] = {
+            **{key: result[key] for key in ("nll_per_call", "train_nll_per_call", "converged")},
+            "per_seed": [{key: seed[key] for key in CONTROL_METRICS}
+                         for seed in result["per_seed"]],
+            "summary": {key: result["summary"][key] for key in CONTROL_METRICS}}
+    verdict = {
+        "gate1_prime": _gate1_prime(arms),
+        "label_control_supports_cohort": bool(
+            arms["B1"]["nll_per_call"] < controls["label_shuffle"]["B1"]["nll_per_call"]),
+    }
+    return arms, controls, verdict
+
+
+def _legacy_study(panel: dict, args: argparse.Namespace, output: Path) -> tuple[dict, dict, dict]:
+    """The B0-B3 study with order/label shuffle controls and Gate 1, at fixed lambdas."""
+    calls, logits, labels = panel["calls"], panel["logits"], panel["labels"]
+    arms = {}
     for arm in ("B0", "B1", "B2", "B3"):
-        decoder = _fit(arm, panel, calls, logits, labels, chosen["lambda_u"], chosen["lambda_a"],
-                       args.n_bins)
+        decoder = _fit(arm, panel, calls, logits, labels, args.lambda_u, args.lambda_a, args.n_bins)
         decoder.save(output / f"decoder_{arm}.npz")
         arms[arm] = _evaluate_arm(decoder, panel, calls, logits, labels, args)
 
@@ -422,32 +572,59 @@ def run_oracle(args: argparse.Namespace) -> dict:
     shuffled_labels = labels[np.random.default_rng(args.seed + 2).permutation(len(labels))]
     controls = {"order_shuffle": {}, "label_shuffle": {}}
     for arm in ("B2", "B3"):
-        decoder = _fit(arm, panel, calls[:, order], logits[:, order], labels, chosen["lambda_u"],
-                       chosen["lambda_a"], args.n_bins)
+        decoder = _fit(arm, panel, calls[:, order], logits[:, order], labels, args.lambda_u,
+                       args.lambda_a, args.n_bins)
         controls["order_shuffle"][arm] = _evaluate_arm(
             decoder, panel, calls[:, order], logits[:, order], labels, args, columns=order)
     for arm in ("B1", "B3"):
-        decoder = _fit(arm, panel, calls, logits, shuffled_labels, chosen["lambda_u"],
-                       chosen["lambda_a"], args.n_bins)
+        decoder = _fit(arm, panel, calls, logits, shuffled_labels, args.lambda_u, args.lambda_a,
+                       args.n_bins)
         controls["label_shuffle"][arm] = _evaluate_arm(
             decoder, panel, calls, logits, shuffled_labels, args, cohorts=False)
 
-    gate1 = _gate1(arms)
     order_b3, label_b1 = controls["order_shuffle"]["B3"], controls["label_shuffle"]["B1"]
     verdict = {
-        "gate1": gate1,
+        "gate1": _gate1(arms),
         "order_control_supports_ld": bool(
             arms["B3"]["nll_per_call"] < order_b3["nll_per_call"]
             and arms["B3"]["sampled"]["ld_r2_mae"] < order_b3["sampled"]["ld_r2_mae"]),
         "label_control_supports_cohort": bool(
             arms["B1"]["nll_per_call"] < label_b1["nll_per_call"]),
     }
+    return arms, controls, verdict
+
+
+def run_oracle(args: argparse.Namespace) -> dict:
+    """Phase 0 freeze plus the Phase 1 dev oracle: Gate 1' tilt arms, or the legacy B0-B3 study."""
+    if args.metric_seeds < 1 or args.draws < 1:
+        raise ValueError("--metric-seeds and --draws must be positive")
+    prepared_dir, output = args.prepared_dir.resolve(), args.output_dir.resolve()
+    if output.exists():
+        raise FileExistsError(output)
+    output.mkdir(parents=True)
+    panel = load_panel(prepared_dir)
+    assertions = phase0_assertions(panel, args.n_bins)
+    tilt = args.arms == "t"
+    if tilt:
+        superpops = load_superpop_of_cohort(prepared_dir)
+        assertions.append("label_hierarchy_maps_every_cohort")
+    seeds = [args.seed + offset for offset in range(args.metric_seeds)] if tilt else [args.seed]
+    settings = {"arm_set": args.arms, "lambda_u": args.lambda_u, "lambda_tilt": args.lambda_tilt,
+                "lambda_a": args.lambda_a, "metric_seeds": len(seeds), "draws": args.draws}
+    pilot_dir = args.pilot_dir.resolve() if args.pilot_dir else None
+    _atomic_json(output / "study_manifest.json", {
+        **study_manifest(prepared_dir, panel, pilot_dir, assertions), **settings,
+        "plan_revision": "rev2-§9", "gate": "gate1_prime" if tilt else "gate1"})
+
+    if tilt:
+        arms, controls, verdict = _tilt_study(panel, args, output, seeds, superpops)
+    else:
+        arms, controls, verdict = _legacy_study(panel, args, output)
+    bins = distance_bins(panel["positions"], panel["offsets"], args.n_bins)
     results = {
         "created_utc": datetime.now(timezone.utc).isoformat(),
         "prepared_dir": str(prepared_dir), "output_dir": str(output),
-        "seed": args.seed, "draws": args.draws, "n_bins": args.n_bins,
-        "lambda_grid": grid, "chosen_lambda": {"lambda_u": chosen["lambda_u"],
-                                               "lambda_a": chosen["lambda_a"]},
+        "seed": args.seed, "seeds": seeds, "n_bins": args.n_bins, **settings,
         "distance_bins": {"edges": bins.edges.tolist(),
                           "adjacent_pairs_per_bin": np.bincount(
                               bins.bin_of_snp[bins.bin_of_snp >= 0],
@@ -456,10 +633,8 @@ def run_oracle(args: argparse.Namespace) -> dict:
         "limitation": "Oracle comparison on real held-out GLM-PCA factors; no diffusion samples",
     }
     _atomic_json(output / "oracle_results.json", results)
-    ablation = _ablation_rows(arms, controls)
-    _write_csv(output / "decoder_ablation.csv", ablation, list(ablation[0]))
-    _write_csv(output / "strata.csv", _strata_rows(arms, controls, panel),
-               ["arm", "stratum_type", "stratum", "n", "value"])
+    _write_csv(output / "decoder_ablation.csv", _ablation_rows(arms, controls), ABLATION_COLUMNS)
+    _write_csv(output / "strata.csv", _strata_rows(arms, controls, panel), STRATA_COLUMNS)
     print(json.dumps(verdict, sort_keys=True, allow_nan=False), flush=True)
     return results
 
@@ -467,17 +642,28 @@ def run_oracle(args: argparse.Namespace) -> dict:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Genotype decoder metrics and the Phase 1 oracle comparison")
     commands = parser.add_subparsers(dest="command", required=True)
-    oracle = commands.add_parser("oracle", help="Compare B0-B3 decoders on the dev split")
+    oracle = commands.add_parser("oracle", help="Gate 1' tilt arms or legacy B0-B3 on dev")
+    oracle.set_defaults(handler=run_oracle)
     oracle.add_argument("--prepared-dir", type=Path, required=True)
     oracle.add_argument("--output-dir", type=Path, required=True)
+    oracle.add_argument("--arms", choices=("t", "legacy"), default="t")
     oracle.add_argument("--pilot-dir", type=Path,
                         default=PROJECT_ROOT / "outputs/diagnostics/hipodit_multiseed_20260915")
+    oracle.add_argument("--metric-seeds", type=int, default=5,
+                        help="sampling seeds --seed, --seed+1, ...; legacy uses --seed only")
     oracle.add_argument("--draws", type=int, default=20)
     oracle.add_argument("--seed", type=int, default=20260915)
     oracle.add_argument("--n-bins", type=int, default=DISTANCE_BINS)
-    oracle.add_argument("--lambda-grid", nargs="+", type=float, default=[1.0, 10.0, 100.0])
+    oracle.add_argument("--lambda-u", type=float, default=1.0)
+    oracle.add_argument("--lambda-tilt", type=float, default=1.0)
+    oracle.add_argument("--lambda-a", type=float, default=1.0)
     return parser
 
 
+def main(argv: list[str] | None = None) -> None:
+    args = build_parser().parse_args(argv)
+    args.handler(args)
+
+
 if __name__ == "__main__":
-    run_oracle(build_parser().parse_args())
+    main()
