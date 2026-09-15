@@ -653,6 +653,22 @@ def test_the_pooled_af_fit_is_stationary_along_its_own_constraint_surface():
     assert np.max(np.abs(derivatives)) < 1e-3
 
 
+def test_a_truncated_fit_is_reported_unconverged():
+    # Given an optimizer budget that stops the fit short of stationarity.
+    calls, base_logits, labels = _panel()
+    train = np.arange(200)
+
+    # When arm B1 is fitted with that budget (the objective is a sum, so an absolute gradient bar
+    # scaled by the observed call count would wave this through on any panel this size).
+    truncated = fit_decoder("B1", calls, base_logits, labels, train, _positions(), OFFSETS,
+                            COHORTS, offset_gauge="pooled_af", max_iter=5)
+
+    # Then it is flagged, while the same fit run to completion is not.
+    assert not truncated.converged
+    assert fit_decoder("B1", calls, base_logits, labels, train, _positions(), OFFSETS, COHORTS,
+                       offset_gauge="pooled_af").converged
+
+
 def test_a_pooled_af_fit_that_misses_its_constraint_is_reported_unconverged(monkeypatch):
     # Given a Newton budget too small to reach the constraint.
     monkeypatch.setattr("src.models.genotype_decoder._NEWTON_STEPS", 0)

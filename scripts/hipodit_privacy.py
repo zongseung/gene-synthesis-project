@@ -44,7 +44,9 @@ MAF_BIN_LABELS = ("[0.01,0.05)", "[0.05,0.2)", "[0.2,0.5]")
 DISTANCE_STATS = ("min", "p1", "p5", "median", "mean")
 SCALAR_METRICS = ("exact_duplicate_rate_train", "near_duplicate_rate_train", "self_duplicate_rate",
                   "membership_inference_auc")
-# Plan §5 Gate 4 thresholds, fixed in advance in the task brief.
+# Gate 4 is qualitative in plan §5 ("materially worse than B0") and rev.2 §9.4 adopts it verbatim,
+# so these four constants are NOT pre-registered: they were fixed in the task brief before the
+# measurement, as one operationalisation of that qualitative rule.
 AUC_MARGIN = 0.02
 NEAR_DUPLICATE_FACTOR = 1.5
 NEAR_DUPLICATE_FLOOR = 0.01
@@ -304,6 +306,9 @@ def run(prepared_dir: Path, multiseed_dir: Path, output_dir: Path) -> dict:
                     {key: value["mean"] for key, value in summaries["T"].items()},
                     n_synthetic=shared["samples"])
 
+    # Read everything that can still fail before the directory exists, so a retry is not blocked
+    # by a FileExistsError from the attempt that failed.
+    context = phase3_context(multiseed_dir)
     output_dir.mkdir(parents=True)
     report = {
         "created_utc": datetime.now(timezone.utc).isoformat(),
@@ -316,7 +321,7 @@ def run(prepared_dir: Path, multiseed_dir: Path, output_dir: Path) -> dict:
         "reference_nn_distance": reference, "near_duplicate_threshold": threshold,
         "arms": {arm: {"per_seed": per_seed[arm], "summary": summaries[arm]} for arm in ARMS},
         "differences_T_minus_B0": differences,
-        "context_from_phase3": phase3_context(multiseed_dir),
+        "context_from_phase3": context,
         "gate4": verdict, "limitation": LIMITATION,
     }
     _atomic_json(output_dir / "privacy_report.json", report)

@@ -219,6 +219,48 @@ def module_files() -> tuple[str, ...]:
     return PREPARED_FILES
 
 
+def test_the_near_duplicate_threshold_is_the_real_non_member_first_percentile(tmp_path):
+    # Given the frozen panel and a finished two-seed run.
+    module = privacy()
+    prepared, multiseed = _panel(tmp_path, [0] * 6 + [1] * 3)
+
+    # When Phase 4 measures duplication.
+    report = module.run(prepared, multiseed, tmp_path / "out")
+
+    # Then the threshold is how close a real non-member already sits to the train panel, at the
+    # first percentile -- not the fifth, and not any statistic of the synthetic set itself.
+    with np.load(prepared / "genotypes.npz") as data:
+        calls = data["calls"].astype(np.float64)
+    with np.load(prepared / "dataset.npz") as data:
+        train, test = calls[data["train_indices"]], calls[data["test_indices"]]
+    reference = module.distance_stats(module.mean_abs_dosage_distance(test, train).min(axis=1))
+    assert reference["p1"] != reference["p5"]
+    assert report["near_duplicate_threshold"] == reference["p1"]
+    for arm, filename in module.ARMS.items():
+        nearest = module.mean_abs_dosage_distance(
+            np.load(multiseed / "seed_11" / "standard" / filename), train).min(axis=1)
+        assert report["near_duplicate_threshold"] != float(np.percentile(nearest, 1))
+        # And it is the threshold the reported rate was actually counted against.
+        assert report["arms"][arm]["per_seed"][0]["near_duplicate_rate_train"] == pytest.approx(
+            float((nearest < report["near_duplicate_threshold"]).mean()))
+
+
+def test_a_malformed_phase3_summary_leaves_no_output_directory_behind(tmp_path):
+    # Given a Gate 3' summary beside the seeds that Phase 4 cannot read.
+    prepared, multiseed = _panel(tmp_path, [0] * 6 + [1] * 3)
+    (multiseed / "summary_decoder.json").write_text(json.dumps({"metrics": {}}))
+    output = tmp_path / "out"
+
+    # When Phase 4 runs.
+    result = subprocess.run([sys.executable, str(SCRIPT), "--prepared-dir", str(prepared),
+                             "--multiseed-dir", str(multiseed), "--output-dir", str(output)],
+                            capture_output=True, text=True)
+
+    # Then it fails without leaving a directory that would make the retry die on FileExistsError.
+    assert result.returncode != 0
+    assert not output.exists()
+
+
 def test_cli_refuses_a_panel_the_samples_did_not_come_from(tmp_path):
     # Given a prepared panel edited after the multiseed run recorded its hashes.
     prepared, multiseed = _panel(tmp_path, [0] * 6 + [1] * 3)

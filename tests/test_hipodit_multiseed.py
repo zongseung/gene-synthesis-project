@@ -287,6 +287,10 @@ def test_decoder_summary_pairs_both_arms_of_every_seed(tmp_path: Path) -> None:
     # The deterministic oracle NLL resamples individuals, not seeds.
     assert result["test_nll"]["n_individuals"] == 4
     assert result["test_nll"]["resampling_unit"] == "held-out individuals"
+    # Every run's Gate 2' verdict is recorded and gated here rather than assumed upstream.
+    assert result["gate3_prime"]["gate2_prime_held_in_every_seed"] is True
+    assert [entry["seed"] for entry in result["gate3_prime"]["per_seed_decoder_gate"]] \
+        == DECODER_SEEDS
     # And the summary is written beside, not over, the schedule-mode products.
     write_summary_decoder(output, result)
     for name in ("summary_decoder.json", "summary_decoder.csv", "paired_differences_decoder.csv"):
@@ -313,11 +317,11 @@ def test_decoder_summary_rejects_a_run_that_never_decoded_arm_t(tmp_path: Path) 
         summarize_decoder(output)
 
 
-@pytest.mark.parametrize("damage", ["decoder_sha256", "eval_split", "decoder_gate", "mode"])
+@pytest.mark.parametrize("damage", ["decoder_sha256", "eval_split", "mode"])
 def test_decoder_summary_rejects_runs_that_disagree_on_the_frozen_decoder(
     tmp_path: Path, damage: str,
 ) -> None:
-    # Given one run made with a different decoder, split or gate verdict than the rest.
+    # Given one run made with a different decoder or split than the rest.
     from scripts.hipodit_multiseed_summary import ExperimentError, summarize_decoder
 
     output = completed_decoder_experiment(tmp_path)
@@ -330,13 +334,59 @@ def test_decoder_summary_rejects_runs_that_disagree_on_the_frozen_decoder(
         report = json.loads(path.read_text())
         if damage == "decoder_sha256":
             report["genotype_evaluation"]["decoder_sha256"] = "0" * 64
-        elif damage == "eval_split":
-            report["eval_split"] = "val"
         else:
-            report["genotype_evaluation"]["decoder_gate"]["passed"] = False
+            report["eval_split"] = "val"
         path.write_text(json.dumps(report))
 
     # When/Then the mixed comparison is refused.
+    with pytest.raises(ExperimentError):
+        summarize_decoder(output)
+
+
+def test_a_seed_whose_gate2_prime_failed_fails_gate3_prime_instead_of_aborting(
+    tmp_path: Path,
+) -> None:
+    # Given ten paired runs, one of which did not hold the Gate 2' conditions on this split.
+    from scripts.hipodit_multiseed_summary import summarize_decoder, write_summary_decoder
+
+    output = completed_decoder_experiment(tmp_path)
+    path = output / "seed_20" / "standard" / "diagnostic_report.json"
+    report = json.loads(path.read_text())
+    report["genotype_evaluation"]["decoder_gate"] = {"passed": False, "af_mae_guardrail": False}
+    path.write_text(json.dumps(report))
+
+    # When the experiment is summarised, the negative outcome is measured, not raised.
+    result = summarize_decoder(output)
+
+    verdict = result["gate3_prime"]
+    assert verdict["gate2_prime_held_in_every_seed"] is False
+    assert verdict["passed"] is False
+    # The other conditions still stand on their own, so the failing one is unambiguous.
+    assert verdict["heterozygosity_mae_improved"] is True
+    assert [entry["seed"] for entry in verdict["per_seed_decoder_gate"]] == DECODER_SEEDS
+    assert [entry["passed"] for entry in verdict["per_seed_decoder_gate"]] == [True] * 9 + [False]
+    assert verdict["per_seed_decoder_gate"][-1]["af_mae_guardrail"] is False
+
+    # And the verdict reaches disk, so a failed Gate 3' leaves a record instead of nothing.
+    write_summary_decoder(output, result)
+    written = json.loads((output / "summary_decoder.json").read_text())
+    assert written["gate3_prime"]["passed"] is False
+
+
+@pytest.mark.parametrize("field", ["local_pairs_evaluated", "valid_genotype_fraction"])
+def test_decoder_summary_rejects_a_candidate_arm_that_evaluated_nothing(
+    tmp_path: Path, field: str,
+) -> None:
+    # Given a run whose candidate arm reports an empty or partly invalid genotype evaluation.
+    from scripts.hipodit_multiseed_summary import ExperimentError, summarize_decoder
+
+    output = completed_decoder_experiment(tmp_path)
+    path = output / "seed_15" / "standard" / "diagnostic_report.json"
+    report = json.loads(path.read_text())
+    report["genotype_evaluation"]["synthetic_T"][field] = 0
+    path.write_text(json.dumps(report))
+
+    # When/Then the candidate arm is held to the same contract as the baseline arm.
     with pytest.raises(ExperimentError):
         summarize_decoder(output)
 
@@ -388,12 +438,14 @@ def test_gate3_prime_needs_three_intervals_below_zero_inside_the_af_guardrail(
     from scripts.hipodit_multiseed_summary import _gate3_prime
 
     verdict = _gate3_prime(_gate_metrics(**overrides),
-                           {"b0_nll": 0.2, "t_nll": 0.11, "ci_low": -0.1, **nll})
+                           {"b0_nll": 0.2, "t_nll": 0.11, "ci_low": -0.1, **nll},
+                           [{"seed": seed, "passed": True} for seed in DECODER_SEEDS])
 
     # Then exactly the condition that was moved fails, and it alone decides the verdict.
     assert verdict["passed"] is (failing is None)
-    assert [name for name in ("test_nll_improved", "cohort_af_mae_improved",
-                              "heterozygosity_mae_improved", "af_mae_guardrail")
+    assert [name for name in ("gate2_prime_held_in_every_seed", "test_nll_improved",
+                              "cohort_af_mae_improved", "heterozygosity_mae_improved",
+                              "af_mae_guardrail")
             if not verdict[name]] == ([] if failing is None else [failing])
     assert verdict["resampling_unit"]["test_nll"] == "held-out individuals"
 

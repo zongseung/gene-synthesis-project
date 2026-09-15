@@ -236,6 +236,8 @@ def prepare(args: argparse.Namespace) -> None:
         "samples": len(raw),
         "genes": args.genes,
         "components": args.components,
+        # The per-gene variant cap actually used; without it the panel cannot be rebuilt.
+        "max_variants": args.max_variants,
         "glm_family": "binomial",
         "glm_iterations": args.glm_iterations,
         "maf_filter": "train-only >= 0.01",

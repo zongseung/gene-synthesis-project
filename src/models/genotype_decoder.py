@@ -27,6 +27,8 @@ _FITTED_OFFSET_ARMS = ("B1", "B3", "T")
 # reached and fit_decoder marks the fit unconverged past 1e-8, which is the upgrade trigger.
 _NEWTON_STEPS = 25
 _AF_RESIDUAL_TOLERANCE = 1e-8
+# Stationarity bar for the fitted parameters, relative to the objective they were taken of.
+_RELATIVE_GRADIENT_TOLERANCE = 1e-7
 _DOSAGE = np.arange(3, dtype=np.float64)
 _LOG_COEFFICIENT = np.log([1.0, 2.0, 1.0])
 
@@ -343,8 +345,12 @@ def fit_decoder(arm: str, calls: FloatArray, base_logits: FloatArray, labels: In
         optimizer.step(closure)
         loss = closure()
         gradient = max(float(tensor.grad.abs().max()) for tensor in parameters)
-        # Tolerance scales with the summed objective, which grows with the observed call count.
-        converged = bool(torch.isfinite(loss) and gradient <= 1e-6 * max(int(observed.sum()), 1))
+        objective = float(loss.detach())
+        # Relative, not per-observation: the largest parameter gradient has to be negligible
+        # against the objective value, so a bigger panel does not buy a looser bar. The fits this
+        # study reports sit far inside it (arm T 1.18e-5 against ~7.5e-3, arm B1 9.8e-7).
+        converged = bool(torch.isfinite(loss)
+                         and gradient <= _RELATIVE_GRADIENT_TOLERANCE * max(objective, 1.0))
 
     with torch.no_grad():
         # The constrained offset is what every decoding path reads, so it is what gets stored.

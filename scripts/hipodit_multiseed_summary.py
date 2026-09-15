@@ -117,8 +117,12 @@ def _validated_run(directory: Path, manifest: dict, seed: int, schedule: str,
         raise ExperimentError(f"Generation metadata mismatch: {run}")
     evaluation = report["genotype_evaluation"]
     synthetic = evaluation["synthetic"]
+    # Every decoded arm the run carries, so the candidate is held to the baseline's contract.
+    decoded = [evaluation[f"synthetic{suffix}"] for _, suffix in DECODER_ARMS
+               if f"synthetic{suffix}" in evaluation]
     if (evaluation["samples"] != parameters["samples"] or evaluation["variants"] < 1
-            or synthetic["local_pairs_evaluated"] < 1 or synthetic["valid_genotype_fraction"] != 1):
+            or any(arm["local_pairs_evaluated"] < 1 or arm["valid_genotype_fraction"] != 1
+                   for arm in decoded)):
         raise ExperimentError(f"Invalid genotype evaluation: {run}")
     aligned = (config, metadata, evaluation["variants"], synthetic["local_pairs_evaluated"],
                report["torch_version"], report["cuda_version"])
@@ -222,11 +226,15 @@ def _flat_arm_metrics(block: dict, scores: dict, run: Path) -> dict[str, float]:
     return {metric: float(value) for metric, value in flat.items()}
 
 
-def _gate3_prime(metrics: dict, nll: dict) -> dict:
+def _gate3_prime(metrics: dict, nll: dict, gates: list[dict]) -> dict:
     """Plan rev.2 §9.4 Gate 3': the oracle NLL and the two gated end-to-end metrics must each
     improve with a 95% CI upper bound below zero, and overall AF MAE must stay inside 105% of B0.
-    LD r-squared is descriptive only (§9.1)."""
-    conditions = {"test_nll_improved": nll["difference"] < 0 and nll["ci_high"] < 0}
+    LD r-squared is descriptive only (§9.1).
+
+    Every run recomputes the Gate 2' conditions on this split, so a seed that fails them is a
+    negative Gate 3' result and is judged here rather than aborting the summary."""
+    conditions = {"gate2_prime_held_in_every_seed": all(gate["passed"] for gate in gates),
+                  "test_nll_improved": nll["difference"] < 0 and nll["ci_high"] < 0}
     for metric in GATE3_PRIME_CI_METRICS:
         estimate = metrics[metric]
         conditions[f"{metric}_improved"] = (estimate["difference_mean"] < 0
@@ -239,6 +247,7 @@ def _gate3_prime(metrics: dict, nll: dict) -> dict:
                                  ("b0_nll", "t_nll", "difference", "ci_low", "ci_high")},
                     **{metric: metrics[metric]
                        for metric in (*GATE3_PRIME_CI_METRICS, "af_mae")}},
+        "per_seed_decoder_gate": gates,
         "resampling_unit": {"test_nll": "held-out individuals", "paired_metrics": "seeds"},
         "descriptive_only": {name: metrics[name] for name in metrics
                              if name.startswith("ld_r2_mae")},
@@ -268,15 +277,17 @@ def summarize_decoder(directory: Path) -> dict:
     train_block = (blocks["train_calls"], blocks["train_labels"])
     values: dict[tuple[int, str], dict[str, float]] = {}
     raw_reports: list[str] = []
+    gates: list[dict] = []
     baseline = None
     for seed, schedule in expected:
         report, evaluation, run, aligned = _validated_run(directory, manifest, seed, schedule, None)
         if "synthetic_T" not in evaluation:
             raise ExperimentError(f"Arm T was never decoded in this run: {run}")
-        frozen = (evaluation["decoder_sha256"], report["eval_split"],
-                  evaluation["decoder_gate"]["passed"])
-        if frozen != (manifest["decoder_sha256"], split, True):
-            raise ExperimentError(f"Run did not use the declared Gate 2'-passing decoder: {run}")
+        # Provenance is a precondition; the Gate 2' verdict is an outcome, recorded and gated below.
+        frozen = (evaluation["decoder_sha256"], report["eval_split"])
+        if frozen != (manifest["decoder_sha256"], split):
+            raise ExperimentError(f"Run did not use the declared decoder and split: {run}")
+        gates.append({"seed": seed, **evaluation["decoder_gate"]})
         if baseline is not None and aligned != baseline:
             raise ExperimentError(f"Paired data/configuration/evaluation mismatch: {run}")
         baseline = aligned
@@ -311,11 +322,12 @@ def summarize_decoder(directory: Path) -> dict:
         "metrics": metrics, "paired_differences": differences, "test_nll": nll,
         "classifier_real_eval": population_classifier_scores(
             *train_block, blocks["eval_calls"], blocks["eval_labels"]),
-        "gate3_prime": _gate3_prime(metrics, nll), "raw_reports": raw_reports,
+        "gate3_prime": _gate3_prime(metrics, nll, gates), "raw_reports": raw_reports,
         "alignment": ["All declared runs complete", "Prepared/source hashes unchanged",
                       "Configs equal except output path",
                       "Labels, normalization, evaluation counts and runtime versions equal",
-                      "Same decoder digest, eval split and Gate 2' verdict in every run"],
+                      "Same decoder digest and eval split in every run; each run's Gate 2' "
+                      "verdict is recorded and gated, not assumed"],
         "limitation": "One frozen split opened once; seeds are the replicates for the end-to-end "
         "metrics and held-out individuals for the deterministic oracle NLL. LD r-squared is "
         "descriptive, not evidence of linkage.",
