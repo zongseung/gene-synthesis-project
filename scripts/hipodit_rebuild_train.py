@@ -55,7 +55,7 @@ def train(args: argparse.Namespace) -> None:
     x = torch.from_numpy(data["x"]).permute(0, 2, 1).contiguous()
     y = torch.from_numpy(data["y"]).long()
     train_indices = torch.from_numpy(data["train_indices"]).long()
-    val_indices = data["val_indices"]
+    eval_indices = data[f"{args.eval_split}_indices"]
     prepared = json.loads((args.output_dir / "prepare_report.json").read_text())
     pop_mapping = {int(key): int(value) for key, value in prepared["pop_to_superpop"].items()}
     stats_path = args.output_dir / "normalization_stats.pkl"
@@ -145,8 +145,8 @@ def train(args: argparse.Namespace) -> None:
     (run_dir / "diagnostic_config.yaml").write_text(
         yaml.safe_dump(config, sort_keys=False)
     )
-    count = min(args.samples, len(val_indices))
-    sample_labels = y[torch.from_numpy(val_indices[:count])].to(device)
+    count = min(args.samples, len(eval_indices))
+    sample_labels = y[torch.from_numpy(eval_indices[:count])].to(device)
     samples_norm = diffusion.sample_ddim(
         model, (count, prepared["components"], prepared["genes"]), sample_labels,
         device, ddim_steps=args.ddim_steps, eta=0.0, guidance_scale=0.0,
@@ -155,15 +155,20 @@ def train(args: argparse.Namespace) -> None:
         stats_path, expected_shape=(prepared["genes"], prepared["components"]),
     )
     samples = invert_normalization(samples_norm, stats)
-    real = invert_normalization(data["x"][val_indices[:count]], stats)
+    real = invert_normalization(data["x"][eval_indices[:count]], stats)
     np.save(run_dir / "synthetic_samples_original.npy", samples)
     genotype_metrics = None
     if prepared["glm_family"] == "binomial":
-        genotype_metrics, genotype_calls = evaluate_genotypes(args.output_dir, samples, real, seed=args.seed + 1)
-        np.save(run_dir / "synthetic_genotypes.npy", genotype_calls)
+        genotype_metrics, genotype_calls = evaluate_genotypes(
+            args.output_dir, samples, real, seed=args.seed + 1,
+            decoder_dir=args.decoder_dir, split=args.eval_split)
+        np.save(run_dir / "synthetic_genotypes.npy", genotype_calls["B0"])
+        if "T" in genotype_calls:
+            np.save(run_dir / "synthetic_genotypes_T.npy", genotype_calls["T"])
+    labels_generated = sample_labels.cpu().tolist()
     samples_dir = run_dir / "synthetic_samples"
     samples_dir.mkdir(exist_ok=False)
-    for index, (sample, label) in enumerate(zip(samples, sample_labels.cpu().tolist())):
+    for index, (sample, label) in enumerate(zip(samples, labels_generated)):
         torch.save(
             (torch.from_numpy(sample.T.copy()), torch.tensor(label, dtype=torch.long)),
             samples_dir / f"sample_pop{label}_{index:04d}.pt",
@@ -186,6 +191,12 @@ def train(args: argparse.Namespace) -> None:
         "diagnostic_only": True,
         "schedule": args.schedule,
         "genotype_evaluation": genotype_metrics,
+        "eval_split": args.eval_split,
+        "decoder_dir": str(args.decoder_dir) if args.decoder_dir else None,
+        "cohort_label_source": f"{args.eval_split} labels of the first {count} individuals in "
+                               "split order; natural composition, no balanced sampling",
+        "label_composition": {label: labels_generated.count(label)
+                              for label in sorted(set(labels_generated))},
         "limitation": f"{prepared['genes']} chr17 genes and one training seed; diagnostic only",
         "seed": args.seed, "device": str(device), "torch_version": torch.__version__,
         "cuda_version": torch.version.cuda, "steps": args.steps, "ddim_steps": args.ddim_steps,
@@ -208,7 +219,7 @@ def train(args: argparse.Namespace) -> None:
     _atomic_json(samples_dir / "generation_meta.json", {
         "sample_space": "original", "stats_path": str(stats_path),
         "stats_fingerprint": prepared["normalization_fingerprint"],
-        "labels": sample_labels.cpu().tolist(),
+        "labels": labels_generated,
     })
     if report["status"] != "complete":
         raise DiagnosticRuntimeError(f"diagnostic checks failed: {checks}")

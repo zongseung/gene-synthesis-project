@@ -63,6 +63,9 @@ def build_parser() -> argparse.ArgumentParser:
     train_parser.add_argument("--ddim-steps", type=positive_int, default=20)
     train_parser.add_argument("--seed", type=int, default=20260327)
     train_parser.add_argument("--device", choices=("cuda", "cpu"), default="cuda")
+    train_parser.add_argument("--decoder-dir", type=Path,
+                              help="Gate 1'-passing oracle directory whose decoder_T.npz also decodes the generated latents")
+    train_parser.add_argument("--eval-split", choices=("val", "test"), default="val")
     return parser
 
 

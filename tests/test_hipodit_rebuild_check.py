@@ -35,6 +35,19 @@ def test_cli_help_describes_the_diagnostic_stages() -> None:
     assert "{prepare,train}" in result.stdout
 
 
+def test_train_help_offers_the_decoder_and_the_evaluation_split() -> None:
+    result = subprocess.run(
+        [sys.executable, str(SCRIPT), "train", "--help"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0
+    assert "--decoder-dir" in result.stdout
+    assert "--eval-split {val,test}" in result.stdout
+
+
 def test_cli_rejects_zero_genes() -> None:
     result = subprocess.run(
         [sys.executable, str(SCRIPT), "prepare", "--genes", "0"],

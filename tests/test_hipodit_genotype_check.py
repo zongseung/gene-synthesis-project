@@ -10,6 +10,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from scipy.special import expit
 
 SCRIPT = Path(__file__).parents[1] / "scripts" / "hipodit_genotype_check.py"
 PANEL_DIR = Path("outputs/diagnostics/hipodit_fisher_20260915_unique")
@@ -128,6 +129,41 @@ def test_maf_bins_average_only_the_snps_they_contain() -> None:
     assert result["af_mae_by_maf_bin"][2] == pytest.approx(0.0)
 
 
+def _base_logits(prepared: Path, factors: np.ndarray) -> np.ndarray:
+    from scripts.hipodit_genotype_check import base_logits
+
+    with (prepared / "glm_pca_parameters.pkl").open("rb") as handle:
+        return base_logits(pickle.load(handle), factors)
+
+
+def _split_factors(prepared: Path, split: str) -> np.ndarray:
+    """The inverse-normalized latents of one split, the scale `train` hands the decoder."""
+    with np.load(prepared / "dataset.npz") as data:
+        return data["x"][data[f"{split}_indices"]].astype(np.float64)
+
+
+def _fake_decoder_dir(prepared: Path, decoder_dir: Path, *, gate1_passed: bool = True) -> None:
+    """A Task 8-shaped oracle output: a fitted arm-T decoder, prepared hashes and the verdict."""
+    from scripts.hipodit_genotype_check import _digest, base_logits, panel_positions
+    from src.models.genotype_decoder import fit_decoder
+
+    decoder_dir.mkdir(parents=True)
+    with np.load(prepared / "genotypes.npz") as data:
+        calls, offsets = data["calls"].astype(np.float64), data["offsets"]
+    with np.load(prepared / "dataset.npz") as data:
+        factors, labels = data["x"].astype(np.float64), data["y"]
+        train_indices = data["train_indices"]
+    with (prepared / "glm_pca_parameters.pkl").open("rb") as handle:
+        parameters = pickle.load(handle)
+    decoder = fit_decoder("T", calls, base_logits(parameters, factors), labels, train_indices,
+                          panel_positions(prepared), offsets, 26, tilt_scope="snp")
+    decoder.save(decoder_dir / "decoder_T.npz")
+    (decoder_dir / "study_manifest.json").write_text(json.dumps(
+        {"prepared_sha256": {path.name: _digest(path) for path in sorted(prepared.iterdir())}}))
+    (decoder_dir / "oracle_results.json").write_text(
+        json.dumps({"gate1_prime": {"passed": gate1_passed, "candidate": "T"}}))
+
+
 def test_evaluate_genotypes_keeps_its_legacy_keys(tmp_path: Path) -> None:
     # Given the frozen prepared-directory layout and factors on the GLM-PCA scale.
     from scripts.hipodit_genotype_check import evaluate_genotypes
@@ -137,7 +173,7 @@ def test_evaluate_genotypes_keeps_its_legacy_keys(tmp_path: Path) -> None:
     factors = np.load(prepared / "dataset.npz")["x"][:4].astype(np.float64)
 
     # When the legacy entry point decodes synthetic and reconstructed factors.
-    report, synthetic = evaluate_genotypes(prepared, factors, factors, seed=3)
+    report, calls = evaluate_genotypes(prepared, factors, factors, seed=3)
 
     # Then the keys the multiseed summary reads survive alongside the new ones.
     for block in ("synthetic", "real_latent_decoder_reference"):
@@ -146,7 +182,172 @@ def test_evaluate_genotypes_keeps_its_legacy_keys(tmp_path: Path) -> None:
         assert report[block]["valid_genotype_fraction"] == 1.0
         assert report[block]["ld_r2_mae"] is not None
     assert (report["samples"], report["variants"]) == (4, 8)
-    assert synthetic.shape == (4, 8)
+    # And without a decoder directory only the baseline binomial arm is drawn, on its own stream.
+    assert set(calls) == {"B0"} and calls["B0"].shape == (4, 8)
+    np.testing.assert_array_equal(calls["B0"], np.random.default_rng(3).binomial(
+        2, expit(_base_logits(prepared, factors))).astype(np.int8))
+
+
+def test_evaluate_genotypes_decodes_arm_t_beside_the_unchanged_binomial_draw(tmp_path: Path) -> None:
+    # Given a Gate 1'-passing arm-T decoder fitted on the same prepared panel.
+    from scripts.hipodit_genotype_check import evaluate_genotypes
+    from src.models.genotype_decoder import GenotypeDecoder, sample_calls
+
+    prepared = tmp_path / "prepared"
+    _fake_prepared(prepared)
+    decoder_dir = tmp_path / "oracle"
+    _fake_decoder_dir(prepared, decoder_dir)
+    # Generated latents differ from the real ones they are scored against, as they do end to end.
+    real = _split_factors(prepared, "val")
+    synthetic = real + 0.3
+
+    baseline, _ = evaluate_genotypes(prepared, synthetic, real, seed=3)
+    report, calls = evaluate_genotypes(prepared, synthetic, real, seed=3, decoder_dir=decoder_dir)
+
+    # Then arm T is reported beside the legacy blocks, which are untouched.
+    assert report["synthetic"] == baseline["synthetic"]
+    assert report["real_latent_decoder_reference"] == baseline["real_latent_decoder_reference"]
+    assert {"synthetic_T", "real_latent_decoder_reference_T", "decoder_gate", "scale_check",
+            "extremeness", "af_preservation"} <= set(report)
+    assert set(report["synthetic_T"]) == set(report["synthetic"])
+    # And its calls are diploid dosages the decoder drew from the synthetic logits, on a stream
+    # of their own that leaves the baseline draws where they were.
+    assert set(calls) == {"B0", "T"}
+    assert calls["T"].dtype == np.int8 and calls["T"].shape == (4, 8)
+    assert set(np.unique(calls["T"]).tolist()) <= {0, 1, 2}
+    with np.load(prepared / "dataset.npz") as data:
+        labels = data["y"][data["val_indices"]]
+    decoder = GenotypeDecoder.load(decoder_dir / "decoder_T.npz")
+    np.testing.assert_array_equal(calls["T"], sample_calls(
+        decoder, _base_logits(prepared, synthetic), labels, np.random.default_rng(5)))
+    assert report["synthetic_T"] != report["real_latent_decoder_reference_T"]
+    # And the decoder that produced them is identified in full.
+    assert (report["decoder_arm"], report["decoder_tilt_scope"]) == ("T", "snp")
+    assert report["decoder_offset_gauge"] == "pooled_af"
+    assert report["decoder_pooled_af_residual"] < 1e-8
+    assert len(report["decoder_sha256"]) == 64
+    assert set(report["decoder_lambda"]) == {"lambda_u", "lambda_tilt"}
+    # And the latent scale is verified against the frozen panel before anything is decoded.
+    assert report["scale_check"] == {"prepared_hashes_match": True,
+                                     "real_factor_max_abs_diff": 0.0}
+    # And the tails of each side's cohort-offset linear predictor are recorded, not mixed up.
+    assert set(report["extremeness"]) == {"real", "synthetic", "frac_abs_gt_4_ratio"}
+    assert set(report["extremeness"]["real"]) == {"frac_abs_gt_4", "frac_abs_gt_6", "mean_abs"}
+    offset = decoder.cohort_offset[labels]
+    for side, factors in (("real", real), ("synthetic", synthetic)):
+        assert report["extremeness"][side]["mean_abs"] == pytest.approx(
+            np.abs(_base_logits(prepared, factors) + offset).mean())
+    # And arm T's promised allele frequency is measured against its own draw noise.
+    assert set(report["af_preservation"]) == {"expected_af_vs_sampled_max_abs_diff",
+                                              "draw_noise_3sigma", "within_draw_noise"}
+    assert report["af_preservation"]["expected_af_vs_sampled_max_abs_diff"] == pytest.approx(
+        np.abs(calls["T"].mean(axis=0) / 2
+               - expit(_base_logits(prepared, synthetic) + offset).mean(axis=0)).max())
+    assert set(report["decoder_gate"]) == {"nll_not_applicable", "heterozygosity_improved",
+                                           "cohort_af_guardrail", "af_guardrail", "passed",
+                                           "metrics"}
+    # And the gate scores arm T against the baseline arm of this same run.
+    assert report["decoder_gate"]["metrics"]["af_mae"] == {
+        "T": report["synthetic_T"]["af_mae"], "B0": report["synthetic"]["af_mae"]}
+
+
+def test_evaluate_genotypes_refuses_factors_off_the_inverse_normalized_scale(tmp_path: Path) -> None:
+    # Given real factors that are not what inverting the stored normalization produces.
+    from scripts.hipodit_genotype_check import evaluate_genotypes
+
+    prepared = tmp_path / "prepared"
+    _fake_prepared(prepared)
+    decoder_dir = tmp_path / "oracle"
+    _fake_decoder_dir(prepared, decoder_dir)
+    factors = _split_factors(prepared, "val")
+
+    with pytest.raises(ValueError, match="latent scale"):
+        evaluate_genotypes(prepared, factors, 2 * factors + 1, seed=3, decoder_dir=decoder_dir)
+
+
+def test_evaluate_genotypes_refuses_a_panel_that_changed_since_the_decoder_was_fitted(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given a decoder whose manifest no longer describes the genotypes it was fitted on.
+    import scripts.hipodit_genotype_check as module
+
+    prepared = tmp_path / "prepared"
+    _fake_prepared(prepared)
+    decoder_dir = tmp_path / "oracle"
+    _fake_decoder_dir(prepared, decoder_dir)
+    manifest_path = decoder_dir / "study_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["prepared_sha256"]["genotypes.npz"] = "0" * 64
+    manifest_path.write_text(json.dumps(manifest))
+    factors = _split_factors(prepared, "val")
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("the decoder must not sample once the scale check has failed")
+
+    monkeypatch.setattr(module, "sample_calls", refuse)
+
+    # Then the mismatching file is named and no call is drawn.
+    with pytest.raises(ValueError, match="genotypes.npz"):
+        module.evaluate_genotypes(prepared, factors, factors, seed=3, decoder_dir=decoder_dir)
+
+
+def test_evaluate_genotypes_refuses_a_decoder_that_failed_gate1_prime(tmp_path: Path) -> None:
+    from scripts.hipodit_genotype_check import evaluate_genotypes
+
+    prepared = tmp_path / "prepared"
+    _fake_prepared(prepared)
+    decoder_dir = tmp_path / "oracle"
+    _fake_decoder_dir(prepared, decoder_dir, gate1_passed=False)
+
+    with pytest.raises(ValueError, match="Gate 1'"):
+        evaluate_genotypes(prepared, _split_factors(prepared, "val"), _split_factors(prepared, "val"),
+                           seed=3, decoder_dir=decoder_dir)
+
+
+def test_evaluate_genotypes_reads_the_requested_split(tmp_path: Path) -> None:
+    # Given a panel whose validation and test rows carry different cohort labels.
+    from scripts.hipodit_genotype_check import evaluate_genotypes
+
+    prepared = tmp_path / "prepared"
+    _fake_prepared(prepared)
+
+    validation, _ = evaluate_genotypes(prepared, _split_factors(prepared, "val"),
+                                       _split_factors(prepared, "val"), seed=3)
+    test, _ = evaluate_genotypes(prepared, _split_factors(prepared, "test"),
+                                 _split_factors(prepared, "test"), seed=3, split="test")
+
+    # Then the cohorts scored are the ones belonging to the split that was asked for.
+    assert set(validation["synthetic"]["cohort_af_mae_by_cohort"]) == {11}
+    assert set(test["synthetic"]["cohort_af_mae_by_cohort"]) == {25}
+
+
+@pytest.mark.parametrize(("candidate", "failing"), [
+    ((0.05, 0.9, 0.9), []),
+    ((0.05, 1.05, 1.0), []),
+    ((0.05, 1.0500001, 1.0), ["cohort_af_guardrail"]),
+    ((0.05, 1.0, 1.05), []),
+    ((0.05, 1.0, 1.0500001), ["af_guardrail"]),
+    ((0.1, 1.0, 1.0), ["heterozygosity_improved"]),
+    ((0.05, None, 1.0), ["cohort_af_guardrail"]),
+], ids=["all-improve", "cohort-at-1.05", "cohort-past-1.05", "af-at-1.05", "af-past-1.05",
+        "het-tie", "cohort-not-estimable"])
+def test_gate2_prime_needs_a_het_gain_inside_both_af_guardrails(candidate, failing) -> None:
+    from scripts.hipodit_genotype_check import gate2_prime
+
+    # Given B0 with heterozygosity MAE 0.1 and unit cohort and overall AF MAE on generated latents.
+    names = ("heterozygosity_mae", "cohort_af_mae", "af_mae")
+    gate = gate2_prime({**dict(zip(names, candidate)), "ld_r2_mae": 0.5},
+                       {"heterozygosity_mae": 0.1, "cohort_af_mae": 1.0, "af_mae": 1.0,
+                        "ld_r2_mae": 0.7})
+
+    # Then T passes only when all three conditions hold; NLL never takes part.
+    assert gate["nll_not_applicable"] is True
+    failed = [name for name in ("heterozygosity_improved", "cohort_af_guardrail", "af_guardrail")
+              if not gate[name]]
+    assert failed == failing
+    assert gate["passed"] is (not failing)
+    # And the raw values of all four metrics are carried, LD r2 descriptively.
+    assert set(gate["metrics"]) == {*names, "ld_r2_mae"}
+    assert gate["metrics"]["ld_r2_mae"] == {"T": 0.5, "B0": 0.7}
 
 
 def test_oracle_refuses_overlapping_splits_before_doing_any_work(tmp_path: Path) -> None:

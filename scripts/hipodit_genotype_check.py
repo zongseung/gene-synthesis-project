@@ -24,7 +24,13 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.models.genotype_decoder import distance_bins, fit_decoder, nll_calls, sample_calls
+from src.models.genotype_decoder import (
+    GenotypeDecoder,
+    distance_bins,
+    fit_decoder,
+    nll_calls,
+    sample_calls,
+)
 
 N_COHORTS = 26
 DISTANCE_BINS = 4
@@ -40,6 +46,15 @@ TILT_ARMS = {"B0": ("B0", "none"), "B1": ("B1", "none"), "T": ("T", "snp"),
 # Plan rev.2 §9.4 Gate 1' for T against B0: (metric, factor on B0, strict inequality).
 GATE1_PRIME_RULES = (("nll_per_call", 1.0, True), ("heterozygosity_mae", 1.0, True),
                      ("cohort_af_mae", 1.05, False), ("af_mae", 1.05, False))
+# Plan rev.2 §9.4 Gate 2' is Gate 1' without the NLL: generated latents carry no teacher-forced
+# predecessor, and arm T uses none in the first place. Rules and their reported names, in order.
+GATE2_PRIME_RULES = (("heterozygosity_mae", 1.0, True), ("cohort_af_mae", 1.05, False),
+                     ("af_mae", 1.05, False))
+GATE2_PRIME_NAMES = ("heterozygosity_improved", "cohort_af_guardrail", "af_guardrail")
+# Prepared files whose bytes fix the scale and origin of the latents the decoder was fitted on.
+SCALE_CHECK_FILES = ("dataset.npz", "gene_variant_map.json", "genotypes.npz",
+                     "glm_pca_parameters.pkl", "normalization_stats.pkl")
+REAL_FACTOR_TOLERANCE = 1e-5
 DESCRIPTIVE_METRICS = ("ld_r2_mae", "ld_r2_mae_by_bin", "local_dosage_covariance_mae")
 CONTROL_METRICS = ("af_mae", "heterozygosity_mae")
 
@@ -161,9 +176,75 @@ def genotype_metrics(real: np.ndarray, generated: np.ndarray, *, offsets: np.nda
     return metrics
 
 
+def _scale_check(prepared_dir: Path, decoder_dir: Path, real_factors: np.ndarray,
+                 indices: np.ndarray) -> dict:
+    """Plan rev.2 §9.4 Gate 2': the panel and the latent scale must be the ones the decoder saw.
+
+    The tilt was fitted against oracle logits, so decoding generated latents is only meaningful if
+    the inverse-normalization boundary still puts them on that same scale and origin.
+    """
+    from src.preprocessing.tokenizer import invert_normalization, load_normalization_stats
+
+    frozen = json.loads((decoder_dir / "study_manifest.json").read_text())["prepared_sha256"]
+    changed = [name for name in SCALE_CHECK_FILES
+               if frozen.get(name) != _digest(prepared_dir / name)]
+    if changed:
+        raise ValueError(f"Prepared files changed since the decoder was fitted: {', '.join(changed)}")
+    stats = load_normalization_stats(prepared_dir / "normalization_stats.pkl")
+    with np.load(prepared_dir / "dataset.npz") as data:
+        expected = invert_normalization(data["x"][indices], stats)
+    difference = float(np.abs(np.asarray(real_factors, dtype=np.float64) - expected).max())
+    if difference > REAL_FACTOR_TOLERANCE:
+        raise ValueError("Real factors are off the inverse-normalized latent scale by "
+                         f"{difference:.6g} > {REAL_FACTOR_TOLERANCE:g}")
+    return {"prepared_hashes_match": True, "real_factor_max_abs_diff": difference}
+
+
+def _load_gate1_decoder(decoder_dir: Path) -> GenotypeDecoder:
+    """The arm-T decoder of an oracle run, refused unless that run passed Gate 1'."""
+    verdict = json.loads((decoder_dir / "oracle_results.json").read_text())["gate1_prime"]
+    if not verdict["passed"]:
+        raise ValueError(f"Decoder {decoder_dir} did not pass Gate 1'; it must not decode Phase 2")
+    return GenotypeDecoder.load(decoder_dir / "decoder_T.npz")
+
+
+def _extremeness(real_eta: np.ndarray, synthetic_eta: np.ndarray) -> dict:
+    """How far into the tails each linear predictor runs (plan rev.2 §9.4).
+
+    The tilt was fitted on oracle logits, so generated logits that are more confident than the real
+    ones would apply a heterozygosity correction calibrated somewhere else.
+    """
+    def tails(eta: np.ndarray) -> dict:
+        absolute = np.abs(eta)
+        return {"frac_abs_gt_4": float((absolute > 4).mean()),
+                "frac_abs_gt_6": float((absolute > 6).mean()),
+                "mean_abs": float(absolute.mean())}
+
+    real, synthetic = tails(real_eta), tails(synthetic_eta)
+    ratio = synthetic["frac_abs_gt_4"] / real["frac_abs_gt_4"] if real["frac_abs_gt_4"] else None
+    return {"real": real, "synthetic": synthetic, "frac_abs_gt_4_ratio": ratio}
+
+
+def gate2_prime(candidate: dict, baseline: dict) -> dict:
+    """Plan rev.2 §9.4 Gate 2': on generated latents T must improve heterozygosity MAE and stay
+    inside a 5% cohort and overall AF MAE margin. LD r2 is carried descriptively only."""
+    checks = _gate_checks(candidate, baseline, GATE2_PRIME_RULES)
+    return {
+        "nll_not_applicable": True,
+        **dict(zip(GATE2_PRIME_NAMES, checks)),
+        "passed": all(checks),
+        "metrics": {metric: {"T": candidate.get(metric), "B0": baseline.get(metric)}
+                    for metric in (*(rule[0] for rule in GATE2_PRIME_RULES), "ld_r2_mae")},
+    }
+
+
 def evaluate_genotypes(
     prepared_dir: Path, synthetic_factors: np.ndarray, real_factors: np.ndarray, *, seed: int,
-) -> tuple[dict, np.ndarray]:
+    decoder_dir: Path | None = None, split: str = "val",
+) -> tuple[dict, dict[str, np.ndarray]]:
+    """Decode one split's generated and real latents to calls, with arm B0 and, given a Gate
+    1'-passing oracle directory, the primary arm T beside it."""
+    prepared_dir = Path(prepared_dir)
     with (prepared_dir / "glm_pca_parameters.pkl").open("rb") as handle:
         parameters = pickle.load(handle)
     if any(item.get("family") != "binomial" or item.get("trials") != 2 for item in parameters):
@@ -171,28 +252,61 @@ def evaluate_genotypes(
     with np.load(prepared_dir / "genotypes.npz") as data:
         calls, offsets = data["calls"], data["offsets"]
     with np.load(prepared_dir / "dataset.npz") as data:
-        indices = data["val_indices"][:len(synthetic_factors)]
+        indices = data[f"{split}_indices"][:len(synthetic_factors)]
+        labels = data["y"][indices].astype(np.int64)
     real = calls[indices]
     positions = panel_positions(prepared_dir)
     edges = distance_bins(positions, offsets, DISTANCE_BINS).edges
+    synthetic_logits = base_logits(parameters, synthetic_factors)
+    real_logits = base_logits(parameters, real_factors)
 
-    def decode(factors: np.ndarray, draw_seed: int) -> np.ndarray:
-        return np.random.default_rng(draw_seed).binomial(
-            2, expit(base_logits(parameters, factors))).astype(np.int8)
+    def decode(logits: np.ndarray, draw_seed: int) -> np.ndarray:
+        return np.random.default_rng(draw_seed).binomial(2, expit(logits)).astype(np.int8)
 
-    synthetic = decode(synthetic_factors, seed)
-    reconstruction = decode(real_factors, seed + 1)
+    arms = {"B0": decode(synthetic_logits, seed)}
+    reconstruction = decode(real_logits, seed + 1)
 
     def metrics(generated: np.ndarray) -> dict:
-        return genotype_metrics(real, generated, offsets=offsets, positions=positions, edges=edges)
+        # Generated rows are the split's own individuals, so real and generated labels agree.
+        return genotype_metrics(real, generated, offsets=offsets, positions=positions, edges=edges,
+                                real_labels=labels, gen_labels=labels)
 
-    return {
-        "synthetic": metrics(synthetic),
+    report = {
+        "synthetic": metrics(arms["B0"]),
         "real_latent_decoder_reference": metrics(reconstruction),
-        "samples": len(synthetic),
-        "variants": synthetic.shape[1],
+        "samples": len(arms["B0"]),
+        "variants": arms["B0"].shape[1],
         "limitation": "One stochastic independent-binomial decoder draw; unphased local dosage covariance, not haplotype LD",
-    }, synthetic
+    }
+    if decoder_dir is None:
+        return report, arms
+
+    decoder_dir = Path(decoder_dir)
+    report["scale_check"] = _scale_check(prepared_dir, decoder_dir, real_factors, indices)
+    decoder = _load_gate1_decoder(decoder_dir)
+    arms["T"] = sample_calls(decoder, synthetic_logits, labels, np.random.default_rng(seed + 2))
+    reconstruction_t = sample_calls(decoder, real_logits, labels, np.random.default_rng(seed + 3))
+    offset = decoder.cohort_offset[labels]
+    synthetic_t = metrics(arms["T"])
+    # Arm T promises E[g] = 2 sigmoid(eta0 + u) exactly; one draw per individual is a loose test.
+    preserved = af_preservation(expit(synthetic_logits + offset).mean(axis=0),
+                                arms["T"].mean(axis=0) / 2, len(labels))
+    report.update({
+        "synthetic_T": synthetic_t,
+        "real_latent_decoder_reference_T": metrics(reconstruction_t),
+        "decoder_arm": decoder.arm, "decoder_tilt_scope": decoder.tilt_scope,
+        "decoder_offset_gauge": decoder.offset_gauge,
+        "decoder_pooled_af_residual": decoder.pooled_af_residual,
+        "decoder_sha256": _digest(decoder_dir / "decoder_T.npz"),
+        "decoder_lambda": {"lambda_u": decoder.lambda_u, "lambda_tilt": decoder.lambda_tilt},
+        "extremeness": _extremeness(real_logits + offset, synthetic_logits + offset),
+        "af_preservation": {
+            "expected_af_vs_sampled_max_abs_diff": preserved["sampled_af_max_abs_diff"],
+            "draw_noise_3sigma": preserved["draw_noise_3sigma"],
+            "within_draw_noise": preserved["within_draw_noise"]},
+        "decoder_gate": gate2_prime(synthetic_t, report["synthetic"]),
+    })
+    return report, arms
 
 
 def base_logits(parameters: list[dict], factors: np.ndarray) -> np.ndarray:
@@ -438,10 +552,10 @@ def _gate1(arms: dict) -> dict:
     }
 
 
-def _gate1_prime_checks(candidate: dict, baseline: dict) -> list[bool]:
-    """Each Gate 1' rule on flat metric dicts that include nll_per_call; not estimable fails."""
+def _gate_checks(candidate: dict, baseline: dict, rules: tuple) -> list[bool]:
+    """Each (metric, factor, strict) rule on flat metric dicts; not estimable fails."""
     checks = []
-    for metric, factor, strict in GATE1_PRIME_RULES:
+    for metric, factor, strict in rules:
         value, reference = candidate.get(metric), baseline.get(metric)
         checks.append(value is not None and reference is not None
                       and (value < factor * reference if strict else value <= factor * reference))
@@ -458,8 +572,9 @@ def _gate1_prime(arms: dict) -> dict:
         return "not estimable" if value is None else f"{value:.6g}"
 
     means = {arm: flat(arm, _point(arms[arm])) for arm in ("T", "B0")}
-    checks = _gate1_prime_checks(means["T"], means["B0"])
-    pass_seeds = sum(all(_gate1_prime_checks(flat("T", seed_t), flat("B0", seed_b0)))
+    checks = _gate_checks(means["T"], means["B0"], GATE1_PRIME_RULES)
+    pass_seeds = sum(all(_gate_checks(flat("T", seed_t), flat("B0", seed_b0),
+                                      GATE1_PRIME_RULES))
                      for seed_t, seed_b0 in zip(arms["T"]["per_seed"], arms["B0"]["per_seed"],
                                                 strict=True))
     passed = all(checks)
