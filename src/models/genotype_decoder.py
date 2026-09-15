@@ -21,6 +21,12 @@ BoolArray = NDArray[np.bool_]
 
 _ARMS = ("B0", "B1", "B2", "B3", "T")
 _TILT_SCOPES = ("none", "snp", "superpop", "cohort")
+_OFFSET_GAUGES = ("centered", "pooled_af")
+_FITTED_OFFSET_ARMS = ("B1", "B3", "T")
+# ponytail: a fixed Newton budget instead of a convergence loop; pooled_af_residual reports what it
+# reached and fit_decoder marks the fit unconverged past 1e-8, which is the upgrade trigger.
+_NEWTON_STEPS = 25
+_AF_RESIDUAL_TOLERANCE = 1e-8
 _DOSAGE = np.arange(3, dtype=np.float64)
 _LOG_COEFFICIENT = np.log([1.0, 2.0, 1.0])
 
@@ -76,6 +82,8 @@ class GenotypeDecoder:
     tilt_scope: str = "none"
     lambda_tilt: float = 0.0
     superpop_of_cohort: IntArray = field(default_factory=lambda: np.zeros(0, dtype=np.int64))
+    offset_gauge: str = "centered"
+    pooled_af_residual: float = math.nan
 
     def save(self, path) -> None:
         np.savez(path, cohort_offset=self.cohort_offset, residual=self.residual,
@@ -86,7 +94,9 @@ class GenotypeDecoder:
                                      "lambda_a": self.lambda_a,
                                      "train_nll_per_call": self.train_nll_per_call,
                                      "converged": self.converged, "tilt_scope": self.tilt_scope,
-                                     "lambda_tilt": self.lambda_tilt}))
+                                     "lambda_tilt": self.lambda_tilt,
+                                     "offset_gauge": self.offset_gauge,
+                                     "pooled_af_residual": self.pooled_af_residual}))
 
     @classmethod
     def load(cls, path) -> "GenotypeDecoder":
@@ -99,7 +109,10 @@ class GenotypeDecoder:
             return cls(scalars["arm"], data["cohort_offset"], data["residual"],
                        DistanceBins(data["edges"], data["bin_of_snp"]), data["offsets"],
                        data["cohort_weights"], scalars["lambda_u"], scalars["lambda_a"],
-                       scalars["train_nll_per_call"], scalars["converged"], **tilt)
+                       scalars["train_nll_per_call"], scalars["converged"],
+                       # Files written before the pooled-AF gauge carry the centered offset.
+                       offset_gauge=scalars.get("offset_gauge", "centered"),
+                       pooled_af_residual=scalars.get("pooled_af_residual", math.nan), **tilt)
 
 
 def _checked_calls(calls: FloatArray) -> FloatArray:
@@ -214,12 +227,21 @@ def fit_decoder(arm: str, calls: FloatArray, base_logits: FloatArray, labels: In
                 train_indices: IntArray, positions: FloatArray, offsets: IntArray,
                 n_cohorts: int, *, lambda_u: float = 1.0, lambda_a: float = 1.0,
                 n_bins: int = 4, max_iter: int = 500, tilt_scope: str = "none",
-                lambda_tilt: float = 1.0,
+                lambda_tilt: float = 1.0, offset_gauge: str = "pooled_af",
                 superpop_of_cohort: IntArray | None = None) -> GenotypeDecoder:
+    """Fit the cohort offset, the local-LD residual and the tilt on the training rows.
+
+    `offset_gauge="pooled_af"` constrains the fitted offset so that the train pooled model allele
+    frequency equals the observed one per SNP; `"centered"` instead sets its train-cohort-weighted
+    mean to zero per SNP. `cohort_weights` records the train cohort proportions either way, but the
+    pooled-AF gauge does not use them to centre.
+    """
     if arm not in _ARMS:
         raise ValueError(f"Decoder arm must be one of {_ARMS}")
     if tilt_scope not in _TILT_SCOPES:
         raise ValueError(f"Tilt scope must be one of {_TILT_SCOPES}")
+    if offset_gauge not in _OFFSET_GAUGES:
+        raise ValueError(f"Offset gauge must be one of {_OFFSET_GAUGES}")
     if (arm == "T") != (tilt_scope != "none"):
         raise ValueError("Arm T needs a tilt scope and arms B0-B3 take none")
     if tilt_scope == "superpop":
@@ -250,9 +272,13 @@ def fit_decoder(arm: str, calls: FloatArray, base_logits: FloatArray, labels: In
     weights = np.bincount(train_labels, minlength=n_cohorts) / len(train_indices)
     previous, linked = _predecessors(train_calls, bins.bin_of_snp)
     observed = ~np.isnan(train_calls)
+    # Arms that never fit an offset leave it at zero, where the two gauges agree.
+    gauge = offset_gauge if arm in _FITTED_OFFSET_ARMS else "centered"
+    # Observed-call allele frequency; a SNP with no observed training call has no target to hit.
+    target_af = np.nansum(train_calls, axis=0) / np.maximum(observed.sum(axis=0), 1) / 2
 
     offset = torch.zeros((n_cohorts, calls.shape[1]), dtype=torch.float64,
-                         requires_grad=arm in ("B1", "B3", "T"))
+                         requires_grad=arm in _FITTED_OFFSET_ARMS)
     residual = torch.zeros((len(bins.edges) + 1, 3, 3), dtype=torch.float64,
                            requires_grad=arm in ("B2", "B3"))
     tilt_shape = {"none": (0,), "snp": (calls.shape[1],), "cohort": (n_cohorts, calls.shape[1]),
@@ -269,17 +295,37 @@ def fit_decoder(arm: str, calls: FloatArray, base_logits: FloatArray, labels: In
     mask = torch.as_tensor(observed)
     dosage = torch.as_tensor(_DOSAGE)
     log_coefficient = torch.as_tensor(_LOG_COEFFICIENT)
+    frequency = torch.as_tensor(target_af)
+
+    def pooled_af_shift(raw: torch.Tensor) -> torch.Tensor:
+        """Per-SNP s solving mean_i sigmoid(eta_base + raw[c_i] - s) = target_af.
+
+        The mean is decreasing in s, so Newton converges from zero; the iteration is unrolled in
+        the graph so the fit differentiates through the constraint.
+        """
+        shift = torch.zeros(raw.shape[1], dtype=raw.dtype)
+        for _ in range(_NEWTON_STEPS):
+            p = torch.sigmoid(eta_base + raw[label] - shift)
+            shift = shift + (p.mean(0) - frequency) / p.mul(1 - p).mean(0).clamp_min(1e-12)
+        return shift
+
+    def gauged_offset() -> torch.Tensor:
+        """The offset the decoder reports, under the requested identifiability gauge."""
+        return offset - (pooled_af_shift(offset) if gauge == "pooled_af" else weight @ offset)
 
     def penalized_nll() -> torch.Tensor:
-        centered = offset - weight @ offset
-        eta = eta_base + centered[label]
+        gauged = gauged_offset()
+        eta = eta_base + gauged[label]
         if arm == "T":
             logits = _tilted_logits(eta, tilt.reshape(-1, eta.shape[1])[group])
         else:
             logits = eta[:, :, None] * dosage + log_coefficient
             logits = logits + torch.where(conditioned[:, :, None], residual[bin_index, predecessor], 0.0)
         nll = -logits.log_softmax(2).gather(2, target)[:, :, 0]
-        return ((nll * mask).sum() + lambda_u * (centered**2).sum()
+        # The pooled-AF constraint already fixes the per-SNP constant, so its ridge pins the raw
+        # offset and picks the minimum-norm representative of the constrained fit.
+        ridged = offset if gauge == "pooled_af" else gauged
+        return ((nll * mask).sum() + lambda_u * (ridged**2).sum()
                 + lambda_a * (residual**2).sum() + lambda_tilt * (tilt**2).sum())
 
     parameters = [tensor for tensor in (offset, residual, tilt) if tensor.requires_grad]
@@ -301,12 +347,18 @@ def fit_decoder(arm: str, calls: FloatArray, base_logits: FloatArray, labels: In
         converged = bool(torch.isfinite(loss) and gradient <= 1e-6 * max(int(observed.sum()), 1))
 
     with torch.no_grad():
-        cohort_offset = (offset - weight @ offset).numpy()
+        # The constrained offset is what every decoding path reads, so it is what gets stored.
+        gauged = gauged_offset()
+        cohort_offset = gauged.numpy()
+        af_residual = math.nan if gauge == "centered" else float(
+            (torch.sigmoid(eta_base + gauged[label]).mean(0) - frequency).abs().max())
+    converged = converged and (math.isnan(af_residual) or af_residual <= _AF_RESIDUAL_TOLERANCE)
     decoder = GenotypeDecoder(arm, cohort_offset, residual.detach().numpy(), bins,
                               np.asarray(offsets, dtype=np.int64), weights, float(lambda_u),
                               float(lambda_a), 0.0, converged, tilt=tilt.detach().numpy(),
                               tilt_scope=tilt_scope,
                               lambda_tilt=float(lambda_tilt) if arm == "T" else 0.0,
-                              superpop_of_cohort=superpop_of_cohort)
+                              superpop_of_cohort=superpop_of_cohort, offset_gauge=gauge,
+                              pooled_af_residual=af_residual)
     train_nll = np.nanmean(nll_calls(decoder, train_calls, base_logits[train_indices], train_labels))
     return replace(decoder, train_nll_per_call=float(train_nll))

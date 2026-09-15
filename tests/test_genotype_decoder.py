@@ -66,6 +66,27 @@ def _tilted_grid(allele, tilt):
     return softmax(logits, axis=2), expit(base_logits)
 
 
+def _unbalanced(rows=400, train=300):
+    """A panel whose cohorts differ in size, where the two offset gauges pull apart."""
+    calls, base_logits, _ = _panel(rows=rows)
+    labels = np.repeat([0, 1, 2, 3], [rows // 2, rows // 4, rows // 5, rows // 20])
+    return calls, base_logits, labels, np.arange(train)
+
+
+def _train_af_error(decoder, calls, base_logits, labels, train):
+    """max_j |train mean of the model allele frequency - the observed train allele frequency|."""
+    model = expit(base_logits[train] + decoder.cohort_offset[labels[train]]).mean(axis=0)
+    return np.abs(model - np.nanmean(calls[train], axis=0) / 2).max()
+
+
+def _cohort_af_error(decoder, calls, base_logits, labels, rows):
+    """Mean |model - observed| allele frequency over every cohort and SNP of the given rows."""
+    model = expit(base_logits[rows] + decoder.cohort_offset[labels[rows]])
+    return np.mean([np.abs(model[labels[rows] == cohort].mean(axis=0)
+                           - np.nanmean(calls[rows][labels[rows] == cohort], axis=0) / 2).mean()
+                    for cohort in range(COHORTS)])
+
+
 def test_call_logits_normalize_and_reduce_to_the_binomial_without_a_predecessor():
     # Given a fitted B3 decoder and an unfitted B0 decoder over the same panel.
     calls, base_logits, labels = _panel()
@@ -97,7 +118,7 @@ def test_cohort_offsets_are_centered_on_train_cohort_proportions(arm, scope):
     train = np.arange(200)
     # When the cohort offset is fitted.
     decoder = fit_decoder(arm, calls, base_logits, labels, train, _positions(), OFFSETS, COHORTS,
-                          tilt_scope=scope)
+                          tilt_scope=scope, offset_gauge="centered")
     # Then it is weighted-centered per SNP against the train cohort proportions.
     expected = np.bincount(labels[train], minlength=COHORTS) / len(train)
     np.testing.assert_allclose(decoder.cohort_weights, expected)
@@ -149,7 +170,7 @@ def test_the_fit_is_stationary_for_the_ridge_penalized_objective_it_reports():
     labels = np.repeat([0, 1, 2, 3], [150, 90, 45, 15])
     train = np.arange(200)
     decoder = fit_decoder("B1", calls, base_logits, labels, train, _positions(), OFFSETS, COHORTS,
-                          lambda_u=2.0)
+                          lambda_u=2.0, offset_gauge="centered")
 
     def objective(offset):
         moved = replace(decoder, cohort_offset=offset)
@@ -178,13 +199,15 @@ def test_distance_bins_reject_positions_that_are_not_ascending_inside_a_gene():
         distance_bins(positions, OFFSETS, 4)
 
 
-@pytest.mark.parametrize("arm, scope", [("B3", "none"), ("T", "snp"), ("T", "superpop")])
-def test_fitting_ignores_every_row_outside_the_training_indices(arm, scope):
+@pytest.mark.parametrize("arm, scope, gauge", [("B3", "none", "centered"), ("T", "snp", "centered"),
+                                               ("T", "superpop", "centered"),
+                                               ("T", "snp", "pooled_af")])
+def test_fitting_ignores_every_row_outside_the_training_indices(arm, scope, gauge):
     # Given a panel fitted on the training rows only.
     calls, base_logits, labels = _panel()
     positions = _positions()
     train = np.arange(200)
-    tilt = dict(tilt_scope=scope, superpop_of_cohort=SUPERPOPS)
+    tilt = dict(tilt_scope=scope, superpop_of_cohort=SUPERPOPS, offset_gauge=gauge)
     first = fit_decoder(arm, calls, base_logits, labels, train, positions, OFFSETS, COHORTS, **tilt)
     corrupted_calls, corrupted_logits = calls.copy(), base_logits.copy()
     corrupted_calls[200:] = 2 - corrupted_calls[200:]
@@ -198,6 +221,7 @@ def test_fitting_ignores_every_row_outside_the_training_indices(arm, scope):
     np.testing.assert_array_equal(first.cohort_offset, second.cohort_offset)
     np.testing.assert_array_equal(first.residual, second.residual)
     np.testing.assert_array_equal(first.tilt, second.tilt)
+    np.testing.assert_array_equal(first.pooled_af_residual, second.pooled_af_residual)
     assert first.train_nll_per_call == second.train_nll_per_call
     np.testing.assert_array_equal(first.bins.edges, second.bins.edges)
     np.testing.assert_array_equal(first.cohort_weights, second.cohort_weights)
@@ -264,6 +288,8 @@ def test_save_and_load_round_trip_every_field(tmp_path, arm, scope):
     assert restored.train_nll_per_call == decoder.train_nll_per_call
     assert restored.converged == decoder.converged
     assert (restored.tilt_scope, restored.lambda_tilt) == (decoder.tilt_scope, decoder.lambda_tilt)
+    assert restored.offset_gauge == decoder.offset_gauge == "pooled_af"
+    np.testing.assert_array_equal(restored.pooled_af_residual, decoder.pooled_af_residual)
     np.testing.assert_array_equal(restored.tilt, decoder.tilt)
     np.testing.assert_array_equal(restored.superpop_of_cohort, decoder.superpop_of_cohort)
     np.testing.assert_array_equal(restored.cohort_offset, decoder.cohort_offset)
@@ -319,6 +345,8 @@ def test_missing_predecessors_reset_the_chain_like_a_gene_boundary():
     {"arm": "T", "tilt_scope": "superpop", "superpop_of_cohort": np.array([0, 0, 1])},
     {"arm": "T", "tilt_scope": "superpop", "superpop_of_cohort": np.array([0, -1, 1, 1])},
     {"arm": "T", "tilt_scope": "superpop", "superpop_of_cohort": np.array([0, 0, 2, 2])},
+    {"offset_gauge": "logit"},
+    {"offset_gauge": "none"},
 ])
 def test_fit_decoder_rejects_malformed_inputs(bad):
     # Given a valid panel with one argument replaced by a malformed one.
@@ -492,11 +520,146 @@ def test_decoders_saved_before_the_tilt_arm_still_load_and_decode_unchanged(tmp_
                                  "train_nll_per_call": 0.0, "converged": True}))
     # When it is loaded.
     restored = GenotypeDecoder.load(path)
-    # Then the tilt fields take their empty defaults and the B3 chain decodes as before.
+    # Then the tilt and gauge fields take their defaults and the B3 chain decodes as before.
     assert (restored.tilt_scope, restored.lambda_tilt) == ("none", 0.0)
     assert restored.tilt.shape == restored.superpop_of_cohort.shape == (0,)
+    assert restored.offset_gauge == "centered" and np.isnan(restored.pooled_af_residual)
     np.testing.assert_array_equal(nll_calls(restored, calls, base_logits, labels),
                                   nll_calls(decoder, calls, base_logits, labels))
     np.testing.assert_array_equal(
         sample_calls(restored, base_logits, labels, np.random.default_rng(0)),
         sample_calls(decoder, base_logits, labels, np.random.default_rng(0)))
+
+
+def test_the_pooled_af_gauge_matches_the_train_allele_frequency_where_centering_drifts():
+    # Given an unbalanced four-cohort panel fitted under each offset gauge.
+    calls, base_logits, labels, train = _unbalanced()
+    arguments = (calls, base_logits, labels, train, _positions(), OFFSETS, COHORTS)
+    # When arm T is fitted with the pooled-AF constraint and with the logit-space centering.
+    pooled = fit_decoder("T", *arguments, tilt_scope="snp", offset_gauge="pooled_af")
+    centered = fit_decoder("T", *arguments, tilt_scope="snp", offset_gauge="centered")
+    pooled_error = _train_af_error(pooled, calls, base_logits, labels, train)
+    # Then the constrained fit reproduces the observed train allele frequency per SNP and reports
+    # that residual, while the centering gauge drifts away from it on the very same data.
+    assert pooled_error < 1e-10
+    assert pooled.pooled_af_residual == pytest.approx(pooled_error, abs=1e-12)
+    assert pooled.offset_gauge == "pooled_af" and pooled.converged
+    assert _train_af_error(centered, calls, base_logits, labels, train) > 1e-10
+    assert centered.offset_gauge == "centered" and np.isnan(centered.pooled_af_residual)
+    assert not np.allclose(pooled.cohort_offset, centered.cohort_offset)
+
+
+def test_the_pooled_af_gauge_keeps_the_cohort_signal_it_was_fitted_for():
+    # Given calls simulated from a hand-built arm-T decoder with a real per-cohort offset.
+    positions = _positions()
+    rng = np.random.default_rng(29)
+    truth = rng.normal(loc=0.6, scale=0.8, size=OFFSETS[-1])
+    base_logits = rng.normal(scale=0.8, size=(1200, OFFSETS[-1]))
+    labels = rng.integers(0, COHORTS, size=1200)
+    calls = sample_calls(_handmade_tilt(truth), base_logits, labels, rng).astype(float)
+    train, dev = np.arange(800), np.arange(800, 1200)
+    arguments = (calls, base_logits, labels, train, positions, OFFSETS, COHORTS)
+    # When the constrained arm T, the offset-only B1 and the offsetless B0 are fitted.
+    tilted = fit_decoder("T", *arguments, tilt_scope="snp", offset_gauge="pooled_af")
+    offset_only = fit_decoder("B1", *arguments)
+    flat = fit_decoder("B0", *arguments)
+    dev_tilted = nll_calls(tilted, calls, base_logits, labels)[dev].mean()
+    dev_offset_only = nll_calls(offset_only, calls, base_logits, labels)[dev].mean()
+    # Then the constraint costs neither the tilt's likelihood gain nor the offset's cohort fit.
+    assert dev_tilted < dev_offset_only
+    assert (_cohort_af_error(tilted, calls, base_logits, labels, dev)
+            < _cohort_af_error(flat, calls, base_logits, labels, dev))
+    assert tilted.converged
+
+
+def test_the_pooled_af_target_is_taken_from_the_observed_calls_only():
+    # Given a panel whose first sixty training rows are missing at one SNP.
+    calls, base_logits, labels, train = _unbalanced()
+    snp = 7
+    calls[train[:60], snp] = np.nan
+    # When arm T is fitted under the pooled-AF constraint.
+    decoder = fit_decoder("T", calls, base_logits, labels, train, _positions(), OFFSETS, COHORTS,
+                          tilt_scope="snp", offset_gauge="pooled_af")
+    observed = np.nanmean(calls[train, snp]) / 2
+    missing_as_zero = np.nan_to_num(calls[train, snp]).mean() / 2
+    model = expit(base_logits[train, snp] + decoder.cohort_offset[labels[train], snp]).mean()
+    # Then the frequency it preserves is the observed-call mean, not the missing-as-zero mean.
+    assert abs(model - observed) < 1e-10
+    assert abs(missing_as_zero - observed) > 1e-3
+    assert decoder.pooled_af_residual < 1e-10
+
+
+def test_the_tilt_fit_is_stationary_for_both_ridge_penalties_it_reports():
+    # Given an arm-T decoder fitted with different ridges on the cohort offset and on the tilt.
+    calls, base_logits, _ = _panel()
+    labels = np.repeat([0, 1, 2, 3], [150, 90, 45, 15])
+    train = np.arange(200)
+    decoder = fit_decoder("T", calls, base_logits, labels, train, _positions(), OFFSETS, COHORTS,
+                          lambda_u=2.0, lambda_tilt=0.5, tilt_scope="snp", offset_gauge="centered")
+
+    def objective(offset, tilt):
+        moved = replace(decoder, cohort_offset=offset, tilt=tilt)
+        teacher_forced = nll_calls(moved, calls[train], base_logits[train], labels[train])
+        return np.nansum(teacher_forced) + 2.0 * (offset**2).sum() + 0.5 * (tilt**2).sum()
+
+    def derivative(offset_step, tilt_step):
+        return (objective(decoder.cohort_offset + offset_step, decoder.tilt + tilt_step)
+                - objective(decoder.cohort_offset - offset_step, decoder.tilt - tilt_step)) / 2e-2
+
+    rng = np.random.default_rng(5)
+    zero_offset, zero_tilt = np.zeros(decoder.cohort_offset.shape), np.zeros(decoder.tilt.shape)
+    # When the offset is nudged along weight-centered unit directions and the tilt along its own.
+    derivatives = []
+    for _ in range(4):
+        offset_direction = rng.normal(size=decoder.cohort_offset.shape)
+        offset_direction -= decoder.cohort_weights @ offset_direction
+        offset_direction /= np.linalg.norm(offset_direction)
+        tilt_direction = rng.normal(size=decoder.tilt.shape)
+        tilt_direction /= np.linalg.norm(tilt_direction)
+        derivatives.append(derivative(1e-2 * offset_direction, zero_tilt))
+        derivatives.append(derivative(zero_offset, 1e-2 * tilt_direction))
+    # Then the reported fit is stationary for both ridges, so neither penalty went missing.
+    assert np.max(np.abs(derivatives)) < 1e-3
+
+
+def test_the_pooled_af_fit_is_stationary_along_its_own_constraint_surface():
+    # Given a constrained arm-T fit and the objective the constraint leaves it: the train NLL plus
+    # a ridge on the cohort-centered offset, the per-SNP constant the constraint fixes being free
+    # of the raw ridge.
+    calls, base_logits, labels, train = _unbalanced()
+    decoder = fit_decoder("T", calls, base_logits, labels, train, _positions(), OFFSETS, COHORTS,
+                          lambda_u=2.0, lambda_tilt=0.5, tilt_scope="snp", offset_gauge="pooled_af")
+
+    def objective(offset):
+        moved = replace(decoder, cohort_offset=offset)
+        teacher_forced = nll_calls(moved, calls[train], base_logits[train], labels[train])
+        return np.nansum(teacher_forced) + 2.0 * ((offset - offset.mean(axis=0))**2).sum()
+
+    # When the offset is nudged along unit directions tangent to the constraint surface, whose
+    # per-SNP normal weights each cohort by the Bernoulli variance its training rows carry.
+    variance = expit(base_logits[train] + decoder.cohort_offset[labels[train]])
+    variance = np.stack([(variance * (1 - variance))[labels[train] == cohort].sum(axis=0)
+                         for cohort in range(COHORTS)])
+    rng = np.random.default_rng(5)
+    derivatives = []
+    for _ in range(4):
+        direction = rng.normal(size=decoder.cohort_offset.shape)
+        direction -= (variance * direction).sum(axis=0) / variance.sum(axis=0)
+        direction /= np.linalg.norm(direction)
+        derivatives.append((objective(decoder.cohort_offset + 1e-2 * direction)
+                            - objective(decoder.cohort_offset - 1e-2 * direction)) / 2e-2)
+    # Then the reported offset is stationary there, so the constraint was fitted through rather
+    # than applied to a finished fit.
+    assert np.max(np.abs(derivatives)) < 1e-3
+
+
+def test_a_pooled_af_fit_that_misses_its_constraint_is_reported_unconverged(monkeypatch):
+    # Given a Newton budget too small to reach the constraint.
+    monkeypatch.setattr("src.models.genotype_decoder._NEWTON_STEPS", 0)
+    calls, base_logits, labels, train = _unbalanced()
+    # When arm T is fitted under the pooled-AF gauge.
+    decoder = fit_decoder("T", calls, base_logits, labels, train, _positions(), OFFSETS, COHORTS,
+                          tilt_scope="snp", offset_gauge="pooled_af")
+    # Then the miss is reported rather than passing silently.
+    assert decoder.pooled_af_residual > 1e-8
+    assert not decoder.converged
