@@ -57,6 +57,12 @@ SCALE_CHECK_FILES = ("dataset.npz", "gene_variant_map.json", "genotypes.npz",
 REAL_FACTOR_TOLERANCE = 1e-5
 DESCRIPTIVE_METRICS = ("ld_r2_mae", "ld_r2_mae_by_bin", "local_dosage_covariance_mae")
 CONTROL_METRICS = ("af_mae", "heterozygosity_mae")
+# Plan rev.2 §9.4 Gate 3': every bootstrap, whatever its resampling unit, is this one.
+BOOTSTRAP_DRAWS = 2000
+BOOTSTRAP_SEED = 20260915
+# ponytail: one fitted classifier per (train rows, train labels); the real train block is one
+# array, so keying on its bytes costs milliseconds. Drop it if the block ever grows a gigabyte.
+_CLASSIFIER_CACHE: dict[tuple[bytes, bytes], object] = {}
 
 
 def _atomic_json(path: Path, value: dict) -> None:
@@ -752,6 +758,91 @@ def run_oracle(args: argparse.Namespace) -> dict:
     _write_csv(output / "strata.csv", _strata_rows(arms, controls, panel), STRATA_COLUMNS)
     print(json.dumps(verdict, sort_keys=True, allow_nan=False), flush=True)
     return results
+
+
+def percentile_ci(draws) -> tuple[float, float]:
+    """95% percentile interval of an already-resampled bootstrap statistic."""
+    low, high = np.percentile(np.asarray(draws, dtype=np.float64), [2.5, 97.5])
+    return float(low), float(high)
+
+
+def _split_indices(panel: dict, split: str) -> np.ndarray:
+    return panel[f"{'dev' if split == 'val' else split}_indices"]
+
+
+def test_nll_comparison(prepared_dir, decoder_dir, split: str = "test") -> dict:
+    """Per-call NLL of arms B0 and T on one split's real latents, through the oracle path.
+
+    Plan rev.2 §9.4 ruling R3: this number is deterministic and carries no diffusion seed, so the
+    confidence interval for T - B0 resamples held-out individuals rather than seeds.
+    """
+    panel = load_panel(Path(prepared_dir))
+    indices = _split_indices(panel, split)
+    calls, logits, labels = (panel["calls"][indices], panel["logits"][indices],
+                             panel["labels"][indices])
+    decoders = {"B0": GenotypeDecoder.load(Path(decoder_dir) / "decoder_B0.npz"),
+                "T": _load_gate1_decoder(Path(decoder_dir))}
+    totals = {arm: np.nansum(nll_calls(decoder, calls, logits, labels), axis=1)
+              for arm, decoder in decoders.items()}
+    counts = np.isfinite(calls).sum(axis=1).astype(np.float64)
+    per_call = {arm: float(total.sum() / counts.sum()) for arm, total in totals.items()}
+    rows = np.random.default_rng(BOOTSTRAP_SEED).integers(
+        len(indices), size=(BOOTSTRAP_DRAWS, len(indices)))
+    gap = totals["T"] - totals["B0"]
+    low, high = percentile_ci(gap[rows].sum(axis=1) / counts[rows].sum(axis=1))
+    return {"b0_nll": per_call["B0"], "t_nll": per_call["T"],
+            "difference": per_call["T"] - per_call["B0"], "ci_low": low, "ci_high": high,
+            "n_individuals": int(len(indices)), "n_calls": int(counts.sum()),
+            "split": split, "bootstrap_draws": BOOTSTRAP_DRAWS,
+            "resampling_unit": "held-out individuals"}
+
+
+def classifier_blocks(prepared_dir, split: str = "test", count: int | None = None) -> dict:
+    """Real train dosages to fit the cohort classifier on, and the real eval block beside them."""
+    panel = load_panel(Path(prepared_dir))
+    train, evaluated = panel["train_indices"], _split_indices(panel, split)[:count]
+    blocks = {"train_calls": panel["calls"][train], "train_labels": panel["labels"][train],
+              "eval_calls": panel["calls"][evaluated], "eval_labels": panel["labels"][evaluated]}
+    if not np.isfinite(np.vstack([blocks["train_calls"], blocks["eval_calls"]])).all():
+        raise ValueError("The cohort classifier needs complete dosages; the panel has missing calls")
+    return blocks
+
+
+def population_classifier_scores(train_calls, train_labels, eval_calls, eval_labels) -> dict:
+    """How readable a dosage block's cohort labels are to a classifier fitted only on real train
+    rows (plan rev.2 ruling R4). Cohorts the block never conditioned on cannot enter a one-vs-rest
+    AUC, so they are excluded and named."""
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.metrics import roc_auc_score
+
+    train_calls = np.asarray(train_calls, dtype=np.float64)
+    train_labels = np.asarray(train_labels, dtype=np.int64)
+    key = (train_calls.tobytes(), train_labels.tobytes())
+    if key not in _CLASSIFIER_CACHE:
+        # lbfgs multinomial is the default; the fit is seed-independent, hence the cache.
+        _CLASSIFIER_CACHE[key] = LogisticRegression(max_iter=2000, random_state=0).fit(
+            train_calls, train_labels)
+    model = _CLASSIFIER_CACHE[key]
+    eval_calls = np.asarray(eval_calls, dtype=np.float64)
+    eval_labels = np.asarray(eval_labels, dtype=np.int64)
+    unknown = np.setdiff1d(eval_labels, model.classes_)
+    if unknown.size:
+        raise ValueError(f"Eval cohorts absent from the fitted classifier: {unknown.tolist()}")
+    kept = np.isin(model.classes_, eval_labels)
+    scored = model.classes_[kept]
+    probabilities = model.predict_proba(eval_calls)[:, kept]
+    auc = None
+    if len(scored) == 2:
+        # sklearn reads a two-column score as binary, and both one-vs-rest curves share one AUC.
+        auc = float(roc_auc_score(eval_labels == scored[1], probabilities[:, 1]))
+    elif len(scored) > 2:
+        auc = float(roc_auc_score(eval_labels,
+                                  probabilities / probabilities.sum(axis=1, keepdims=True),
+                                  multi_class="ovr", average="macro", labels=scored.tolist()))
+    return {"classifier_accuracy": float(model.score(eval_calls, eval_labels)),
+            "classifier_macro_auc": auc,
+            "cohorts_excluded_from_auc": model.classes_[~kept].tolist(),
+            "n_eval": int(len(eval_labels))}
 
 
 def build_parser() -> argparse.ArgumentParser:

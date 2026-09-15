@@ -155,9 +155,10 @@ def _fake_decoder_dir(prepared: Path, decoder_dir: Path, *, gate1_passed: bool =
         train_indices = data["train_indices"]
     with (prepared / "glm_pca_parameters.pkl").open("rb") as handle:
         parameters = pickle.load(handle)
-    decoder = fit_decoder("T", calls, base_logits(parameters, factors), labels, train_indices,
-                          panel_positions(prepared), offsets, 26, tilt_scope="snp")
-    decoder.save(decoder_dir / "decoder_T.npz")
+    logits = base_logits(parameters, factors)
+    for arm, scope in (("T", "snp"), ("B0", "none")):
+        fit_decoder(arm, calls, logits, labels, train_indices, panel_positions(prepared), offsets,
+                    26, tilt_scope=scope).save(decoder_dir / f"decoder_{arm}.npz")
     (decoder_dir / "study_manifest.json").write_text(json.dumps(
         {"prepared_sha256": {path.name: _digest(path) for path in sorted(prepared.iterdir())}}))
     (decoder_dir / "oracle_results.json").write_text(
@@ -633,3 +634,111 @@ def test_real_panel_distance_bin_edges_are_the_frozen_quartiles() -> None:
 
     # Then the quartile edges match the ones the decoder contract froze.
     np.testing.assert_array_equal(distance_bins(positions, offsets, 4).edges, [35, 104, 210])
+
+
+def test_population_classifier_separates_cohorts_and_names_the_ones_it_cannot_score() -> None:
+    # Given four cohorts whose dosage blocks are disjoint, so the cohort is readable from the row.
+    from scripts.hipodit_genotype_check import population_classifier_scores
+
+    train_calls = np.repeat(np.eye(4, dtype=np.float64) * 2, 5, axis=0)
+    train_labels = np.repeat([0, 1, 2, 3], 5)
+
+    # When the classifier fitted on those real rows scores a block holding every cohort.
+    complete = population_classifier_scores(train_calls, train_labels, train_calls[::5],
+                                            np.array([0, 1, 2, 3]))
+
+    # Then it recovers each cohort and excludes none from the macro one-vs-rest AUC.
+    assert complete["classifier_accuracy"] == pytest.approx(1.0)
+    assert complete["classifier_macro_auc"] == pytest.approx(1.0)
+    assert complete["cohorts_excluded_from_auc"] == []
+
+    # And a block missing two cohorts is scored without them, with the exclusions reported.
+    partial = population_classifier_scores(train_calls, train_labels, train_calls[::5][:2],
+                                           np.array([0, 1]))
+    assert partial["cohorts_excluded_from_auc"] == [2, 3]
+    assert partial["classifier_macro_auc"] == pytest.approx(1.0)
+    assert partial["n_eval"] == 2
+
+
+def test_population_classifier_refuses_a_cohort_it_was_never_trained_on() -> None:
+    # Given an evaluation block conditioned on a cohort absent from the real training rows.
+    from scripts.hipodit_genotype_check import population_classifier_scores
+
+    train_calls = np.repeat(np.eye(4, dtype=np.float64) * 2, 5, axis=0)
+    # When/Then the score is refused rather than silently reported against a shifted label set.
+    with pytest.raises(ValueError, match="absent"):
+        population_classifier_scores(train_calls, np.repeat([0, 1, 2, 3], 5),
+                                     train_calls[:1], np.array([9]))
+
+
+def test_test_nll_comparison_matches_nll_calls_and_brackets_its_difference(tmp_path: Path) -> None:
+    # Given a frozen panel and the Gate 1'-passing oracle decoders fitted on it.
+    from scripts.hipodit_genotype_check import test_nll_comparison
+    from src.models.genotype_decoder import GenotypeDecoder, nll_calls
+
+    prepared, decoder_dir = tmp_path / "prepared", tmp_path / "oracle"
+    _fake_prepared(prepared)
+    _fake_decoder_dir(prepared, decoder_dir)
+
+    # When the deterministic oracle NLL of both arms is compared on the held-out test split.
+    result = test_nll_comparison(prepared, decoder_dir, split="test")
+
+    # Then each arm reproduces the per-call NLL of its own decoder on the test rows.
+    with np.load(prepared / "genotypes.npz") as data:
+        calls = data["calls"].astype(np.float64)
+    with np.load(prepared / "dataset.npz") as data:
+        indices, labels = data["test_indices"], data["y"]
+        factors = data["x"].astype(np.float64)
+    logits = _base_logits(prepared, factors)
+    for arm, key in (("B0", "b0_nll"), ("T", "t_nll")):
+        decoder = GenotypeDecoder.load(decoder_dir / f"decoder_{arm}.npz")
+        expected = np.nanmean(nll_calls(decoder, calls[indices], logits[indices], labels[indices]))
+        assert result[key] == pytest.approx(float(expected))
+    # And the individual-resampled interval brackets the difference it was built from.
+    assert result["difference"] == pytest.approx(result["t_nll"] - result["b0_nll"])
+    assert result["ci_low"] <= result["difference"] <= result["ci_high"]
+    assert result["ci_low"] < result["ci_high"]
+    assert (result["n_individuals"], result["n_calls"]) == (len(indices), len(indices) * 8)
+    assert result["resampling_unit"] == "held-out individuals"
+    # And the interval is reproducible, because the bootstrap generator is seeded.
+    assert test_nll_comparison(prepared, decoder_dir, split="test") == result
+
+
+def test_test_nll_comparison_refuses_a_decoder_that_failed_gate1_prime(tmp_path: Path) -> None:
+    # Given an oracle directory whose Gate 1' verdict did not pass.
+    from scripts.hipodit_genotype_check import test_nll_comparison
+
+    prepared, decoder_dir = tmp_path / "prepared", tmp_path / "oracle"
+    _fake_prepared(prepared)
+    _fake_decoder_dir(prepared, decoder_dir, gate1_passed=False)
+    # When/Then the test split is not opened with a decoder that never earned the comparison.
+    with pytest.raises(ValueError, match="Gate 1'"):
+        test_nll_comparison(prepared, decoder_dir, split="test")
+
+
+def test_classifier_blocks_reads_the_real_train_and_eval_dosages(tmp_path: Path) -> None:
+    # Given the frozen panel layout.
+    from scripts.hipodit_genotype_check import classifier_blocks
+
+    prepared = tmp_path / "prepared"
+    _fake_prepared(prepared)
+
+    # When the classifier inputs for the first two test individuals are read.
+    blocks = classifier_blocks(prepared, "test", count=2)
+
+    # Then the fitting rows are the real train block and the eval rows the requested test prefix.
+    with np.load(prepared / "genotypes.npz") as data:
+        calls = data["calls"].astype(np.float64)
+    with np.load(prepared / "dataset.npz") as data:
+        train, test, labels = data["train_indices"], data["test_indices"], data["y"]
+    np.testing.assert_array_equal(blocks["train_calls"], calls[train])
+    np.testing.assert_array_equal(blocks["train_labels"], labels[train])
+    np.testing.assert_array_equal(blocks["eval_calls"], calls[test[:2]])
+    np.testing.assert_array_equal(blocks["eval_labels"], labels[test[:2]])
+
+    # And a panel with missing calls is refused rather than imputed behind the classifier's back.
+    damaged = calls.copy()
+    damaged[0, 0] = np.nan
+    np.savez(prepared / "genotypes.npz", calls=damaged, offsets=np.array([0, 4, 8]))
+    with pytest.raises(ValueError, match="missing calls"):
+        classifier_blocks(prepared, "test")
