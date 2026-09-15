@@ -149,13 +149,13 @@ class DiTBlock(nn.Module):
 
         # Self-Attention with AdaLN-Zero
         h = self.norm1(x)
-        h = g1 * h + b1  # FiLM modulation
+        h = (1.0 + g1) * h + b1
         h, _ = self.attn(h, h, h)
         x = x + a1 * h  # Gated residual (alpha initialized to 0)
 
         # Feed-Forward with AdaLN-Zero
         h = self.norm2(x)
-        h = g2 * h + b2
+        h = (1.0 + g2) * h + b2
         h = self.mlp(h)
         x = x + a2 * h
 

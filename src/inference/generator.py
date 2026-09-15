@@ -22,6 +22,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import os
@@ -40,6 +41,7 @@ if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
 from src.models import GaussianDiffusion, HybridCNNDiTFiLM
+from src.preprocessing.tokenizer import load_normalization_stats
 from src.utils.config import load_config
 
 logging.basicConfig(
@@ -66,33 +68,71 @@ def denormalize_samples(
     Returns:
         (B, K, gene_size) float32 denormalized tensor.
 
-    Broadcasting:
-        stats['mean'] and stats['std'] are (gene_size_stats, K).
-        Model output is (B, K, gene_size).
-        If gene_size_stats < gene_size (stats from unpadded data),
-        pad stats with mean=0, std=1 for the padded region.
+    Statistics must exactly match the model's ``(gene_size, K)`` shape.
     """
-    with open(stats_path, "rb") as f:
-        stats = pickle.load(f)
-
-    mean_np = stats["mean"]  # (gene_size_stats, K)
-    std_np = stats["std"]    # (gene_size_stats, K)
-
-    gene_size = samples.shape[2]
-    stats_gene_size = mean_np.shape[0]
-
-    # Pad stats if they were computed on unpadded data
-    if stats_gene_size < gene_size:
-        pad_len = gene_size - stats_gene_size
-        n_k = mean_np.shape[1]
-        mean_np = np.concatenate([mean_np, np.zeros((pad_len, n_k), dtype=mean_np.dtype)], axis=0)
-        std_np = np.concatenate([std_np, np.ones((pad_len, n_k), dtype=std_np.dtype)], axis=0)
+    expected_shape = (samples.shape[2], samples.shape[1])
+    stats = load_normalization_stats(stats_path, expected_shape=expected_shape)
+    mean_np = stats["mean"]
+    std_np = stats["std"]
 
     # (gene_size, K) -> (K, gene_size) -> (1, K, gene_size)
     xmean = torch.tensor(mean_np.T, dtype=torch.float32).unsqueeze(0)
     xstd = torch.tensor(std_np.T, dtype=torch.float32).unsqueeze(0)
 
     return samples * xstd + xmean
+
+
+def postprocess_samples(
+    samples: torch.Tensor,
+    zero_mask: torch.Tensor | None,
+    stats_path: str | Path | None,
+) -> torch.Tensor:
+    if zero_mask is not None:
+        samples = samples * (~zero_mask.cpu()).unsqueeze(0).to(samples.dtype)
+    if stats_path is not None:
+        samples = denormalize_samples(samples, str(stats_path))
+    return samples
+
+
+def resolve_generation_config(checkpoint: dict, passed_config: dict) -> dict:
+    return checkpoint.get("config", passed_config)
+
+
+def build_generation_diffusion(
+    data_config: dict,
+    diffusion_config: dict,
+    zero_mask: torch.Tensor | None,
+) -> GaussianDiffusion:
+    return GaussianDiffusion(
+        timesteps=diffusion_config["max_timesteps"],
+        zero_mask=zero_mask,
+        enforce_zeros=data_config.get("enforce_zeros", True),
+        null_class=data_config.get("num_classes", 26),
+        schedule_type=diffusion_config.get("noise_schedule", "cosine"),
+        prediction_target=diffusion_config.get("prediction_target", "epsilon"),
+        sample_clip=diffusion_config.get("sample_clip", 6.0),
+        feature_schedule=diffusion_config.get("feature_schedule"),
+    )
+
+
+def resolve_normalization_stats_path(data_config: dict) -> Path | None:
+    if not data_config.get("normalize", False):
+        return None
+    path = Path(
+        data_config.get(
+            "normalization_stats_path", "data/processed/normalization_stats.pkl"
+        )
+    )
+    if not path.exists():
+        raise FileNotFoundError(f"Normalization stats required by checkpoint config: {path}")
+    expected_fingerprint = data_config.get("normalization_stats_sha256")
+    if expected_fingerprint is None:
+        logger.warning(
+            "Checkpoint lacks normalization stats fingerprint; using unverified legacy stats"
+        )
+    elif hashlib.sha256(path.read_bytes()).hexdigest() != expected_fingerprint:
+        raise ValueError("Normalization stats do not match the training checkpoint")
+    return path
 
 
 # ───────────────────────────────────────────────────────────────────
@@ -143,9 +183,8 @@ def generate_samples(
 
     checkpoint = torch.load(model_path, map_location=device, weights_only=False)
 
-    # Use checkpoint config if available, fall back to provided config
-    model_config = checkpoint.get("config", config)
-    model = HybridCNNDiTFiLM(model_config).to(device)
+    generation_config = resolve_generation_config(checkpoint, config)
+    model = HybridCNNDiTFiLM(generation_config).to(device)
     model.load_state_dict(checkpoint["model_state_dict"])
 
     # Load EMA parameters (preferred for inference)
@@ -167,8 +206,8 @@ def generate_samples(
     )
 
     # ── Diffusion process ──
-    data_cfg = config["data"]
-    diffusion_cfg = config["diffusion"]
+    data_cfg = generation_config["data"]
+    diffusion_cfg = generation_config["diffusion"]
 
     zero_mask_path = data_cfg.get("zero_mask_path", "data/processed/zero_mask.pt")
     if Path(zero_mask_path).exists():
@@ -180,13 +219,7 @@ def generate_samples(
         zero_mask = None
         logger.warning(f"Zero mask not found at {zero_mask_path}")
 
-    diffusion = GaussianDiffusion(
-        timesteps=diffusion_cfg["max_timesteps"],
-        zero_mask=zero_mask,
-        enforce_zeros=data_cfg.get("enforce_zeros", True),
-        null_class=data_cfg.get("num_classes", 26),
-        schedule_type=diffusion_cfg.get("noise_schedule", "cosine"),
-    ).to(device)
+    diffusion = build_generation_diffusion(data_cfg, diffusion_cfg, zero_mask).to(device)
 
     # ── Determine samples per population ──
     os.makedirs(output_dir, exist_ok=True)
@@ -240,10 +273,12 @@ def generate_samples(
     )
 
     total_generated = 0
-    normalization_stats_path = data_cfg.get(
-        "normalization_stats_path", "data/processed/normalization_stats.pkl"
+    stats_path = resolve_normalization_stats_path(data_cfg)
+    stats_fingerprint = (
+        hashlib.sha256(stats_path.read_bytes()).hexdigest()
+        if stats_path is not None
+        else None
     )
-    has_norm_stats = Path(normalization_stats_path).exists()
 
     for pop_idx in sorted(n_samples_per_pop.keys()):
         n_samples = n_samples_per_pop[pop_idx]
@@ -270,17 +305,8 @@ def generate_samples(
             # Convert to fp32 for post-processing and saving
             samples = samples.float().cpu()
 
-            # Denormalize if stats are available
-            if has_norm_stats:
-                samples = denormalize_samples(samples, normalization_stats_path)
-
-            # Enforce zeros on final output
-            if zero_mask is not None and data_cfg.get("enforce_zeros", True):
-                # zero_mask already transposed to (K, gene_size) above
-                zm = zero_mask.cpu()
-                if zm.shape[0] != num_channels:
-                    zm = zm.T
-                samples = samples * (~zm).unsqueeze(0).float()
+            final_mask = zero_mask if data_cfg.get("enforce_zeros", True) else None
+            samples = postprocess_samples(samples, final_mask, stats_path)
 
             # Save individual samples
             for i in range(current_batch):
@@ -301,6 +327,9 @@ def generate_samples(
     generation_time = time.time() - t_start
 
     meta = {
+        "sample_space": "original",
+        "stats_path": str(stats_path) if stats_path is not None else None,
+        "stats_fingerprint": stats_fingerprint,
         "model_path": str(model_path),
         "model_epoch": checkpoint.get("epoch", None),
         "used_ema": used_ema,
@@ -311,6 +340,9 @@ def generate_samples(
         "per_population": {str(k): int(v) for k, v in n_samples_per_pop.items()},
         "config": {
             "max_timesteps": diffusion_cfg["max_timesteps"],
+            "noise_schedule": diffusion_cfg.get("noise_schedule", "cosine"),
+            "prediction_target": diffusion_cfg.get("prediction_target", "epsilon"),
+            "sample_clip": diffusion_cfg.get("sample_clip", 6.0),
             "ddim_steps": ddim_steps,
             "guidance_type": guidance_type,
             "guidance_weight": guidance_weight,
@@ -318,6 +350,7 @@ def generate_samples(
             "batch_gen_size": batch_gen_size,
             "num_channels": num_channels,
             "gene_size": gene_size,
+            "normalize": data_cfg.get("normalize", False),
         },
         "timestamp": datetime.now().isoformat(),
         "generation_time_sec": round(generation_time, 2),

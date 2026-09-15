@@ -6,13 +6,17 @@ for training and standard distributed sampling for validation.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
-import torch
 from torch.utils.data import DataLoader, DistributedSampler
 
 from src.data.dataset import GenotypeDataset
 from src.data.sampler import PopulationBalancedSampler
+
+
+class PreprocessingProvenanceError(ValueError):
+    pass
 
 
 def create_dataloaders(
@@ -32,10 +36,28 @@ def create_dataloaders(
     """
     data_cfg = config["data"]
     training_cfg = config["training"]
-    save_dir = config.get("save_dir", "outputs/default")
-
     # Resolve data paths (relative to project root)
-    processed_dir = Path("data/processed")
+    processed_dir = Path(data_cfg.get("processed_dir", "data/processed"))
+    expected_method = data_cfg.get("dim_reduction_method")
+    if expected_method and not data_cfg.get("allow_unverified_preprocessing", False):
+        metadata_path = Path(
+            data_cfg.get(
+                "preprocessing_metadata_path",
+                processed_dir / "preprocessing_metadata.json",
+            )
+        )
+        if not metadata_path.exists():
+            raise PreprocessingProvenanceError(
+                f"Missing preprocessing metadata for {expected_method!r}: {metadata_path}"
+            )
+        actual_method = json.loads(metadata_path.read_text()).get(
+            "dim_reduction_method"
+        )
+        if actual_method != expected_method:
+            raise PreprocessingProvenanceError(
+                f"Preprocessing method mismatch: expected {expected_method!r}, "
+                f"artifact records {actual_method!r}"
+            )
     train_path = processed_dir / "train_data.pkl"
     val_path = processed_dir / "val_data.pkl"
 
@@ -80,7 +102,7 @@ def create_dataloaders(
         val_dataset,
         batch_size=batch_size,
         sampler=val_sampler,
-        shuffle=False if val_sampler is not None else False,
+        shuffle=False,
         num_workers=num_workers,
         pin_memory=True,
     )

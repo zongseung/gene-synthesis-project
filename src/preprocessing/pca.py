@@ -6,6 +6,7 @@ import gc
 import json
 import logging
 import os
+import pickle
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
@@ -251,6 +252,7 @@ def stream_vcf_and_pca(
 
     all_pca_features = {}
     all_pca_stats = []
+    all_glm_decoders = {}
     sample_ids = []
 
     logger.info(
@@ -264,13 +266,21 @@ def stream_vcf_and_pca(
             logger.warning(f"[chr{chrom_num}] No gene annotations found, skipping")
             continue
 
-        args = (chrom_num, vcf_path, MAF_THRESHOLD, MAX_VARIANTS_PER_GENE, chrom_genes)
+        args = (
+            chrom_num,
+            vcf_path,
+            MAF_THRESHOLD,
+            MAX_VARIANTS_PER_GENE,
+            chrom_genes,
+            train_indices,
+        )
         _, gene_matrices, sids = process_one_chromosome(args)
 
         if not sample_ids and sids:
             sample_ids = sids
 
         n_genes_chr = len(gene_matrices)
+        gene_loci = {gene["name"]: gene for gene in chrom_genes}
 
         for gene_name in sorted(gene_matrices.keys()):
             from src.preprocessing.config import (
@@ -288,8 +298,25 @@ def stream_vcf_and_pca(
             )
             if result is not None:
                 all_pca_features.update(result["features"])
+                if "loadings" in result:
+                    all_glm_decoders[gene_name] = {
+                        key: result[key]
+                        for key in (
+                            "loadings",
+                            "intercept",
+                            "family",
+                            "link",
+                            "penalty",
+                            "backend",
+                            "backend_version",
+                            "projection",
+                        )
+                    }
                 stat_row = {
                     "gene": gene_name,
+                    "chrom": chrom_num,
+                    "start": gene_loci[gene_name]["start"],
+                    "end": gene_loci[gene_name]["end"],
                     "n_variants": result["n_variants"],
                     "actual_k": result["actual_k"],
                     "explained_total": result["explained_total"],
@@ -317,6 +344,9 @@ def stream_vcf_and_pca(
     pca_stats_df.to_csv(
         os.path.join(PROCESSED_DIR, "pca_per_gene_stats.csv"), index=False
     )
+    if all_glm_decoders:
+        with open(os.path.join(PROCESSED_DIR, "glm_pca_decoders.pkl"), "wb") as handle:
+            pickle.dump(all_glm_decoders, handle, protocol=4)
 
     return all_pca_features, sample_ids, pca_stats_df
 

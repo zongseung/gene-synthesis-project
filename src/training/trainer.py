@@ -22,6 +22,7 @@ Usage:
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import shutil
@@ -55,6 +56,20 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+
+def _bind_normalization_stats(config: dict) -> None:
+    data_cfg = config["data"]
+    if not data_cfg.get("normalize", False):
+        return
+    stats_path = Path(
+        data_cfg.get("normalization_stats_path", "data/processed/normalization_stats.pkl")
+    )
+    if not stats_path.exists():
+        raise FileNotFoundError(f"Normalization stats not found: {stats_path}")
+    data_cfg["normalization_stats_sha256"] = hashlib.sha256(
+        stats_path.read_bytes()
+    ).hexdigest()
 
 
 # ───────────────────────────────────────────────────────────────────
@@ -226,6 +241,7 @@ def train(config: dict) -> None:
     """Full training pipeline with DDP, bf16, EMA, and wandb logging."""
 
     # ── Setup ──
+    _bind_normalization_stats(config)
     training_cfg = config["training"]
     distributed_cfg = config.get("distributed", {})
     single_gpu = distributed_cfg.get("num_gpus", 2) == 1
@@ -299,6 +315,9 @@ def train(config: dict) -> None:
         null_class=data_cfg.get("num_classes", 26),
         cfg_dropout_rate=diffusion_cfg.get("cfg_dropout_rate", 0.1),
         schedule_type=diffusion_cfg.get("noise_schedule", "cosine"),
+        prediction_target=diffusion_cfg.get("prediction_target", "epsilon"),
+        sample_clip=diffusion_cfg.get("sample_clip", 6.0),
+        feature_schedule=diffusion_cfg.get("feature_schedule"),
     ).to(device)
 
     # ── Optimizer (NO GradScaler for bf16) ──

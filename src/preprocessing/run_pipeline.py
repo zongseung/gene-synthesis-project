@@ -13,6 +13,7 @@ Usage:
 from __future__ import annotations
 
 import gc
+import json
 import logging
 import os
 import sys
@@ -25,17 +26,13 @@ _PROJECT_ROOT = os.path.abspath(os.path.join(_SCRIPT_DIR, "..", ".."))
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
-import numpy as np
 import pandas as pd
 
 from src.preprocessing.config import (
-    MAF_THRESHOLD,
-    MAX_VARIANTS_PER_GENE,
-    MARGINAL_GAIN_DECAY_RATIO,
-    MARGINAL_GAIN_THRESHOLD,
+    DIM_RED_METHOD,
+    GLM_PCA_FAMILY,
     PANEL_PATH,
     PCA_CANDIDATES,
-    PCA_SAMPLE_GENES,
     PREPROCESS_SEED,
     PROCESSED_DIR,
     REFGENE_PATH,
@@ -50,13 +47,8 @@ from src.preprocessing.labels import (
     save_all,
     split_dataset_stratified,
 )
-from src.preprocessing.pca import (
-    analyze_pca_information_loss,
-    grid_search_optimal_pca,
-    stream_vcf_and_pca,
-)
+from src.preprocessing.pca import stream_vcf_and_pca
 from src.preprocessing.tokenizer import compute_gene_size, generate_zero_mask, normalize_data, tokenize_dataset
-from src.preprocessing.vcf_parser import process_one_chromosome
 
 logging.basicConfig(
     level=logging.INFO,
@@ -85,6 +77,9 @@ def validate_input_files() -> None:
 def main() -> None:
     t_start = time.time()
     logger.info("=" * 60)
+
+    if DIM_RED_METHOD != "glm_pca":
+        raise ValueError("The production preprocessing pipeline requires glm_pca")
     logger.info("HiPoDiT Preprocessing Pipeline (OOM-safe)")
     logger.info(f"  VCF: {VCF_PATH}")
     logger.info("=" * 60)
@@ -111,58 +106,8 @@ def main() -> None:
         f"test={len(test_idx)} (seed={PREPROCESS_SEED})"
     )
 
-    # Step 1 (Pass 1): PCA grid search on chr1,11,22 (train-only)
-    grid_search_chroms = [1, 11, 22]
-    logger.info(f"Pass 1: PCA grid search on chr{grid_search_chroms} (train-only fit)")
-
-    subset_genes = {}
-    sample_ids = []
-    for chrom in grid_search_chroms:
-        chrom_genes = gene_coords.get(str(chrom), [])
-        args = (chrom, VCF_PATH, MAF_THRESHOLD, MAX_VARIANTS_PER_GENE, chrom_genes)
-        _, gene_matrices, sids = process_one_chromosome(args)
-        subset_genes.update(gene_matrices)
-        del gene_matrices
-        if not sample_ids and sids:
-            sample_ids = sids
-
-    # Align train indices to the per-gene matrix row count. Matrix rows follow
-    # VCF sample order; labels follow panel row order. Existing downstream code
-    # assumes these coincide for the overlap prefix.
-    n_samples_vcf = next(iter(subset_genes.values())).shape[0] if subset_genes else 0
-    if n_samples_vcf != len(labels["pop_labels"]):
-        logger.warning(
-            f"Sample count mismatch between VCF ({n_samples_vcf}) and panel "
-            f"({len(labels['pop_labels'])}); restricting split to overlap prefix."
-        )
-        n_min = min(n_samples_vcf, len(labels["pop_labels"]))
-        keep_mask = np.isin(train_idx, np.arange(n_min))
-        train_idx = train_idx[keep_mask]
-        val_idx = val_idx[np.isin(val_idx, np.arange(n_min))]
-        test_idx = test_idx[np.isin(test_idx, np.arange(n_min))]
-
-    from src.preprocessing.config import (
-        DIM_RED_METHOD, GLM_PCA_FAMILY, GLM_PCA_MAX_ITER,
-    )
-    from src.preprocessing.dim_reduction import grid_search_optimal_k
-    logger.info(f"Dimensionality reduction backend: {DIM_RED_METHOD}")
-    grid_kwargs = dict(
-        candidates=PCA_CANDIDATES,
-        n_sample_genes=PCA_SAMPLE_GENES,
-        marginal_threshold=MARGINAL_GAIN_THRESHOLD,
-        decay_ratio=MARGINAL_GAIN_DECAY_RATIO,
-    )
-    if DIM_RED_METHOD == "glm_pca":
-        grid_kwargs["fam"] = GLM_PCA_FAMILY
-        grid_kwargs["max_iter"] = GLM_PCA_MAX_ITER
-    optimal_k, _ = grid_search_optimal_k(
-        method=DIM_RED_METHOD,
-        gene_matrices=subset_genes,
-        train_indices=train_idx,
-        **grid_kwargs,
-    )
-    del subset_genes
-    gc.collect()
+    optimal_k = PCA_CANDIDATES[0]
+    logger.info(f"Dimensionality reduction backend: {DIM_RED_METHOD}, K={optimal_k}")
 
     # Step 2 (Pass 2): Stream all 22 chr → PCA (train-only fit, full transform)
     logger.info(
@@ -177,32 +122,31 @@ def main() -> None:
     )
     gc.collect()
 
+    panel_sample_ids = pd.read_csv(PANEL_PATH, sep="\t")["sample"].astype(str).tolist()
+    if sample_ids != panel_sample_ids:
+        raise ValueError("VCF sample order does not exactly match panel sample order")
+
     if not all_pca_features:
         logger.error("No PCA features extracted. Aborting.")
         sys.exit(1)
-
-    analyze_pca_information_loss(pca_stats, optimal_k)
 
     features_df = pd.DataFrame(all_pca_features)
     del all_pca_features
     gc.collect()
 
-    # Align samples: existing alignment path for VCF/panel length mismatch.
-    # Split indices were already clamped to the overlap above, so we only
-    # trim labels/sample_ids here.
     if not (sample_ids and len(features_df) == len(labels["pop_labels"])):
-        logger.warning(
+        raise ValueError(
             f"Sample count mismatch: features={len(features_df)}, "
-            f"labels={len(labels['pop_labels'])}. Using minimum overlap."
+            f"labels={len(labels['pop_labels'])}"
         )
-        n_min = min(len(features_df), len(labels["pop_labels"]))
-        features_df = features_df.iloc[:n_min]
-        labels["pop_labels"] = labels["pop_labels"][:n_min]
-        labels["superpop_labels"] = labels["superpop_labels"][:n_min]
-        sample_ids = sample_ids[:n_min] if sample_ids else []
 
     # Step 4: Tokenize
-    tokenized, n_genes = tokenize_dataset(features_df, optimal_k)
+    gene_rows = (
+        pca_stats.drop_duplicates("gene", keep="last")
+        .sort_values(["chrom", "start", "end", "gene"])
+    )
+    gene_order = gene_rows["gene"].tolist()
+    tokenized, n_genes = tokenize_dataset(features_df, optimal_k, gene_order=gene_order)
 
     # Step 5: Split (80/10/10) — reuse the indices the PCA was fit on.
     x_train, x_val, x_test, y_train, y_val, y_test, _ = split_dataset_stratified(
@@ -220,19 +164,35 @@ def main() -> None:
     x_val = pad_to_gene_size(x_val, gene_size)
     x_test = pad_to_gene_size(x_test, gene_size)
 
-    # Step 7: Normalize (stats now have shape (gene_size, K) = (24576, K))
-    x_train_norm, x_val_norm, x_test_norm, _ = normalize_data(x_train, x_val, x_test)
+    generate_zero_mask(x_train, gene_size, optimal_k)
+    x_train_norm, x_val_norm, x_test_norm, stats = normalize_data(
+        x_train, x_val, x_test
+    )
     del x_train, x_val, x_test
     gc.collect()
-
-    # Step 8: Zero mask
-    generate_zero_mask(x_train_norm, gene_size, optimal_k)
 
     # Step 9: Save (already padded, save_all will skip re-padding)
     save_all(
         x_train_norm, x_val_norm, x_test_norm,
         y_train, y_val, y_test, features_df, gene_size,
     )
+    metadata = {
+        "version": 1,
+        "dim_reduction_method": DIM_RED_METHOD,
+        "glm_family": GLM_PCA_FAMILY,
+        "glm_projection": "fixed_decoder_likelihood",
+        "glm_decoder_path": "glm_pca_decoders.pkl",
+        "normalization": {
+            "fit_split": stats["fit_split"],
+            "shape": list(stats["shape"]),
+            "clip": stats["clip"],
+        },
+        "tensor_layout": "N,G,K",
+        "gene_order": gene_rows[["gene", "chrom", "start", "end"]].to_dict("records"),
+        "source_sample_order": "VCF_exactly_matches_panel",
+    }
+    metadata_path = Path(PROCESSED_DIR) / "preprocessing_metadata.json"
+    metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
 
     elapsed = time.time() - t_start
     logger.info(f"\n{'=' * 60}")

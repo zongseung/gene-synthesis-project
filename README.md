@@ -6,7 +6,7 @@
 
 | 항목 | 값 |
 | --- | --- |
-| 모델 파라미터 | **196.8 M** (bf16) |
+| 모델 파라미터 | **9.33 M** (bf16) |
 | 아키텍처 | Hybrid CNN encoder ⊕ DiT core ⊕ CNN decoder + Hierarchical FiLM |
 | Diffusion | linear schedule · 1,000 timesteps · DDIM 100-step · CFG |
 | 데이터 | 1KG Phase 3 · 2,504 samples · 26 pops · 5 superpops · gene_size 24,576 |
@@ -18,6 +18,11 @@
 * 합성 모델 자체 — 본 README
 * DUPI 평가 모듈 — [`src/evaluation/README.md`](src/evaluation/README.md)
 * 페이퍼 인용 정보 — [`CITATION.cff`](CITATION.cff)
+* 이항 GLM-PCA + 인자별 확산 실험 — [실행 명령·수식·측정 결과](docs/reports/hipodit_diffusion_experiment_20260915.md)
+
+새 연구 실험은 `scripts/hipodit_rebuild_check.py`의 `prepare`와 `train --schedule standard|fisher`로 실행한다.
+`prepare`는 이항 GLM-PCA와 결측 마스크를 사용하고 SNP 중복 배치를 제거한다.
+기존 전체 유전체 전처리의 Poisson 경로 및 캐시는 별도이며, 새 실험 결과로 자동 대체하지 않는다.
 
 ---
 
@@ -99,81 +104,70 @@ FiLM: output = γ · input + β
   EUR → γ_LD↓ (긴 LD → 저주파 패턴 강화)
 ```
 
-### Novelty
-
-| # | Contribution | 선행 연구 |
-|---|-------------|----------|
-| 1 | **FiLM의 유전형 생성 최초 적용** | 없음 (AlphaFold3/TaxDiff는 단백질 한정) |
-| 2 | **CNN-DiT 하이브리드 유전형 Diffusion** | 없음 |
-| 3 | **계층적 인구군 임베딩 + FiLM 변조** | 없음 |
-| 4 | **소수 인구군 강건성의 정량적 검증** | 부분적 (Genome-AC-GAN만) |
-
----
-
 ## Model Architecture
 
 ### Default config (baseline `configs/default.yaml`)
 
 | 항목 | 값 | 근거 |
 |------|----|-------------|
-| `in_channels (K)` | 8 | `data.num_channels` |
+| `in_channels (K)` | 4 | `data.num_channels` |
 | `gene_size` | 24,576 | `data.gene_size` |
-| `base_channels` | 128 | `model.base_channels` |
+| `base_channels` | 64 | `model.base_channels` |
 | `channel_mult` | (1, 1, 2, 2, 4) — **5 blocks** | `model.channel_mult` |
 | `n_downsamples` | 4 = `len(channel_mult) - 1` | encoder 마지막 블록은 채널만 확장 |
 | `latent_size` | 24576 / 2⁴ = **1,536** | |
-| `latent_channels (4C)` | **512** | `base_channels × channel_mult[-1]` |
-| `d_model` | **768** | `model.d_model` |
-| `n_dit_blocks` | **16** | `model.n_dit_blocks` |
-| `n_heads` | **12** | `model.n_heads` |
+| `latent_channels (4C)` | **256** | `base_channels × channel_mult[-1]` |
+| `d_model` | **256** | `model.d_model` |
+| `n_dit_blocks` | **4** | `model.n_dit_blocks` |
+| `n_heads` | **4** | `model.n_heads` |
 | `mlp_ratio` | 4.0 | `model.mlp_ratio` |
 | `patch_size` | 16 → `n_tokens = 96` | latent 1,536 / 16 |
 | `n_pops (+null)` | 26 (+1 = 27, CFG null) | `model.n_pops` |
 | `n_superpops (+null)` | 5 (+1 = 6) | `model.n_superpops` |
 | `dropout` | 0.1 | `model.dropout` |
-| **Total parameters** | **196,801,672 (~197 M)** | bf16 ≈ 376 MB weight |
+| **Total parameters** | **9,331,588 (~9.33 M)** | bf16 ≈ 18 MB weight |
 
 ### 최상위 데이터 흐름 (`HybridCNNDiTFiLM.forward`)
 
 ```mermaid
 flowchart TD
     subgraph INPUT["INPUT"]
-        X["x : (B, 8, 24576)<br/>noisy Gene-PCA tensor"]
+        X["x : (B, 4, 24576)<br/>noisy GLM-PCA tensor"]
         T["t : (B,)<br/>diffusion timestep"]
         Y["y : (B,)<br/>pop_label ∈ [0,25] ∪ {26 = CFG null}"]
     end
 
     subgraph COND["CONDITIONING PATH"]
-        PE["HierarchicalPopulationEmbedding<br/>pop_emb ⊕ superpop_emb → fusion MLP<br/>→ (B, 768)"]
+        PE["HierarchicalPopulationEmbedding<br/>pop_emb ⊕ superpop_emb → fusion MLP<br/>→ (B, 256)"]
         FG["UnifiedFiLMGenerator<br/>time_mlp(t) ⊕ pop_emb → cond_mlp<br/>→ FiLM params for enc/dit/dec"]
     end
 
     subgraph ENC["CNN ENCODER  (local LD, 5 blocks)"]
-        E1["FiLMConvBlock #1<br/>8 → 128,   L: 24576 → 12288"]
-        E2["FiLMConvBlock #2<br/>128 → 128, L: 12288 → 6144"]
-        E3["FiLMConvBlock #3<br/>128 → 256, L: 6144 → 3072"]
-        E4["FiLMConvBlock #4<br/>256 → 256, L: 3072 → 1536"]
-        E5["FiLMConvBlock #5 (no ↓)<br/>256 → 512, L: 1536"]
+        E1["FiLMConvBlock #1<br/>4 → 64,   L: 24576 → 12288"]
+        E2["FiLMConvBlock #2<br/>64 → 64, L: 12288 → 6144"]
+        E3["FiLMConvBlock #3<br/>64 → 128, L: 6144 → 3072"]
+        E4["FiLMConvBlock #4<br/>128 → 128, L: 3072 → 1536"]
+        E5["FiLMConvBlock #5 (no ↓)<br/>128 → 256, L: 1536"]
     end
 
     subgraph DITCORE["DiT CORE  (long-range gene interactions)"]
-        P["PatchEmbed1D<br/>(B, 512, 1536) → Linear<br/>→ (B, 96, 768) + learned pos_emb"]
-        D["DiTCore × 16 blocks<br/>AdaLN-Zero self-attn + MLP<br/>d=768, heads=12, mlp_ratio=4"]
-        U["UnPatchify1D<br/>(B, 96, 768) → Linear<br/>→ (B, 512, 1536)"]
+        P["PatchEmbed1D<br/>(B, 256, 1536) → Linear<br/>→ (B, 96, 256) + learned pos_emb"]
+        D["DiTCore × 4 blocks<br/>AdaLN-Zero self-attn + MLP<br/>d=256, heads=4, mlp_ratio=4"]
+        U["UnPatchify1D<br/>(B, 96, 256) → Linear<br/>→ (B, 256, 1536)"]
     end
 
     subgraph DEC["CNN DECODER  (reconstruction + skips)"]
-        D1["FiLMDeconvBlock #1<br/>512 → 256 + skip₅"]
-        D2["FiLMDeconvBlock #2<br/>256 → 256 + skip₄"]
-        D3["FiLMDeconvBlock #3<br/>256 → 128 + skip₃"]
-        D4["FiLMDeconvBlock #4<br/>128 → 128 + skip₂"]
-        D5["FiLMDeconvBlock #5 (no ↑)<br/>128 → 128 + skip₁"]
-        FC["Conv1d 1×1<br/>128 → 8"]
+        D1["FiLMDeconvBlock #1<br/>256 → 128 + skip₅"]
+        D2["FiLMDeconvBlock #2<br/>128 → 128 + skip₄"]
+        D3["FiLMDeconvBlock #3<br/>128 → 64 + skip₃"]
+        D4["FiLMDeconvBlock #4<br/>64 → 64 + skip₂"]
+        D5["FiLMDeconvBlock #5 (no ↑)<br/>64 → 64 + skip₁"]
+        FC["Conv1d 1×1<br/>64 → 4"]
     end
 
     subgraph OUT["OUTPUT"]
         Z["enforce_zeros<br/>output × (~zero_mask)"]
-        OUTX["ε̂ : (B, 8, 24576)"]
+        OUTX["ε̂ : (B, 4, 24576)"]
     end
 
     X --> E1 --> E2 --> E3 --> E4 --> E5 --> P --> D --> U --> D1 --> D2 --> D3 --> D4 --> D5 --> FC --> Z --> OUTX
@@ -223,41 +217,41 @@ flowchart LR
 
     subgraph HPE["HierarchicalPopulationEmbedding"]
         PMAP["pop_to_superpop_map<br/>(n_pops+1,) long buffer"]
-        PEMB["nn.Embedding(27, 768)"]
-        SEMB["nn.Embedding(6, 768)"]
-        CAT1["concat → (B, 1536)"]
-        FUSE["Linear 1536→768 · SiLU · Linear 768→768"]
-        POUT["pop_emb (B, 768)"]
+        PEMB["nn.Embedding(27, 256)"]
+        SEMB["nn.Embedding(6, 256)"]
+        CAT1["concat → (B, 512)"]
+        FUSE["Linear 512→256 · SiLU · Linear 256→256"]
+        POUT["pop_emb (B, 256)"]
     end
 
     subgraph TME["Timestep path"]
-        SINE["sinusoidal timestep_embedding<br/>dim=768, max_period=10000"]
-        TMLP["Linear 768→768 · SiLU · Linear 768→768"]
-        TOUT["t_emb (B, 768)"]
+        SINE["sinusoidal timestep_embedding<br/>dim=256, max_period=10000"]
+        TMLP["Linear 256→256 · SiLU · Linear 256→256"]
+        TOUT["t_emb (B, 256)"]
     end
 
     subgraph UFG["UnifiedFiLMGenerator"]
-        CAT2["concat [pop_emb, t_emb] → (B, 1536)"]
-        CMLP["cond_mlp<br/>Linear 1536→768 · SiLU · Linear 768→768<br/>→ cond (B, 768)"]
+        CAT2["concat [pop_emb, t_emb] → (B, 512)"]
+        CMLP["cond_mlp<br/>Linear 512→256 · SiLU · Linear 256→256<br/>→ cond (B, 256)"]
 
         subgraph CNN_ENC_FILM["cnn_enc_films (ModuleList × 5)"]
-            LE1["Linear 768 → 2·128"]
-            LE2["Linear 768 → 2·128"]
-            LE3["Linear 768 → 2·256"]
-            LE4["Linear 768 → 2·256"]
-            LE5["Linear 768 → 2·512"]
+            LE1["Linear 256 → 2·64"]
+            LE2["Linear 256 → 2·64"]
+            LE3["Linear 256 → 2·128"]
+            LE4["Linear 256 → 2·128"]
+            LE5["Linear 256 → 2·256"]
         end
 
         subgraph CNN_DEC_FILM["cnn_dec_films (ModuleList × 5)"]
-            LD1["Linear 768 → 2·256"]
-            LD2["Linear 768 → 2·256"]
-            LD3["Linear 768 → 2·128"]
-            LD4["Linear 768 → 2·128"]
-            LD5["Linear 768 → 2·128"]
+            LD1["Linear 256 → 2·128"]
+            LD2["Linear 256 → 2·128"]
+            LD3["Linear 256 → 2·64"]
+            LD4["Linear 256 → 2·64"]
+            LD5["Linear 256 → 2·64"]
         end
 
-        subgraph DIT_FILM["dit_films (ModuleList × 16, AdaLN-Zero)"]
-            DF["SiLU → zero_module(Linear 768 → 6·768)<br/>per block → (B, 4608)"]
+        subgraph DIT_FILM["dit_films (ModuleList × 4, AdaLN-Zero)"]
+            DF["SiLU → zero_module(Linear 256 → 6·256)<br/>per block → (B, 1536)"]
         end
     end
 
@@ -278,7 +272,7 @@ flowchart LR
     LD1 --> DO["→ Decoder × 5"]
     LD5 --> DO
 
-    DF -->|"chunk(6) → γ₁,β₁,α₁,γ₂,β₂,α₂"| DITO["→ DiT blocks × 16"]
+    DF -->|"chunk(6) → γ₁,β₁,α₁,γ₂,β₂,α₂"| DITO["→ DiT blocks × 4"]
 
     classDef hpe fill:#fde68a,stroke:#92400e,color:#000
     classDef tme fill:#fecaca,stroke:#991b1b,color:#000
@@ -325,24 +319,24 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    X["x (B, N=96, d=768)"]
-    FP["film_params (B, 4608)"]
-    CHK["chunk(6, dim=-1)<br/>→ γ₁,β₁,α₁,γ₂,β₂,α₂  each (B,1,768)"]
+    X["x (B, N=96, d=256)"]
+    FP["film_params (B, 1536)"]
+    CHK["chunk(6, dim=-1)<br/>→ γ₁,β₁,α₁,γ₂,β₂,α₂  each (B,1,256)"]
 
     subgraph ATTN["Self-Attention branch"]
         N1["LayerNorm(elementwise_affine=False)"]
-        M1["h = γ₁·h + β₁"]
-        MHA["MultiheadAttention<br/>d=768, heads=12, batch_first"]
+        M1["h = (1+γ₁)·h + β₁"]
+        MHA["MultiheadAttention<br/>d=256, heads=4, batch_first"]
         G1["x + α₁·h   (α₁ ≈ 0 at init)"]
     end
 
     subgraph MLP["FFN branch"]
         N2["LayerNorm(elementwise_affine=False)"]
-        M2["h = γ₂·h + β₂"]
-        F1["Linear 768 → 3072"]
+        M2["h = (1+γ₂)·h + β₂"]
+        F1["Linear 256 → 1024"]
         GE["GELU"]
         DR1["Dropout(0.1)"]
-        F2["Linear 3072 → 768"]
+        F2["Linear 1024 → 256"]
         DR2["Dropout(0.1)"]
         G2["x + α₂·h   (α₂ ≈ 0 at init)"]
     end
@@ -358,7 +352,7 @@ flowchart TD
     CHK -. γ₂,β₂ .-> M2
     CHK -. α₂ .-> G2
 
-    G2 --> OUT["(B, 96, 768)"]
+    G2 --> OUT["(B, 96, 256)"]
 
     classDef ada fill:#ddd6fe,stroke:#5b21b6,color:#000
     class N1,M1,G1,N2,M2,G2 ada
@@ -426,7 +420,7 @@ flowchart TD
 ```mermaid
 flowchart LR
     subgraph FWD["FORWARD (training)"]
-        X0["x₀<br/>real Gene-PCA<br/>(B, 8, 24576)"]
+        X0["x₀<br/>real GLM-PCA<br/>(B, 4, 24576)"]
         NS["q(xₜ | x₀)<br/>linear schedule<br/>1,000 timesteps"]
         XT["xₜ"]
         EPS["ε_pred<br/>HiPoDiT(xₜ, t, y)"]
@@ -439,7 +433,7 @@ flowchart LR
         CFG["CFG: ε = (1+w)·ε_cond − w·ε_uncond<br/>guidance_weight w (sweepable)"]
         Z0["enforce_zeros each step"]
         DEN["denormalize(x₀, stats)"]
-        OUT["synthetic x₀<br/>(B, 8, 24576)"]
+        OUT["synthetic x₀<br/>(B, 4, 24576)"]
     end
 
     X0 --> NS --> XT --> EPS --> LOSS
@@ -456,24 +450,25 @@ flowchart LR
 | `max_timesteps` | 1,000 | `diffusion.max_timesteps` |
 | `noise_schedule` | linear | `diffusion.noise_schedule` |
 | `prediction_target` | ε (epsilon) | `diffusion.prediction_target` |
+| `sample_clip` | 6.0 (normalized model space) | `diffusion.sample_clip` |
 | `sampling_timesteps` | 100 (DDIM) | `diffusion.sampling_timesteps` |
 | `ddim_eta` | 0.5 | `diffusion.ddim_eta` |
 | `guidance_type` | classifier-free | `diffusion.guidance_type` |
-| `guidance_weight` | 1.0 (default; sweep with `scripts/guidance_sweep.py`) | `diffusion.guidance_weight` |
+| `guidance_weight` | 0.0 (unamplified conditional baseline) | `diffusion.guidance_weight` |
 | `cfg_dropout_rate` | 0.1 (training-time null sample rate) | `diffusion.cfg_dropout_rate` |
 
-### 파라미터 규모 (실측, 196.8 M)
+### 파라미터 규모 (실측, 9.33 M)
 
 | 모듈 | 파라미터 수 | 비고 |
 |------|-----------|------|
-| `pop_embedding` (Hierarchical) | 1,796,352 (1.80 M) | Embedding(27, 768) + Embedding(6, 768) + fusion MLP |
-| `film_gen` (Unified FiLM Generator) | 62,995,712 (63.00 M) | `time_mlp` + `cond_mlp` + per-block linear (enc 5 · dec 5 · dit 16) |
-| `encoder` (CNN, 5 blocks) | 2,520,192 (2.52 M) | stride-2 downsample × 4, 마지막 블록은 채널 확장만 |
-| `patchify` + position embedding | 6,365,952 (6.37 M) | patch_size 16 → 96 tokens, learnable pos_emb |
-| `dit` (16 blocks, d=768, h=12) | 113,358,336 (113.36 M) | self-attention + FFN + AdaLN-Zero × 16 |
-| `unpatchify` | 6,299,648 (6.30 M) | Linear projection back to (512, 1536) |
-| `decoder` (CNN, 5 blocks) | 3,465,480 (3.47 M) | ConvTranspose1d × 4 + skip connections + final 1×1 conv |
-| **Total** | **196,801,672 (~197 M)** | bf16 weight ≈ **376 MB** |
+| `pop_embedding` (Hierarchical) | 205,568 (0.21 M) | Embedding(27, 256) + Embedding(6, 256) + fusion MLP |
+| `film_gen` (Unified FiLM Generator) | 2,466,944 (2.47 M) | `time_mlp` + `cond_mlp` + per-block linear (enc 5 · dec 5 · dit 4) |
+| `encoder` (CNN, 5 blocks) | 632,384 (0.63 M) | stride-2 downsample × 4, 마지막 블록은 채널 확장만 |
+| `patchify` + position embedding | 1,073,408 (1.07 M) | patch_size 16 → 96 tokens, learnable pos_emb |
+| `dit` (4 blocks, d=256, h=4) | 3,155,456 (3.16 M) | self-attention + FFN + AdaLN-Zero × 4 |
+| `unpatchify` | 1,052,672 (1.05 M) | Linear projection back to (256, 1536) |
+| `decoder` (CNN, 5 blocks) | 745,156 (0.75 M) | ConvTranspose1d × 4 + skip connections + final 1×1 conv |
+| **Total** | **9,331,588 (~9.33 M)** | bf16 weight ≈ **18 MB** |
 
 ---
 
@@ -881,13 +876,13 @@ flowchart TD
     subgraph PASS1["PASS 1 — K determination"]
         P1A["VCF parse: chr1, chr11, chr22 only<br/>MAF ≥ 0.01 filter"]
         P1B["Gene annotation (RefGene)"]
-        P1C["PCA grid search<br/>K candidates: [4, 6, 8, 10, 12, 16]<br/>Marginal Gain Elbow"]
+        P1C["GLM-PCA grid search<br/>K candidates: [4, 6, 8, 10, 12, 16]<br/>Marginal Gain Elbow"]
         P1D["release memory"]
     end
 
     subgraph PASS2["PASS 2 — full streaming transform"]
         P2A["VCF parse: chr1..22 sequentially"]
-        P2B["Gene PCA(K) transform<br/>variant released after fit"]
+        P2B["Gene GLM-PCA(K) transform<br/>variant released after fit"]
         P2C["accumulate gene_pca_features"]
     end
 
@@ -899,7 +894,7 @@ flowchart TD
         F5["Stratified split (train / test)<br/>seed = 20260327"]
     end
 
-    OUT["data/processed/<br/>gene_pca_features.pkl<br/>train_data.pkl · test_data.pkl<br/>normalization_stats.pkl<br/>label_hierarchy.pkl<br/>zero_mask.pt<br/>split_manifest.json<br/>cumulant_stats.npz"]
+    OUT["data/processed/<br/>gene_pca_features.pkl<br/>train_data.pkl · test_data.pkl<br/>normalization_stats.pkl<br/>label_hierarchy.pkl<br/>zero_mask.pt<br/>split_manifest.json<br/>preprocessing_metadata.json"]
 
     VCF --> P1A --> P1B --> P1C --> P1D
     PANEL --> P1A
@@ -920,14 +915,14 @@ flowchart TD
 
 | 파일 | Shape | 설명 |
 |------|-------|------|
-| `gene_pca_features.pkl` | DataFrame (2504, N_features) | 원본 PCA 피처 |
+| `gene_pca_features.pkl` | DataFrame (2504, N_features) | GLM-PCA 피처 |
 | `train_data.pkl` | (x: N×K×gene_size, y: N) | 패딩 → 정규화된 학습 데이터 |
 | `test_data.pkl` | (x: N×K×gene_size, y: N) | 패딩 → 정규화된 테스트 데이터 |
 | `normalization_stats.pkl` | {mean, std}: (gene_size, K) fp32 | 역정규화용 통계량 |
 | `label_hierarchy.pkl` | dict (8 fields) | pop/superpop 매핑 전체 |
 | `zero_mask.pt` | (gene_size, K) bool | 항상 0인 위치 마스크 |
 | `split_manifest.json` | dict | 재현성 보장용 split 기록 |
-| `cumulant_stats.npz` | train-only pop×gene×K 통계 | OC-FiLM 고차 누적량 통계 |
+| `preprocessing_metadata.json` | dict | GLM-PCA 및 정규화 전처리 provenance |
 
 ---
 
@@ -941,13 +936,8 @@ uv sync
 python src/preprocessing/merge_data.py --format vcf
 python src/preprocessing/merge_data.py --format pkl --maf 0.01
 
-# Phase 1: 전처리 (VCF → Gene PCA → 토큰화)
+# Phase 1: 전처리 (VCF → Gene GLM-PCA → 토큰화)
 python src/preprocessing/run_pipeline.py
-
-# Phase 1.5: train-only OC-FiLM 누적량 통계
-python -m src.preprocessing.cumulants \
-  --processed-dir data/processed \
-  --output data/processed/cumulant_stats.npz
 
 # Phase 2: 모델 shape 검증
 python -c "
@@ -1119,16 +1109,15 @@ gene-synthesis-project/
 | RAM | 64GB+ 권장 | 전체 데이터셋 in-memory |
 | Storage | 50GB+ | VCF(14GB) + 산출물 + 체크포인트 |
 
-**VRAM 사용량 추정** (baseline config, 197 M params, batch=16, bf16):
+**VRAM 사용량 추정** (baseline config, 9.33 M params, batch=16, bf16):
 ```
-Model weights (bf16):       197 M × 2 B               ≈   376 MB
-Gradients (bf16):           197 M × 2 B               ≈   376 MB
-Optimizer states (AdamW):   197 M × 8 B (m + v fp32)  ≈ 1,576 MB
-EMA weights:                197 M × 2 B (bf16)        ≈   376 MB
+Model weights (bf16):       9.33 M × 2 B              ≈    18 MB
+Gradients (bf16):           9.33 M × 2 B              ≈    18 MB
+Optimizer states (AdamW):   9.33 M × 8 B (m + v fp32) ≈    75 MB
+EMA weights:                9.33 M × 2 B              ≈    18 MB
 Activations (b=16, gene=24576, mixed-prec)            ≈ 4–6 GB
 ─────────────────────────────────────────────────────────────
-Total per GPU                                          ≈ 7–9 GB
-                                            (48 GB 중 약 15–19 % 사용)
+Total per GPU                                          ≈ 4–6 GB
 ```
 
 > bf16 + DDP 2-GPU 기준. Activation 비용은 input length / DiT 토큰 수에 따라 변동.
@@ -1140,7 +1129,7 @@ Total per GPU                                          ≈ 7–9 GB
 | 결정 | 근거 |
 |------|------|
 | bf16 (not fp16) | Ampere CC 8.6 네이티브 지원, exponent 8bit → GradScaler 불필요 |
-| DDP (not FSDP) | 197M params는 단일 GPU(48 GB) 안에 들어가므로 DDP 가 더 단순·효율적 |
+| DDP (not FSDP) | 9.33M params는 단일 GPU(48 GB) 안에 들어가므로 DDP 가 더 단순·효율적 |
 | linear schedule · 1,000 timesteps | DiT 류 large-scale diffusion 의 표준; cosine 보다 후반부 noise 가 균형적 |
 | DDIM 100-step (η = 0.5) | 1,000-step DDPM 대비 10× 가속 + 부분 stochasticity 로 다양성 유지 |
 | AdaLN-Zero | α=0 초기화 → DiT가 identity로 시작 → 안정적 학습 |
@@ -1182,8 +1171,6 @@ pytest tests/test_dupi.py -v
 | GitHub release / Zenodo DOI | 미설정 (release 시 Zenodo 연동 권장) |
 | PyPI | 미배포 (`src/evaluation/dupi.py` 는 stand-alone 이라 분리 PyPI 배포 가능) |
 | 한국저작권위원회 SW 등록 | 미신청 (개인 ₩30,000 / 법인 ₩70,000 · 처리 ~30일) |
-
-원저자(Jeong, Kim, Im 2023) 의 공식 구현 공개 흔적 없음 — 본 모듈이 사실상 최초 공개 레퍼런스 구현일 가능성 높음.
 
 ---
 

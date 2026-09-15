@@ -1,14 +1,8 @@
 """Per-gene GLM-PCA dimensionality reduction (Townes et al. 2019).
 
-This is the **statistically correct** alternative to :mod:`src.preprocessing.pca`
-for genotype dosage data. Genotype X_ij ∈ {0, 1, 2} follows
-``Binomial(n=2, p_j)`` under Hardy-Weinberg equilibrium, with mean–variance
-relationship ``Var(X) = 2p(1−p)`` — a function of the mean. Standard PCA
-assumes Gaussian + homoscedastic noise, which is misspecified for this data.
-GLM-PCA generalises PCA to the exponential family: the Binomial likelihood
-encodes the correct mean–variance relationship, eliminating the false
-heteroscedasticity that biases PCA's principal directions toward common
-variants.
+The default accelerated backend uses a Poisson likelihood for bounded genotype
+dosage. This preserves a mean-dependent variance model, but is an approximation,
+not a Binomial genotype decoder.
 
 Reference
 ---------
@@ -41,41 +35,109 @@ from src.preprocessing.config import (
 
 logger = logging.getLogger(__name__)
 
-# Default GLM-PCA family: 'mult' (multinomial-Poisson approximation).
-# For dosage Binomial(2, p) data, 'mult' is the standard choice in the
-# Townes et al. (2019) framework; 'nb' (negative binomial) is for overdispersed
-# count data and rarely needed here.
-DEFAULT_GLM_FAMILY = "poi"  # 'poi' enables Rust fast path; 'mult'/'nb' fall back to glmpca-py
+DEFAULT_GLM_FAMILY = "poi"
 DEFAULT_MAX_ITER = 100
 
 
-def _import_glmpca():
-    """Lazy import — keeps optional dependency optional at module load."""
-    try:
-        from glmpca import glmpca
-        return glmpca
-    except ImportError as exc:
-        raise ImportError(
-            "GLM-PCA requires the `glmpca` package. Install with `uv add glmpca`."
-        ) from exc
+class UnsupportedProjectionFamilyError(ValueError):
+    pass
+
+
+def project_glm_factors(
+    observations: np.ndarray,
+    loadings: np.ndarray,
+    intercept: np.ndarray,
+    *,
+    family: str,
+    max_iter: int = DEFAULT_MAX_ITER,
+    penalty: float = 1.0,
+    tolerance: float = 1e-5,
+) -> np.ndarray:
+    """Fit held-out factors with fixed ``exp(intercept + factors @ loadings.T)``."""
+    if family != "poi":
+        raise UnsupportedProjectionFamilyError(
+            f"Likelihood projection is implemented for 'poi', got {family!r}"
+        )
+
+    y = np.asarray(observations, dtype=np.float64)
+    v = np.asarray(loadings, dtype=np.float64)
+    a = np.asarray(intercept, dtype=np.float64)
+    if y.ndim != 2 or v.ndim != 2 or a.shape != (y.shape[1],):
+        raise ValueError(
+            f"Expected observations (N,J), loadings (J,L), intercept (J,); "
+            f"got {y.shape}, {v.shape}, {a.shape}"
+        )
+    if v.shape[0] != y.shape[1]:
+        raise ValueError(
+            f"Loadings features {v.shape[0]} do not match observations {y.shape[1]}"
+        )
+    if not np.isfinite(y).all() or np.any(y < 0):
+        raise ValueError("Poisson observations must be finite and non-negative")
+    if not np.isfinite(v).all() or not np.isfinite(a).all():
+        raise ValueError("Loadings and intercept must be finite")
+    if (
+        max_iter < 1
+        or not np.isfinite(penalty)
+        or penalty <= 0
+        or not np.isfinite(tolerance)
+        or tolerance <= 0
+    ):
+        raise ValueError("max_iter, penalty, and tolerance must be positive")
+
+    factors = np.zeros((y.shape[0], v.shape[1]), dtype=np.float64)
+    identity = np.eye(v.shape[1], dtype=np.float64)
+    converged = False
+    for _ in range(max_iter):
+        eta = a + factors @ v.T
+        with np.errstate(over="raise", invalid="raise"):
+            try:
+                mean = np.exp(eta)
+            except FloatingPointError as exc:
+                raise ValueError("Poisson linear predictor overflowed") from exc
+        gradient = (y - mean) @ v - penalty * factors
+        information = np.einsum("nj,jk,jl->nkl", mean, v, v) + penalty * identity
+        step = np.linalg.solve(information, gradient[..., None])[..., 0]
+        objective = float(np.sum(mean - y * eta) + 0.5 * penalty * np.sum(factors**2))
+        directional_gain = float(np.sum(gradient * step))
+        scale = 1.0
+        accepted = False
+        for _ in range(24):
+            candidate = factors + scale * step
+            candidate_eta = a + candidate @ v.T
+            with np.errstate(over="ignore", invalid="ignore"):
+                candidate_objective = float(
+                    np.sum(np.exp(candidate_eta) - y * candidate_eta)
+                    + 0.5 * penalty * np.sum(candidate**2)
+                )
+            if np.isfinite(candidate_objective) and candidate_objective <= (
+                objective - 1e-4 * scale * directional_gain
+            ):
+                factors = candidate
+                accepted = True
+                break
+            scale *= 0.5
+        if not accepted:
+            raise RuntimeError("Poisson factor projection line search failed")
+        if float(np.max(np.abs(scale * step))) < tolerance:
+            converged = True
+            break
+    if not converged:
+        raise RuntimeError(f"Poisson factor projection did not converge in {max_iter} iterations")
+    return factors.astype(np.float32)
 
 
 def _try_import_rust():
     """Import the accelerated GLM-PCA extension if available.
 
     Published on PyPI as ``glmpca-fast`` (declared in pyproject.toml);
-    installed normally via ``uv sync``. Returns the module on success, or
-    logs once and returns None if it isn't importable — callers then fall
-    back to the ~13x slower pure-Python `glmpca` reference implementation.
+    installed normally via ``uv sync``. Returns the module on success.
     """
     try:
         import glmpca_fast
         return glmpca_fast
     except ImportError:
         logger.warning(
-            "glmpca-fast not importable — GLM-PCA will use the pure-Python "
-            "`glmpca` reference implementation (~13x slower). Run `uv sync` "
-            "to install the accelerated backend."
+            "glmpca-fast not importable; Poisson GLM-PCA is unavailable"
         )
         return None
 
@@ -86,33 +148,33 @@ _RUST_BACKEND = _try_import_rust()
 def _project_held_out(
     X_full: np.ndarray,
     train_indices: np.ndarray,
-    train_factors: np.ndarray,
     loadings: np.ndarray,
-    coef_X: np.ndarray,
+    intercept: np.ndarray,
+    family: str,
+    max_iter: int,
 ) -> np.ndarray:
-    """Project all rows onto the GLM-PCA basis fitted on train rows.
-
-    Train rows reuse their fitted ``factors`` directly. Held-out rows are
-    projected via OLS in the (Pearson-residual approximated) linear space:
-        Z_new ≈ (X_new − meanₜᵣₐᵢₙ) · V · (Vᵀ V)⁻¹
-    This is a first-order approximation to the GLM projection — exact for
-    Gaussian, biased but consistent for Binomial. It mirrors the
-    "fit on train, transform all" leakage-prevention idiom used by the PCA
-    branch.
-    """
     n_total = X_full.shape[0]
     L = loadings.shape[1]
     out = np.zeros((n_total, L), dtype=np.float32)
-    out[train_indices] = train_factors.astype(np.float32)
+    out[train_indices] = project_glm_factors(
+        X_full[train_indices],
+        loadings,
+        intercept,
+        family=family,
+        max_iter=max_iter,
+    )
 
     held = np.setdiff1d(np.arange(n_total), train_indices, assume_unique=True)
     if held.size == 0:
         return out
 
-    train_mean = X_full[train_indices].mean(axis=0)
-    centered = X_full[held] - train_mean
-    proj = centered @ loadings @ np.linalg.pinv(loadings.T @ loadings)
-    out[held] = proj.astype(np.float32)
+    out[held] = project_glm_factors(
+        X_full[held],
+        loadings,
+        intercept,
+        family=family,
+        max_iter=max_iter,
+    )
     return out
 
 
@@ -124,7 +186,7 @@ def glm_pca_single_gene(
     fam: str = DEFAULT_GLM_FAMILY,
     max_iter: int = DEFAULT_MAX_ITER,
 ) -> dict | None:
-    """Apply GLM-PCA (Binomial-style) to a single gene's dosage matrix.
+    """Fit a train-only Poisson GLM-PCA decoder and score every sample.
 
     Parameters
     ----------
@@ -137,8 +199,8 @@ def glm_pca_single_gene(
         If provided, GLM-PCA is fit on these rows only and held-out rows are
         projected onto the fitted basis (matches the leakage-prevention flow
         of :func:`src.preprocessing.pca.pca_single_gene`).
-    fam : str, default 'mult'
-        Likelihood family — see Townes et al. (2019) Section 4.
+    fam : str, default 'poi'
+        Only the replayable Poisson fast-backend likelihood is supported.
     max_iter : int, default 100
         Maximum coordinate-descent iterations.
 
@@ -148,19 +210,13 @@ def glm_pca_single_gene(
         Same shape as :func:`pca_single_gene` so downstream pipeline code
         does not branch:
             ``features``: {f"{gene}:0": (n_samples,), ...}
-            ``explained_total``: deviance-based pseudo-R² (≥ 0)
-            ``explained_per_component``: per-component pseudo-R² (uniform
-                                          split of total — true per-component
-                                          requires K separate fits)
+            ``explained_total``: optimizer deviance reduction (≥ 0)
             ``n_variants``: int
             ``actual_k``: int
 
     Backend
     -------
-    If the optional accelerated extension :mod:`glmpca_fast` is importable
-    and ``fam == "poi"``, this function delegates to its Rust backend
-    (~13× faster per gene). Otherwise falls back to the reference Python
-    package :mod:`glmpca` (Townes 2019).
+    Requires :mod:`glmpca_fast`; unsupported families fail explicitly.
     """
     n_vars = matrix.shape[1]
     n_fit = matrix.shape[0] if train_indices is None else int(len(train_indices))
@@ -171,80 +227,53 @@ def glm_pca_single_gene(
     fit_matrix = matrix if train_indices is None else matrix[train_indices]
 
     # ── Rust fast path ─────────────────────────────────────────────────
-    if _RUST_BACKEND is not None and fam == "poi":
-        try:
-            result = _RUST_BACKEND.fit_poisson(
-                np.ascontiguousarray(fit_matrix, dtype=np.float32),
-                L=n_comp,
-                max_iter=max_iter,
-                tol=1e-4,
-                penalty=1.0,
-                seed=42,
-            )
-            factors = np.asarray(result["factors"], dtype=np.float32)
-            loadings = np.asarray(result["loadings"], dtype=np.float32)
-            dev = np.asarray(result["deviance"], dtype=np.float32)
-            return _build_result(
-                gene_name=gene_name,
-                matrix=matrix,
-                train_indices=train_indices,
-                factors=factors,
-                loadings=loadings,
-                dev=dev,
-                n_comp=n_comp,
-                n_vars=n_vars,
-            )
-        except Exception as exc:
-            logger.warning(
-                f"Rust GLM-PCA failed for {gene_name}: {exc}; falling back to Python"
-            )
+    if fam != "poi":
+        raise UnsupportedProjectionFamilyError(
+            f"GLM-PCA feature extraction requires 'poi', got {fam!r}"
+        )
+    if _RUST_BACKEND is not None:
+        result = _RUST_BACKEND.fit_poisson(
+            np.ascontiguousarray(fit_matrix, dtype=np.float32),
+            L=n_comp,
+            max_iter=max_iter,
+            tol=1e-4,
+            penalty=1.0,
+            seed=42,
+        )
+        loadings = np.asarray(result["loadings"], dtype=np.float32)
+        intercept = np.asarray(result["intercept"], dtype=np.float32)
+        dev = np.asarray(result["deviance"], dtype=np.float32)
+        return _build_result(
+            gene_name=gene_name,
+            matrix=matrix,
+            train_indices=train_indices,
+            loadings=loadings,
+            intercept=intercept,
+            family=fam,
+            backend=str(result["backend"]),
+            backend_version=str(_RUST_BACKEND.__version__),
+            projection="fixed_decoder_likelihood",
+            max_iter=max_iter,
+            dev=dev,
+            n_comp=n_comp,
+            n_vars=n_vars,
+        )
+
+    raise RuntimeError("Poisson GLM-PCA requires the installed glmpca-fast backend")
 
     # ── Python reference fallback ──────────────────────────────────────
-    glmpca_mod = _import_glmpca()
-    Y_fit = fit_matrix.T  # glmpca expects (features, samples)
-
-    try:
-        res = glmpca_mod.glmpca(
-            Y=Y_fit,
-            L=n_comp,
-            fam=fam,
-            verbose=False,
-            ctl={"maxIter": max_iter, "eps": 1e-4},
-        )
-    except Exception as exc:
-        logger.warning(f"GLM-PCA fit failed for {gene_name}: {exc}")
-        return None
-
-    factors = np.asarray(res["factors"], dtype=np.float32)        # (n_fit, K)
-    loadings = np.asarray(res["loadings"], dtype=np.float32)      # (n_vars, K)
-    coef_X = np.asarray(res.get("coefX", np.zeros((n_vars, 1))), dtype=np.float32)
-    dev = np.asarray(res["dev"], dtype=np.float32)
-
-    # Pseudo-R² (McFadden-style): relative deviance reduction
-    if dev.size >= 2 and dev[0] > 0:
-        explained = float(max(0.0, 1.0 - dev[-1] / dev[0]))
-    else:
-        explained = 0.0
-
-    return _build_result(
-        gene_name=gene_name,
-        matrix=matrix,
-        train_indices=train_indices,
-        factors=factors,
-        loadings=loadings,
-        dev=dev,
-        n_comp=n_comp,
-        n_vars=n_vars,
-    )
-
-
 def _build_result(
     *,
     gene_name: str,
     matrix: np.ndarray,
     train_indices: np.ndarray | None,
-    factors: np.ndarray,
     loadings: np.ndarray,
+    intercept: np.ndarray,
+    family: str,
+    backend: str,
+    backend_version: str,
+    projection: str,
+    max_iter: int,
     dev: np.ndarray,
     n_comp: int,
     n_vars: int,
@@ -256,15 +285,21 @@ def _build_result(
         explained = 0.0
 
     if train_indices is None:
-        transformed = factors
+        transformed = project_glm_factors(
+            matrix,
+            loadings,
+            intercept,
+            family=family,
+            max_iter=max(100, max_iter),
+        )
     else:
-        coef_X = np.zeros((n_vars, 1), dtype=np.float32)
         transformed = _project_held_out(
             X_full=matrix,
             train_indices=np.asarray(train_indices, dtype=np.int64),
-            train_factors=factors,
             loadings=loadings,
-            coef_X=coef_X,
+            intercept=intercept,
+            family=family,
+            max_iter=max(100, max_iter),
         )
 
     features = {f"{gene_name}:{k}": transformed[:, k] for k in range(n_comp)}
@@ -274,6 +309,14 @@ def _build_result(
         "explained_per_component": [explained / n_comp] * n_comp,
         "n_variants": n_vars,
         "actual_k": n_comp,
+        "loadings": loadings,
+        "intercept": intercept,
+        "family": family,
+        "link": "log" if family in {"poi", "nb"} else "logit",
+        "penalty": 1.0,
+        "backend": backend,
+        "backend_version": backend_version,
+        "projection": projection,
     }
 
 

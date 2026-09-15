@@ -10,35 +10,20 @@ from __future__ import annotations
 
 import argparse
 import pickle
+import sys
 from pathlib import Path
 
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
-import torch
 from sklearn.decomposition import PCA
 
+_PROJECT_ROOT = str(Path(__file__).parents[2])
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
 
-def load_real(path: str) -> tuple[np.ndarray, np.ndarray]:
-    with open(path, "rb") as f:
-        X, y = pickle.load(f)
-    # X: (N, G, C), y: (N,)
-    return np.asarray(X), np.asarray(y)
-
-
-def load_syn(syn_dir: str) -> tuple[np.ndarray, np.ndarray]:
-    files = sorted(Path(syn_dir).glob("sample_pop*_*.pt"))
-    if not files:
-        raise FileNotFoundError(f"No sample_pop*_*.pt in {syn_dir}")
-    xs, ys = [], []
-    for f in files:
-        x, y = torch.load(f, map_location="cpu", weights_only=False)
-        xs.append(x.numpy())
-        ys.append(int(y))
-    X = np.stack(xs, axis=0)  # (N, C, G)
-    X = X.transpose(0, 2, 1)  # -> (N, G, C) to match real
-    return X, np.asarray(ys)
+from src.evaluation._io import load_real, load_synthetic
 
 
 def subsample_genes(X: np.ndarray, n_genes: int, seed: int = 42) -> np.ndarray:
@@ -55,6 +40,10 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--syn_dir", required=True)
     parser.add_argument("--real_path", default="data/processed/test_data.pkl")
+    parser.add_argument("--stats_path", default="data/processed/normalization_stats.pkl")
+    parser.add_argument(
+        "--legacy_synthetic_space", choices=("normalized", "original"), default=None
+    )
     parser.add_argument("--hierarchy", default="data/processed/label_hierarchy.pkl")
     parser.add_argument("--out", default=None)
     parser.add_argument("--n_genes", type=int, default=2000)
@@ -65,11 +54,15 @@ def main() -> None:
         args.out = str(Path(args.syn_dir).parent / "pca_real_vs_synthetic.png")
 
     print(f"[1/5] Loading real: {args.real_path}")
-    X_real, y_real = load_real(args.real_path)
+    X_real, y_real = load_real(Path(args.real_path), stats_path=Path(args.stats_path))
     print(f"      real shape: {X_real.shape}, labels: {y_real.shape}")
 
     print(f"[2/5] Loading synthetic: {args.syn_dir}")
-    X_syn, y_syn = load_syn(args.syn_dir)
+    X_syn, y_syn, _ = load_synthetic(
+        Path(args.syn_dir),
+        stats_path=Path(args.stats_path),
+        legacy_sample_space=args.legacy_synthetic_space,
+    )
     print(f"      syn shape: {X_syn.shape}, labels: {y_syn.shape}")
 
     print(f"[3/5] Subsampling {args.n_genes} genes (seed={args.seed})")
