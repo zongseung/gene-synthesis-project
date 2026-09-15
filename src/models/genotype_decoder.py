@@ -1,9 +1,14 @@
-"""Cohort-calibrated local-LD categorical decoder from GLM-PCA base logits to {0, 1, 2} calls."""
+"""Cohort-calibrated categorical decoder from GLM-PCA base logits to {0, 1, 2} calls.
+
+Arms B0-B3 add a cohort offset and/or a local-LD chain; arm T keeps the offset, drops the chain and
+tilts heterozygosity at exactly preserved expected dosage.
+"""
 
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, replace
+import math
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 import torch
@@ -14,7 +19,8 @@ FloatArray = NDArray[np.float64]
 IntArray = NDArray[np.int64]
 BoolArray = NDArray[np.bool_]
 
-_ARMS = ("B0", "B1", "B2", "B3")
+_ARMS = ("B0", "B1", "B2", "B3", "T")
+_TILT_SCOPES = ("none", "snp", "superpop", "cohort")
 _DOSAGE = np.arange(3, dtype=np.float64)
 _LOG_COEFFICIENT = np.log([1.0, 2.0, 1.0])
 
@@ -66,24 +72,34 @@ class GenotypeDecoder:
     lambda_a: float
     train_nll_per_call: float
     converged: bool
+    tilt: FloatArray = field(default_factory=lambda: np.zeros(0))
+    tilt_scope: str = "none"
+    lambda_tilt: float = 0.0
+    superpop_of_cohort: IntArray = field(default_factory=lambda: np.zeros(0, dtype=np.int64))
 
     def save(self, path) -> None:
         np.savez(path, cohort_offset=self.cohort_offset, residual=self.residual,
                  edges=self.bins.edges, bin_of_snp=self.bins.bin_of_snp, offsets=self.offsets,
-                 cohort_weights=self.cohort_weights,
+                 cohort_weights=self.cohort_weights, tilt=self.tilt,
+                 superpop_of_cohort=self.superpop_of_cohort,
                  scalars=json.dumps({"arm": self.arm, "lambda_u": self.lambda_u,
                                      "lambda_a": self.lambda_a,
                                      "train_nll_per_call": self.train_nll_per_call,
-                                     "converged": self.converged}))
+                                     "converged": self.converged, "tilt_scope": self.tilt_scope,
+                                     "lambda_tilt": self.lambda_tilt}))
 
     @classmethod
     def load(cls, path) -> "GenotypeDecoder":
         with np.load(path) as data:
             scalars = json.loads(str(data["scalars"]))
+            # Files written before arm T carry no tilt fields; the dataclass defaults fill them.
+            tilt = (dict(tilt=data["tilt"], tilt_scope=scalars["tilt_scope"],
+                         lambda_tilt=scalars["lambda_tilt"],
+                         superpop_of_cohort=data["superpop_of_cohort"]) if "tilt" in data else {})
             return cls(scalars["arm"], data["cohort_offset"], data["residual"],
                        DistanceBins(data["edges"], data["bin_of_snp"]), data["offsets"],
                        data["cohort_weights"], scalars["lambda_u"], scalars["lambda_a"],
-                       scalars["train_nll_per_call"], scalars["converged"])
+                       scalars["train_nll_per_call"], scalars["converged"], **tilt)
 
 
 def _checked_calls(calls: FloatArray) -> FloatArray:
@@ -120,12 +136,38 @@ def _predecessors(calls: FloatArray, bin_of_snp: IntArray) -> tuple[IntArray, Bo
     return np.where(linked, np.nan_to_num(previous), 0).astype(np.int64), linked
 
 
-def _categorical_logits(eta: FloatArray, residual: FloatArray, bin_of_snp: IntArray,
-                        previous: IntArray, linked: BoolArray) -> FloatArray:
+def _tilted_logits(eta: torch.Tensor, tilt: torch.Tensor) -> torch.Tensor:
+    """Logits (0, log 2 + tau + log x, 2 log x) whose expected dosage is exactly 2 sigmoid(eta).
+
+    x is the positive root of (1 - p) x^2 + t (1 - 2p) x - p = 0 with t = exp(tau), solved through
+    the minor probability and mirrored (x(p) = 1 / x(1 - p)) so neither tail cancels.
+    """
+    minor_logit = torch.where(eta > 0, -eta, eta)
+    log_minor = torch.nn.functional.logsigmoid(minor_logit)
+    minor = log_minor.exp()
+    # ponytail: t^2 overflows past tau ~ 350; a ridge-fitted tilt never gets near it.
+    spread = tilt.exp() * (1 - 2 * minor)
+    log_root = (math.log(2) + log_minor
+                - torch.log(spread + torch.sqrt(spread**2 + 4 * minor * (1 - minor))))
+    log_x = torch.where(eta > 0, -log_root, log_root)
+    return torch.stack([torch.zeros_like(log_x), math.log(2) + tilt + log_x, 2 * log_x], dim=-1)
+
+
+def _tilt_group(tilt_scope: str, labels: IntArray, superpop_of_cohort: IntArray) -> IntArray:
+    """Row of the (groups, J) tilt table each sample reads; a per-SNP tilt is a single row."""
+    labels = np.asarray(labels, dtype=np.int64)
+    if tilt_scope == "snp":
+        return np.zeros_like(labels)
+    return superpop_of_cohort[labels] if tilt_scope == "superpop" else labels
+
+
+def _unchained_logits(decoder: GenotypeDecoder, eta: FloatArray, labels: IntArray) -> FloatArray:
     # ponytail: dense (N, J, 3) logits; chunk over rows only if a panel outgrows memory.
-    logits = eta[:, :, None] * _DOSAGE + _LOG_COEFFICIENT
-    shift = residual[np.where(linked, bin_of_snp[None, :], 0), previous]
-    return logits + np.where(linked[:, :, None], shift, 0.0)
+    if decoder.arm != "T":
+        return eta[:, :, None] * _DOSAGE + _LOG_COEFFICIENT
+    group = _tilt_group(decoder.tilt_scope, labels, decoder.superpop_of_cohort)
+    tilt = decoder.tilt.reshape(-1, eta.shape[1])[group]
+    return _tilted_logits(torch.as_tensor(eta), torch.as_tensor(tilt)).numpy()
 
 
 def call_logits(decoder: GenotypeDecoder, calls: FloatArray, base_logits: FloatArray,
@@ -134,8 +176,12 @@ def call_logits(decoder: GenotypeDecoder, calls: FloatArray, base_logits: FloatA
     eta = _linear_predictor(decoder, base_logits, labels)
     if calls.shape != eta.shape:
         raise ValueError("Calls and base logits must have the same shape")
+    logits = _unchained_logits(decoder, eta, labels)
+    if decoder.arm == "T":
+        return logits
     previous, linked = _predecessors(calls, decoder.bins.bin_of_snp)
-    return _categorical_logits(eta, decoder.residual, decoder.bins.bin_of_snp, previous, linked)
+    shift = decoder.residual[np.where(linked, decoder.bins.bin_of_snp[None, :], 0), previous]
+    return logits + np.where(linked[:, :, None], shift, 0.0)
 
 
 def nll_calls(decoder: GenotypeDecoder, calls: FloatArray, base_logits: FloatArray,
@@ -150,11 +196,12 @@ def nll_calls(decoder: GenotypeDecoder, calls: FloatArray, base_logits: FloatArr
 def sample_calls(decoder: GenotypeDecoder, base_logits: FloatArray, labels: IntArray,
                  rng: np.random.Generator) -> NDArray[np.int8]:
     eta = _linear_predictor(decoder, base_logits, labels)
+    unchained = _unchained_logits(decoder, eta, labels)
     calls = np.zeros(eta.shape, dtype=np.int8)
     previous = np.zeros(len(eta), dtype=np.int64)
     for snp, bin_index in enumerate(decoder.bins.bin_of_snp):
-        logits = eta[:, snp, None] * _DOSAGE + _LOG_COEFFICIENT
-        if bin_index >= 0:
+        logits = unchained[:, snp]
+        if bin_index >= 0 and decoder.arm != "T":
             logits = logits + decoder.residual[bin_index, previous]
         cumulative = np.cumsum(softmax(logits, axis=1), axis=1)
         cumulative[:, -1] = 1.0
@@ -166,9 +213,24 @@ def sample_calls(decoder: GenotypeDecoder, base_logits: FloatArray, labels: IntA
 def fit_decoder(arm: str, calls: FloatArray, base_logits: FloatArray, labels: IntArray,
                 train_indices: IntArray, positions: FloatArray, offsets: IntArray,
                 n_cohorts: int, *, lambda_u: float = 1.0, lambda_a: float = 1.0,
-                n_bins: int = 4, max_iter: int = 500) -> GenotypeDecoder:
+                n_bins: int = 4, max_iter: int = 500, tilt_scope: str = "none",
+                lambda_tilt: float = 1.0,
+                superpop_of_cohort: IntArray | None = None) -> GenotypeDecoder:
     if arm not in _ARMS:
         raise ValueError(f"Decoder arm must be one of {_ARMS}")
+    if tilt_scope not in _TILT_SCOPES:
+        raise ValueError(f"Tilt scope must be one of {_TILT_SCOPES}")
+    if (arm == "T") != (tilt_scope != "none"):
+        raise ValueError("Arm T needs a tilt scope and arms B0-B3 take none")
+    if tilt_scope == "superpop":
+        superpop_of_cohort = np.asarray([] if superpop_of_cohort is None else superpop_of_cohort)
+        superpops = np.unique(superpop_of_cohort)
+        if (superpop_of_cohort.ndim != 1 or len(superpop_of_cohort) != n_cohorts
+                or not np.array_equal(superpops, np.arange(len(superpops)))):
+            raise ValueError("Superpopulations must be one contiguous 0-based index per cohort")
+        superpop_of_cohort = superpop_of_cohort.astype(np.int64)
+    else:
+        superpop_of_cohort = np.zeros(0, dtype=np.int64)
     calls = _checked_calls(calls)
     base_logits = np.asarray(base_logits, dtype=np.float64)
     if base_logits.shape != calls.shape:
@@ -190,9 +252,13 @@ def fit_decoder(arm: str, calls: FloatArray, base_logits: FloatArray, labels: In
     observed = ~np.isnan(train_calls)
 
     offset = torch.zeros((n_cohorts, calls.shape[1]), dtype=torch.float64,
-                         requires_grad=arm in ("B1", "B3"))
+                         requires_grad=arm in ("B1", "B3", "T"))
     residual = torch.zeros((len(bins.edges) + 1, 3, 3), dtype=torch.float64,
                            requires_grad=arm in ("B2", "B3"))
+    tilt_shape = {"none": (0,), "snp": (calls.shape[1],), "cohort": (n_cohorts, calls.shape[1]),
+                  "superpop": (len(np.unique(superpop_of_cohort)), calls.shape[1])}[tilt_scope]
+    tilt = torch.zeros(tilt_shape, dtype=torch.float64, requires_grad=arm == "T")
+    group = torch.as_tensor(_tilt_group(tilt_scope, train_labels, superpop_of_cohort))
     eta_base = torch.as_tensor(base_logits[train_indices])
     weight = torch.as_tensor(weights)
     label = torch.as_tensor(train_labels)
@@ -207,12 +273,16 @@ def fit_decoder(arm: str, calls: FloatArray, base_logits: FloatArray, labels: In
     def penalized_nll() -> torch.Tensor:
         centered = offset - weight @ offset
         eta = eta_base + centered[label]
-        logits = eta[:, :, None] * dosage + log_coefficient
-        logits = logits + torch.where(conditioned[:, :, None], residual[bin_index, predecessor], 0.0)
+        if arm == "T":
+            logits = _tilted_logits(eta, tilt.reshape(-1, eta.shape[1])[group])
+        else:
+            logits = eta[:, :, None] * dosage + log_coefficient
+            logits = logits + torch.where(conditioned[:, :, None], residual[bin_index, predecessor], 0.0)
         nll = -logits.log_softmax(2).gather(2, target)[:, :, 0]
-        return (nll * mask).sum() + lambda_u * (centered**2).sum() + lambda_a * (residual**2).sum()
+        return ((nll * mask).sum() + lambda_u * (centered**2).sum()
+                + lambda_a * (residual**2).sum() + lambda_tilt * (tilt**2).sum())
 
-    parameters = [tensor for tensor in (offset, residual) if tensor.requires_grad]
+    parameters = [tensor for tensor in (offset, residual, tilt) if tensor.requires_grad]
     converged = True
     if parameters:
         optimizer = torch.optim.LBFGS(parameters, line_search_fn="strong_wolfe", max_iter=max_iter,
@@ -234,6 +304,9 @@ def fit_decoder(arm: str, calls: FloatArray, base_logits: FloatArray, labels: In
         cohort_offset = (offset - weight @ offset).numpy()
     decoder = GenotypeDecoder(arm, cohort_offset, residual.detach().numpy(), bins,
                               np.asarray(offsets, dtype=np.int64), weights, float(lambda_u),
-                              float(lambda_a), 0.0, converged)
+                              float(lambda_a), 0.0, converged, tilt=tilt.detach().numpy(),
+                              tilt_scope=tilt_scope,
+                              lambda_tilt=float(lambda_tilt) if arm == "T" else 0.0,
+                              superpop_of_cohort=superpop_of_cohort)
     train_nll = np.nanmean(nll_calls(decoder, train_calls, base_logits[train_indices], train_labels))
     return replace(decoder, train_nll_per_call=float(train_nll))
