@@ -25,12 +25,15 @@ Per-gene variant matrices (NumPy arrays)
 Requires Rust toolchain and maturin:
 
 ```bash
-# Install maturin
-pip install maturin
+# From the gene-synthesis-project root, into the project .venv (editable, maturin backend)
+uv pip install -e ./vcf_parser_rs
 
-# Build and install into current Python environment
+# Or, with maturin directly
+pip install maturin
 maturin develop --release
 ```
+
+The installed `.so` does not rebuild itself. After editing anything under `src/`, run the install command again, or Python keeps loading the old parser.
 
 ## Usage
 
@@ -52,6 +55,7 @@ args = (
     0.01,                        # MAF threshold
     500,                         # max variants per gene
     gene_list,                   # gene boundaries
+    train_indices,               # list[int] of sample rows, or None for all samples
 )
 
 chrom_num, gene_matrices, sample_ids = process_one_chromosome_rs(args)
@@ -65,13 +69,23 @@ chrom_num, gene_matrices, sample_ids = process_one_chromosome_rs(args)
 
 ### What it does per variant
 
-1. **Biallelic SNP filter** — REF and ALT must be single bases (indels excluded)
-2. **Genotype to dosage** — `0/0`→0, `0/1`→1, `1/1`→2, `./.`→NaN→mean imputation
-3. **MAF filter** — minor allele frequency below threshold is skipped
-4. **Gene mapping** — O(log n) bisect lookup against gene boundaries
+1. **Biallelic SNP filter** — REF and ALT must be single bases (indels and multi-allelic sites excluded)
+2. **Genotype to dosage** — `0/0`→0, `0/1`→1, `1/1`→2, `./.`→NaN
+3. **MAF filter** — allele frequency is computed from the `train_indices` rows only (all samples when `None`); sites with MAF below the threshold are skipped
+4. **Mean imputation** — NaN in *every* sample is filled with the mean of the `train_indices` rows, so held-out samples never shape the filter or the fill value
+5. **Gene mapping** — binary search on gene starts, then a backward walk bounded by a prefix-max of gene ends
    - Intergenic variants (outside any gene) are skipped
    - Overlapping genes: variant assigned to all matching genes
-5. **Matrix assembly** — genes with ≥2 variants are returned as NumPy arrays
+6. **Per-gene cap** — only the first `max_variants` variants (VCF position order) are kept for each gene
+7. **Matrix assembly** — genes with ≥2 variants are returned as `float32` arrays of shape `(n_samples, n_variants)`
+
+`train_indices` mirrors the Python fallback's `_filter_and_impute_dosage` in `src/preprocessing/vcf_parser.py`, so both parsers produce the same matrices.
+
+The parser prints one line per chromosome to stderr:
+
+```
+[chr1] 462879 genic variants, 479593 intergenic skipped, 2576 genes with >=2 variants
+```
 
 ## Performance
 
@@ -94,7 +108,11 @@ VCF variants on chr17:
   pos 43,500,000  →  outside any gene    ✗  → skipped (intergenic)
 ```
 
-Lookup uses sorted gene start positions + binary search (`partition_point`), equivalent to Python's `bisect.bisect_right`. Each variant is checked against all genes whose `start ≤ pos ≤ end`.
+`GeneIndex::find_genes` mirrors Python's `_find_genes_for_position`:
+
+1. `partition_point(|s| s < pos)` (Python `bisect_left`) finds the last gene whose start is below `pos`.
+2. It walks backward from there and collects every gene with `start < pos <= end`.
+3. It stops once the prefix-max of `end` over all earlier genes is below `pos`. A long gene that starts early and encloses `pos` is still found even when shorter genes sit between it and `pos`.
 
 ## Project structure
 
@@ -122,7 +140,7 @@ No system C libraries required.
 
 - VCF positions: **1-based** (standard)
 - RefGene txStart/txEnd: **0-based** start, **0-based exclusive** end
-- Gene lookup compares 1-based VCF POS against gene boundaries as-is (matching the convention used by cyvcf2 and most VCF tools)
+- A gene `[txStart, txEnd)` covers 1-based positions `txStart + 1 … txEnd`, so the lookup tests `start < POS <= end`
 
 ## License
 
