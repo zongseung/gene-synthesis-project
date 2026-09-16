@@ -55,5 +55,14 @@ Thumbs.db
 *.log
 logs/
 
-/docs
 /claudedocs
+
+# Bulk / non-source artifacts at repo root
+/isolated_runs/
+/hanmed_vlm_ko_10min/
+/ppt_final_*.pptx*
+/*.pdf
+/autoresearch/
+/paper/
+/.debug-journal.md
+/hammed_icon/
