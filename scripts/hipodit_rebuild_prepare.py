@@ -104,6 +104,7 @@ def prepare(args: argparse.Namespace) -> None:
         fit_normalization_stats,
         invert_normalization,
     )
+    from hipodit_genotype_check import provenance
 
     started = time.monotonic()
     args.output_dir.mkdir(parents=True, exist_ok=False)
@@ -253,7 +254,7 @@ def prepare(args: argparse.Namespace) -> None:
         "normalization_values_sha256": values_digest,
         "normalization_roundtrip_max_abs": roundtrip,
         "reconstruction": reconstruction,
-        "runtime_seconds": time.monotonic() - started,
+        "runtime_seconds": time.monotonic() - started, **provenance(),
     }
     _atomic_json(args.output_dir / "prepare_report.json", report)
     print(json.dumps(report, indent=2))

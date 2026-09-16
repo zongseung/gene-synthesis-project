@@ -425,9 +425,14 @@ def test_oracle_writes_a_hashed_study_manifest_and_the_gate1_prime_study(tmp_pat
             assert check["within_draw_noise"] == (
                 check["sampled_af_max_abs_diff"] <= check["draw_noise_3sigma"])
 
-    # And only the label-shuffle control runs, without cohort metrics.
+    # And the matched T-zero diagnostic keeps T's offset with the tilt switched off, scored on the
+    # full metric set, while the label-shuffle control runs without cohort metrics.
     controls = results["negative_controls"]
-    assert set(controls) == {"label_shuffle"} and set(controls["label_shuffle"]) == {"B1", "T"}
+    assert set(controls) == {"label_shuffle", "tilt_zero"}
+    assert set(controls["tilt_zero"]) == {"T"} and set(controls["label_shuffle"]) == {"B1", "T"}
+    t_zero = controls["tilt_zero"]["T"]
+    assert t_zero["nll_per_call"] != results["arms"]["T"]["nll_per_call"]
+    assert "cohort_af_mae" in t_zero["summary"]
     assert all(set(block["summary"]) == {"af_mae", "heterozygosity_mae"}
                for block in controls["label_shuffle"].values())
     assert results["label_control_supports_cohort"] == (
@@ -445,7 +450,8 @@ def test_oracle_writes_a_hashed_study_manifest_and_the_gate1_prime_study(tmp_pat
         header, *rows = handle.read().splitlines()
     assert header == ("arm,nll_per_call,af_mae,cohort_af_mae,genotype_proportion_tv,"
                       "heterozygosity_mae,ld_r2_mae,local_dosage_covariance_mae")
-    assert [row.split(",")[0] for row in rows] == [*scopes, "B1_label_shuffle", "T_label_shuffle"]
+    assert [row.split(",")[0] for row in rows] == [*scopes, "B1_label_shuffle", "T_label_shuffle",
+                                                   "T_tilt_zero"]
     assert (output / "strata.csv").read_text().startswith("arm,stratum_type,stratum,n,value\n")
 
 

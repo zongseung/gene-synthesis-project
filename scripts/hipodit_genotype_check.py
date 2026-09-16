@@ -13,7 +13,9 @@ import csv
 import hashlib
 import json
 import pickle
+import resource
 import sys
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -31,6 +33,26 @@ from src.models.genotype_decoder import (
     nll_calls,
     sample_calls,
 )
+
+
+def git_commit() -> str | None:
+    """HEAD's commit, read from .git without a subprocess (the drivers stub subprocess.run)."""
+    # ponytail: plain .git directory only; a worktree's .git *file* needs `git rev-parse HEAD`.
+    git = PROJECT_ROOT / ".git"
+    if not (git / "HEAD").exists():
+        return None
+    head = (git / "HEAD").read_text().split()[-1]
+    if (git / head).exists():
+        return (git / head).read_text().strip()
+    packed = (git / "packed-refs").read_text().splitlines() if (git / "packed-refs").exists() else []
+    return next((line.split()[0] for line in packed if line.endswith(" " + head)),
+                head if len(head) == 40 else None)
+
+
+def provenance() -> dict:
+    """Git commit and this process's peak RSS, for every manifest the study writes (plan Task 14)."""
+    return {"git_commit": git_commit(),
+            "max_rss_mb": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024}
 
 N_COHORTS = 26
 DISTANCE_BINS = 4
@@ -669,6 +691,12 @@ def _tilt_study(panel: dict, args: argparse.Namespace, output: Path, seeds: list
             "per_seed": [{key: seed[key] for key in CONTROL_METRICS}
                          for seed in result["per_seed"]],
             "summary": {key: result["summary"][key] for key in CONTROL_METRICS}}
+    # Matched T-zero diagnostic (plan Task 5 step 3): T's fitted offset, the same held-out factors
+    # and draw streams, only tau -> 0. Whatever separates it from T is attributable to the tilt.
+    t_zero = GenotypeDecoder.load(output / "decoder_T.npz")
+    t_zero = replace(t_zero, tilt=np.zeros_like(t_zero.tilt))
+    controls["tilt_zero"] = {
+        "T": _evaluate_seeds(t_zero, panel, logits, labels, args.draws, seeds)[0]}
     verdict = {
         "gate1_prime": _gate1_prime(arms),
         "label_control_supports_cohort": bool(
@@ -734,7 +762,7 @@ def run_oracle(args: argparse.Namespace) -> dict:
                 "lambda_a": args.lambda_a, "metric_seeds": len(seeds), "draws": args.draws}
     pilot_dir = args.pilot_dir.resolve() if args.pilot_dir else None
     _atomic_json(output / "study_manifest.json", {
-        **study_manifest(prepared_dir, panel, pilot_dir, assertions), **settings,
+        **study_manifest(prepared_dir, panel, pilot_dir, assertions), **settings, **provenance(),
         "plan_revision": "rev2-§9", "gate": "gate1_prime" if tilt else "gate1"})
 
     if tilt:

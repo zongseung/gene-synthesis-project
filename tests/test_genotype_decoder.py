@@ -410,6 +410,48 @@ def test_raising_the_tilt_moves_heterozygosity_but_not_expected_dosage():
     np.testing.assert_allclose(probabilities @ np.arange(3), 2 * p, rtol=0, atol=1e-10)
 
 
+def test_the_tilt_is_the_log_odds_ratio_of_the_call_distribution():
+    # Given interior allele probabilities and tilts on both sides of zero.
+    allele = np.array([0.03, 0.3, 0.5, 0.7, 0.97])
+    tilt = np.array([-3.0, -0.5, 0.0, 1.2, 3.0])
+    # When arm T forms its call distributions.
+    q, _ = _tilted_grid(allele, tilt)
+    # Then q1^2 / (4 q0 q2) = exp(2 tau) for every (p, tau): the tilt is exactly the log
+    # heterozygote odds ratio against the Binomial (plan Task 4 step 5).
+    np.testing.assert_allclose(q[:, :, 1] ** 2 / (4 * q[:, :, 0] * q[:, :, 2]),
+                               np.broadcast_to(np.exp(2 * tilt), q.shape[:2]), rtol=1e-9)
+
+
+def test_the_tilt_changes_dosage_variance_but_not_the_covariance_between_loci():
+    # Given one fixed latent draw of two correlated loci (rho = 0.6) shared by both decoders.
+    rows = 40_000
+    rng = np.random.default_rng(31)
+    latent = rng.multivariate_normal([0.0, -0.8], [[1.0, 0.6], [0.6, 1.0]], size=rows)
+    positions, offsets = np.array([1.0, 2.0]), np.array([0, 2])
+    labels = np.zeros(rows, dtype=np.int64)
+
+    def decoder(tilt):
+        return GenotypeDecoder("T", np.zeros((1, 2)), np.zeros((1, 3, 3)),
+                               distance_bins(positions, offsets, 1), offsets, np.ones(1),
+                               1.0, 0.0, 0.0, True, tilt=tilt, tilt_scope="snp", lambda_tilt=1.0)
+
+    base, tilted = decoder(np.zeros(2)), decoder(np.array([1.5, -1.0]))
+    # When both decoders draw from the same latent (independent streams, same seed).
+    g_base = sample_calls(base, latent, labels, np.random.default_rng(0)).astype(float)
+    g_tilt = sample_calls(tilted, latent, labels, np.random.default_rng(0)).astype(float)
+    p = expit(latent)
+    h = softmax(call_logits(tilted, np.zeros(latent.shape), latent, labels), axis=2)[:, :, 1]
+    # Then the between-locus covariance is unchanged within Monte Carlo error (it is 4 Cov[p1, p2]
+    # under both decoders), while each variance moves to E[4p(1-p) - h] + 4 Var[p] (plan Task 6).
+    monte_carlo = 4 / np.sqrt(rows)
+    expected_cov = 4 * np.cov(p[:, 0], p[:, 1], ddof=0)[0, 1]
+    assert abs(np.cov(g_base.T, ddof=0)[0, 1] - expected_cov) < monte_carlo
+    assert abs(np.cov(g_tilt.T, ddof=0)[0, 1] - expected_cov) < monte_carlo
+    expected_var = (4 * p * (1 - p) - h).mean(axis=0) + 4 * p.var(axis=0)
+    np.testing.assert_allclose(g_tilt.var(axis=0), expected_var, atol=monte_carlo)
+    assert np.all(np.abs(g_tilt.var(axis=0) - g_base.var(axis=0)) > monte_carlo)
+
+
 def test_arm_t_draws_and_scores_every_snp_without_its_predecessor():
     # Given an arm-T decoder that still carries the strong local residual table of B3.
     calls, base_logits, labels = _panel()

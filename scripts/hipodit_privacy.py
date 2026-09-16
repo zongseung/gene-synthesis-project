@@ -33,6 +33,7 @@ from scripts.hipodit_genotype_check import (  # noqa: E402
     _variant_values,
     _write_csv,
     load_superpop_of_cohort,
+    provenance,
 )
 
 # Reported arm name -> the genotype file the Gate 3' run saved for it.
@@ -42,8 +43,8 @@ PREPARED_FILES = ("dataset.npz", "gene_variant_map.json", "genotypes.npz", "labe
                   "normalization_stats.pkl")
 MAF_BIN_LABELS = ("[0.01,0.05)", "[0.05,0.2)", "[0.2,0.5]")
 DISTANCE_STATS = ("min", "p1", "p5", "median", "mean")
-SCALAR_METRICS = ("exact_duplicate_rate_train", "near_duplicate_rate_train", "self_duplicate_rate",
-                  "membership_inference_auc")
+SCALAR_METRICS = ("exact_duplicate_rate_train", "exact_duplicate_rate_test",
+                  "near_duplicate_rate_train", "self_duplicate_rate", "membership_inference_auc")
 # Gate 4 is qualitative in plan §5 ("materially worse than B0") and rev.2 §9.4 adopts it verbatim,
 # so these four constants are NOT pre-registered: they were fixed in the task brief before the
 # measurement, as one operationalisation of that qualitative rule.
@@ -109,6 +110,7 @@ def arm_privacy(synthetic: np.ndarray, train: np.ndarray, test: np.ndarray,
     metrics = {
         "nn_distance_to_train": distance_stats(nearest),
         "exact_duplicate_rate_train": float((nearest == 0).mean()),
+        "exact_duplicate_rate_test": float((to_test.min(axis=1) == 0).mean()),
         "near_duplicate_rate_train": float((nearest < near_threshold).mean()),
         "self_duplicate_rate": 1.0 - len(np.unique(synthetic, axis=0)) / len(synthetic),
         # Members are the real train rows, non-members the real test rows; each is scored by its
@@ -322,7 +324,7 @@ def run(prepared_dir: Path, multiseed_dir: Path, output_dir: Path) -> dict:
         "arms": {arm: {"per_seed": per_seed[arm], "summary": summaries[arm]} for arm in ARMS},
         "differences_T_minus_B0": differences,
         "context_from_phase3": context,
-        "gate4": verdict, "limitation": LIMITATION,
+        "gate4": verdict, "limitation": LIMITATION, **provenance(),
     }
     _atomic_json(output_dir / "privacy_report.json", report)
     _write_csv(output_dir / "privacy_summary.csv", summary_rows(summaries, differences),

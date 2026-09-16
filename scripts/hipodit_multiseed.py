@@ -93,9 +93,11 @@ def run_experiment(args: argparse.Namespace) -> None:
                 command.extend(["--decoder-dir", str(args.decoder_dir.resolve()),
                                 "--eval-split", args.eval_split])
             runs.append({"seed": seed, "schedule": schedule, "command": command})
+    from scripts.hipodit_genotype_check import provenance
+
     manifest = {
         "created_utc": datetime.now(timezone.utc).isoformat(), "diagnostic_only": True,
-        "mode": args.mode,
+        "mode": args.mode, "git_commit": provenance()["git_commit"],
         "prepared_dir": str(prepared_dir), "prepared": prepared, "seeds": args.seeds,
         "parameters": parameters, "runs": runs, "python": sys.executable,
         "prepared_sha256": {str(path.relative_to(prepared_dir)): hashlib.sha256(path.read_bytes()).hexdigest()

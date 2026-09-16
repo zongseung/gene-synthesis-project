@@ -35,7 +35,7 @@ def train(args: argparse.Namespace) -> None:
         invert_normalization,
         load_normalization_stats,
     )
-    from hipodit_genotype_check import evaluate_genotypes
+    from hipodit_genotype_check import evaluate_genotypes, provenance
 
     started = time.monotonic()
     run_dir = args.run_dir or args.output_dir
@@ -207,13 +207,16 @@ def train(args: argparse.Namespace) -> None:
         "attention_gradient_l2_last_step": attention_grad_l2,
         "attention_gate_nonzero": gate_nonzero,
         "attention_gate_max_abs": float(gates.abs().max().cpu()),
+        # Plan Task 8 step 4: the sequence attention actually sees. One token means no
+        # token-to-token long-range attention can be claimed for this panel.
+        "dit_latent_size": model.latent_size, "attention_tokens": model.patchify.n_tokens,
         "same_scale_evaluation": {
             "mean_rmse": float(np.sqrt(np.mean((samples.mean(0) - real.mean(0)) ** 2))),
             "std_rmse": float(np.sqrt(np.mean((samples.std(0) - real.std(0)) ** 2))),
         },
         "normalization_roundtrip_max_abs": prepared["normalization_roundtrip_max_abs"],
         "data_split": prepared["split_sizes"], "checkpoint": str(checkpoint),
-        "runtime_seconds": time.monotonic() - started,
+        "runtime_seconds": time.monotonic() - started, **provenance(),
     }
     _atomic_json(run_dir / "diagnostic_report.json", report)
     _atomic_json(samples_dir / "generation_meta.json", {

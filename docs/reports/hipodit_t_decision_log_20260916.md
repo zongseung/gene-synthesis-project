@@ -197,3 +197,41 @@ this repo holds frozen, published experimental results.
   `git show 87f0c62:src/preprocessing/pca.py` (analyser at line 354, JSON path at line 396).
   Cost if wrong: none while the history survives; if history is ever rewritten the JSON loses its
   provenance and must be treated as an undated observation.
+
+## Biometrics plan gap closure (2026-09-17)
+
+Scope: the items of `HiPoDiT_Biometrics_implementation_plan.md` that the existing study did not
+cover, added without touching any frozen artifact or gate rule. Every change is additive; the
+Gate 1'-4 verdicts are unchanged because nothing they read was modified.
+
+- R28 Matched T-zero diagnostic (plan Task 5 step 3): `scripts/hipodit_genotype_check.py` now
+  scores T's fitted offset with `tau -> 0` as `negative_controls.tilt_zero.T` and an ablation row
+  `T_tilt_zero`. It is a control, not an arm, so §9.3's pre-registered arm set is unchanged and no
+  gate reads it. Cost if wrong: none for the verdicts; the frozen oracle directories under
+  `outputs/diagnostics/` predate it and simply lack the row.
+- R29 Simulation study (plan Task 7): `scripts/hipodit_simulation.py` generates from the tilted
+  family with known cohort offsets and tau on an oracle latent, fits B0/B1/T, and reports tau
+  bias/RMSE, AF/het/NLL/covariance error, runtime and failure rate per scenario, stress rows
+  flagged and never pooled. The primary grid is the plan's, verbatim; `--replicates` and `--n`
+  exist so a pilot can size the Monte Carlo error before the full 162-scenario run, as the plan
+  requires. Cost if wrong: the study says nothing about the latent generator (its `limitation`
+  field says so); misreading it as an end-to-end result would overstate the method.
+- R30 Covariance decomposition test (plan Task 6): one test fixes that the tilt moves each
+  locus's variance to `E[4p(1-p) - h] + 4 Var[p]` while leaving the between-locus covariance at
+  `4 Cov[p1, p2]`. This is the algebra behind report §9.3: an `r^2` change under an independent
+  decoder is a variance effect, not linkage.
+- R31 Attention token count (plan Task 8 step 4): measured `n_tokens = 1` for the 8-gene panel
+  and recorded it in report §10.12; every future `diagnostic_report.json` carries
+  `attention_tokens`. Cost if wrong: none; it removes a claim rather than adding one.
+- R32 External baselines (plan Task 11): NOT run. Recorded as report §10.13 with the phase
+  incompatibility that makes a naive comparison unfair. Cost if wrong: a reviewer may still ask
+  for the comparison; the answer is then a defined phase-folding rule plus a new run, not a
+  reinterpretation of existing numbers.
+- R33 Provenance (plan Task 14): every manifest now carries `git_commit` and peak RSS
+  (`provenance()` in `scripts/hipodit_genotype_check.py`); `scripts/hipodit_tables.py` renders
+  the Gate 3' and Gate 4 tables from `summary_decoder.json` / `privacy_report.json`. `uv.lock`
+  was already tracked. Cost if wrong: these scripts are fingerprinted by the multiseed manifest,
+  so `verify_fingerprints` fails on the frozen 2026-09-15/16 runs from this commit on — the
+  same known consequence as ffa47da (report §12.4); no artifact was regenerated.
+- R34 Privacy exact duplicates vs the held-out rows: added `exact_duplicate_rate_test` beside
+  the train rate. Gate 4 still reads only the train rate.

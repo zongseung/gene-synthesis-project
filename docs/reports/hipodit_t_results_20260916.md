@@ -643,6 +643,16 @@ Fisher는 AF MAE 평균이 더 높고, covariance MAE는 평균이 근소하게 
     이지, 모델이 측정되지 않은 다른 무언가를 대가로 지불하지 않았다는 확인이 아니다. 특히 조건 (b)는 이
     모델 계열에서 tautology에 가깝다. 그 측면을 덮는 것은 기술 지표와 Gate 4뿐이며, 실제로 §7.1은 모델이
     nearest-neighbour 거리에서 약 10 %를 지불했음을 보여준다. 측정되지 않은 비용이 더 있을 수 있다.
+12. **(2026-09-17 추가) attention 토큰이 1개다.** 8-gene 패널에서 latent 길이 8은 CNN stride-2 두 단계로
+    2가 되고 patch 2로 묶여 DiT에 들어가는 토큰은 **1개**다 (`HybridCNNDiTFiLM` CPU 인스턴스로 실측:
+    `latent_size=2, n_tokens=1`). 따라서 이 설정에서 DiT의 self-attention은 토큰 간 상호작용이 없고,
+    "long-range attention"이나 "gene 간 상호작용 학습"은 이 패널에서 주장할 수 없다. §5.3의 "latent generator가
+    오차를 지배한다"는 관측도 이 구조 안에서 읽어야 한다. 이후 실행은 `diagnostic_report.json`의
+    `attention_tokens`에 이 수를 기록한다 (`scripts/hipodit_rebuild_train.py`).
+13. **(2026-09-17 추가) 외부 baseline 없음.** HAPNEST 등 haplotype 생성기와의 비교는 하지 않았다. 이 연구의
+    출력은 unphased `{0,1,2}` dosage이고 haplotype 생성기는 phased 서열을 내므로, 같은 패널·같은 표본 수로
+    맞추더라도 phase를 접어 dosage로 바꾸는 규칙(그리고 그 규칙이 LD 지표에 미치는 영향)을 먼저 정의해야
+    공정한 비교가 된다. 그 정의와 실행은 별도 작업이며, 그 전까지 다른 방법 대비 우월성은 주장하지 않는다.
 
 ---
 
