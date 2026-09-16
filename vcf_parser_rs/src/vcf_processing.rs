@@ -130,6 +130,7 @@ pub fn process_chromosome(
     maf_threshold: f64,
     max_variants: usize,
     gene_list_py: &[PyObject],
+    train_indices: Option<Vec<usize>>,
 ) -> PyResult<(i32, PyObject, Vec<String>)> {
     let genes = parse_gene_list(py, gene_list_py)?;
     let gene_index = GeneIndex::new(genes);
@@ -146,6 +147,9 @@ pub fn process_chromosome(
 
     let mut sample_ids: Vec<String> = Vec::new();
     let mut n_samples = 0usize;
+    // Built once n_samples is known (below), from `train_indices`. `None` means
+    // "fit" over all samples, matching Python's `dosage if train_indices is None`.
+    let mut train_mask: Option<Vec<bool>> = None;
     let mut gene_variants: HashMap<String, Vec<Vec<f32>>> = HashMap::new();
     let mut n_variants: u64 = 0;
     let mut n_intergenic: u64 = 0;
@@ -181,6 +185,15 @@ pub fn process_chromosome(
                         .map(|f| String::from_utf8_lossy(f).to_string())
                         .collect();
                     n_samples = sample_ids.len();
+                    if let Some(idxs) = &train_indices {
+                        let mut mask = vec![false; n_samples];
+                        for &idx in idxs {
+                            if idx < n_samples {
+                                mask[idx] = true;
+                            }
+                        }
+                        train_mask = Some(mask);
+                    }
                 }
             }
             continue;
@@ -231,10 +244,12 @@ pub fn process_chromosome(
         let _info = fields.next();
         let _format = fields.next();
 
-        // Parse sample genotypes
+        // Parse sample genotypes. `fit_sum`/`fit_count` accumulate only over
+        // the fit rows (train_indices if given, else all samples) — mirrors
+        // Python's `_filter_and_impute_dosage` (fit = dosage[train_indices]).
         let mut dosage = vec![f32::NAN; n_samples];
-        let mut valid_sum: f64 = 0.0;
-        let mut valid_count: u32 = 0;
+        let mut fit_sum: f64 = 0.0;
+        let mut fit_count: u32 = 0;
 
         for i in 0..n_samples {
             let gt_field = match fields.next() {
@@ -243,24 +258,26 @@ pub fn process_chromosome(
             };
             if let Some(d) = parse_gt_dosage(gt_field) {
                 dosage[i] = d;
-                valid_sum += d as f64;
-                valid_count += 1;
+                if train_mask.as_ref().map_or(true, |m| m[i]) {
+                    fit_sum += d as f64;
+                    fit_count += 1;
+                }
             }
         }
 
-        if valid_count == 0 {
+        if fit_count == 0 {
             continue;
         }
 
-        // MAF filter
-        let af = valid_sum / (2.0 * valid_count as f64);
+        // MAF filter (allele frequency from the fit rows only)
+        let af = fit_sum / (2.0 * fit_count as f64);
         let maf = af.min(1.0 - af);
         if maf < maf_threshold {
             continue;
         }
 
-        // Mean imputation
-        let mean_val = (valid_sum / valid_count as f64) as f32;
+        // Mean imputation (mean from the fit rows only, applied to all samples)
+        let mean_val = (fit_sum / fit_count as f64) as f32;
         for d in dosage.iter_mut() {
             if d.is_nan() {
                 *d = mean_val;

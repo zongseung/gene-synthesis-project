@@ -106,15 +106,17 @@ def _get_per_chrom_vcf(chrom_num: int) -> str | None:
 def process_one_chromosome(args: tuple) -> tuple[int, dict, list]:
     """Dispatch to Rust (per-chromosome VCF) or Python (merged VCF + tabix)."""
     train_indices = args[5] if len(args) > 5 else None
-    if _USE_RUST and train_indices is None:
+    if _USE_RUST:
         chrom_num = args[0]
+        train_indices_arg = train_indices.tolist() if train_indices is not None else None
         per_chrom_path = _get_per_chrom_vcf(chrom_num)
         if per_chrom_path:
             # Use per-chromosome file for Rust (no full-file scan needed)
-            rust_args = (args[0], per_chrom_path, args[2], args[3], args[4])
+            rust_args = (args[0], per_chrom_path, args[2], args[3], args[4], train_indices_arg)
             return _process_rust(rust_args)
         # Fallback: use merged VCF (slower — scans from beginning)
-        return _process_rust(args)
+        rust_args = (args[0], args[1], args[2], args[3], args[4], train_indices_arg)
+        return _process_rust(rust_args)
     return _process_one_chromosome_python(args)
 
 
@@ -143,7 +145,9 @@ def _process_one_chromosome_python(args: tuple) -> tuple[int, dict, list]:
     t0 = time.time()
 
     try:
-        vcf = VCF(vcf_path)
+        # ponytail: cyvcf2 returns nothing for chr2+ region queries on the merged
+        # VCF (htslib bug at chromosome starts); per-chrom files sidestep it.
+        vcf = VCF(_get_per_chrom_vcf(chrom_num) or vcf_path)
         sample_ids = list(vcf.samples)
     except Exception as e:
         logger.error(f"[chr{chrom_num}] VCF open failed: {e}")
