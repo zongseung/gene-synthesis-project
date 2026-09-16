@@ -5,7 +5,9 @@ Supports:
 - DDP training on 2 GPUs via torchrun (nccl backend)
 - Single-GPU debug mode via --single_gpu flag
 - bf16 autocast without GradScaler (Ampere GPU)
-- EMA (decay 0.9999) with shadow parameter checkpointing
+- EMA with shadow parameter checkpointing; decay 0.999 from
+  `configs/default.yaml: training.ema_decay` (the 0.9999 in src/utils/ema.py is the
+  EMAModel class default, used only when a config omits ema_decay)
 - Population-balanced sqrt-proportional oversampling
 - Cosine warmup scheduler
 - Min-SNR-gamma loss weighting
