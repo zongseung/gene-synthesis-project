@@ -51,6 +51,24 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--real-path", type=Path, default=Path("data/processed/test_data.pkl"))
     parser.add_argument("--syn-dir", type=Path, default=Path("outputs/default/synthetic_samples"))
     parser.add_argument("--hierarchy", type=Path, default=Path("data/processed/label_hierarchy.pkl"))
+    parser.add_argument(
+        "--stats-path",
+        type=Path,
+        default=Path("data/processed/normalization_stats.pkl"),
+        help="Normalization stats used to restore the shared original feature scale.",
+    )
+    parser.add_argument(
+        "--real-space",
+        choices=["normalized", "original"],
+        default="normalized",
+        help="Space of --real-path tensors; evaluation always uses original scale.",
+    )
+    parser.add_argument(
+        "--legacy-synthetic-space",
+        choices=["normalized", "original"],
+        default=None,
+        help="Required only for legacy generation metadata without sample_space.",
+    )
     parser.add_argument("--out-dir", type=Path, default=Path("outputs/default/evaluation_metrics"))
     parser.add_argument("--cache-dir", type=Path, default=None)
     parser.add_argument(
@@ -96,9 +114,17 @@ def _load_or_compute_pcs(
         return real_pcs, syn_pcs, real_pop, syn_pop, real_sp, syn_sp, pca_info, used_pca_cache, False
 
     hierarchy = load_label_hierarchy(args.hierarchy)
-    real_x, real_pop = load_real(args.real_path)
+    real_x, real_pop = load_real(
+        args.real_path,
+        stats_path=args.stats_path,
+        sample_space=args.real_space,
+    )
     syn_x, syn_pop, syn_names, used_array_cache = load_synthetic_cached(
-        args.syn_dir, synthetic_array_cache, args.array_cache_mode,
+        args.syn_dir,
+        synthetic_array_cache,
+        args.array_cache_mode,
+        stats_path=args.stats_path,
+        legacy_sample_space=args.legacy_synthetic_space,
     )
     syn_x = syn_x.astype(np.float32, copy=False)
 
@@ -144,6 +170,9 @@ def main() -> None:
         real_path=args.real_path,
         syn_dir=args.syn_dir,
         hierarchy=args.hierarchy,
+        stats_path=args.stats_path,
+        real_space=args.real_space,
+        legacy_synthetic_space=args.legacy_synthetic_space,
         n_genes=args.n_genes,
         seed=args.seed,
     )
@@ -169,6 +198,10 @@ def main() -> None:
             "real_path": str(args.real_path),
             "syn_dir": str(args.syn_dir),
             "hierarchy": str(args.hierarchy),
+            "stats_path": str(args.stats_path),
+            "real_space": args.real_space,
+            "legacy_synthetic_space": args.legacy_synthetic_space,
+            "evaluation_space": "original",
             "n_genes": args.n_genes,
             "seed": args.seed,
             "dupi_k": args.dupi_k,

@@ -10,13 +10,18 @@ HiPoDiT project.
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import pickle
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 import torch
+
+from src.preprocessing.tokenizer import invert_normalization, load_normalization_stats
+
+SampleSpace = Literal["normalized", "original"]
 
 __all__ = [
     "file_stat",
@@ -43,10 +48,15 @@ def file_stat(path: Path) -> dict[str, Any]:
     return {"path": str(path), "size": st.st_size, "mtime_ns": st.st_mtime_ns}
 
 
+def file_sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 def synthetic_fingerprint(syn_dir: Path) -> dict[str, Any]:
     files = sorted(syn_dir.glob("sample_pop*_*.pt"))
     if not files:
         raise FileNotFoundError(f"No sample_pop*_*.pt files under {syn_dir}")
+    meta_path = syn_dir / "generation_meta.json"
     return {
         "syn_dir": str(syn_dir),
         "file_count": len(files),
@@ -54,6 +64,11 @@ def synthetic_fingerprint(syn_dir: Path) -> dict[str, Any]:
             {"name": f.name, "size": f.stat().st_size, "mtime_ns": f.stat().st_mtime_ns}
             for f in files
         ],
+        "generation_meta": (
+            {**file_stat(meta_path), "sha256": file_sha256(meta_path)}
+            if meta_path.exists()
+            else None
+        ),
     }
 
 
@@ -62,29 +77,76 @@ def input_fingerprint(
     real_path: Path,
     syn_dir: Path,
     hierarchy: Path,
+    stats_path: Path,
+    real_space: SampleSpace,
+    legacy_synthetic_space: SampleSpace | None,
     n_genes: int,
     seed: int,
 ) -> dict[str, Any]:
     return {
         "real": file_stat(real_path),
         "hierarchy": file_stat(hierarchy),
+        "normalization_stats": {
+            **file_stat(stats_path),
+            "sha256": file_sha256(stats_path),
+        },
         "synthetic": synthetic_fingerprint(syn_dir),
+        "real_space": real_space,
+        "legacy_synthetic_space": legacy_synthetic_space,
         "n_genes": n_genes,
         "seed": seed,
     }
 
 
 # ── data loaders ───────────────────────────────────────────────────────
-def load_real(path: Path) -> tuple[np.ndarray, np.ndarray]:
+def load_real(
+    path: Path,
+    *,
+    stats_path: Path | None = None,
+    sample_space: SampleSpace = "normalized",
+) -> tuple[np.ndarray, np.ndarray]:
     with path.open("rb") as f:
         x, y = pickle.load(f)
-    return np.asarray(x, dtype=np.float32), np.asarray(y, dtype=np.int64)
+    values = np.asarray(x, dtype=np.float32)
+    if sample_space == "normalized":
+        if stats_path is None:
+            raise FileNotFoundError("Normalization stats are required for normalized real data")
+        stats = load_normalization_stats(stats_path, expected_shape=values.shape[-2:])
+        values = invert_normalization(values, stats)
+    return values, np.asarray(y, dtype=np.int64)
 
 
-def load_synthetic(syn_dir: Path) -> tuple[np.ndarray, np.ndarray, list[str]]:
+def load_synthetic(
+    syn_dir: Path,
+    *,
+    stats_path: Path | None = None,
+    legacy_sample_space: SampleSpace | None = None,
+) -> tuple[np.ndarray, np.ndarray, list[str]]:
     files = sorted(syn_dir.glob("sample_pop*_*.pt"))
     if not files:
         raise FileNotFoundError(f"No sample_pop*_*.pt files under {syn_dir}")
+
+    meta_path = syn_dir / "generation_meta.json"
+    metadata = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
+    sample_space = metadata.get("sample_space")
+    if sample_space is None:
+        if legacy_sample_space is None:
+            raise ValueError(
+                "Legacy synthetic sample space is unknown; pass --legacy-synthetic-space"
+            )
+        sample_space = legacy_sample_space
+    if sample_space not in {"normalized", "original"}:
+        raise ValueError(f"Unsupported synthetic sample_space: {sample_space!r}")
+
+    expected_fingerprint = metadata.get("stats_fingerprint")
+    if expected_fingerprint is not None:
+        if stats_path is None:
+            raise FileNotFoundError("Normalization stats are required to verify generated samples")
+        if file_sha256(stats_path) != expected_fingerprint:
+            raise ValueError("Normalization stats fingerprint does not match generation metadata")
+
+    stats = load_normalization_stats(stats_path) if stats_path is not None else None
+    expected_shape = tuple(stats["shape"]) if stats is not None else None
 
     xs: list[np.ndarray] = []
     ys: list[int] = []
@@ -94,25 +156,43 @@ def load_synthetic(syn_dir: Path) -> tuple[np.ndarray, np.ndarray, list[str]]:
         arr = genome.detach().cpu().numpy().astype(np.float32)
         if arr.ndim != 2:
             raise ValueError(f"{file_path} has unexpected genome shape {arr.shape}")
-        if arr.shape[0] < arr.shape[1]:
+        if expected_shape is not None and arr.shape == expected_shape:
+            pass
+        elif expected_shape is not None and arr.T.shape != expected_shape:
+            raise ValueError(
+                f"{file_path} shape {arr.shape} does not match normalization shape {expected_shape}"
+            )
+        elif expected_shape is not None or arr.shape[0] < arr.shape[1]:
             arr = arr.T
         xs.append(arr)
         ys.append(int(label.item() if hasattr(label, "item") else label))
         names.append(file_path.name)
 
-    return np.stack(xs, axis=0), np.asarray(ys, dtype=np.int64), names
+    values = np.stack(xs, axis=0)
+    if sample_space == "normalized":
+        if stats is None:
+            raise FileNotFoundError("Normalization stats are required for normalized synthetic data")
+        values = invert_normalization(values, stats)
+    return values, np.asarray(ys, dtype=np.int64), names
 
 
 def load_synthetic_cached(
     syn_dir: Path,
     cache_path: Path,
     mode: str,
+    *,
+    stats_path: Path | None = None,
+    legacy_sample_space: SampleSpace | None = None,
 ) -> tuple[np.ndarray, np.ndarray, list[str], bool]:
     """Load synthetic tensors, optionally reusing a single-file NPZ cache."""
     if mode not in {"auto", "refresh", "off"}:
         raise ValueError(f"Unknown array cache mode: {mode}")
 
-    current_meta = synthetic_fingerprint(syn_dir)
+    current_meta = {
+        **synthetic_fingerprint(syn_dir),
+        "stats_sha256": file_sha256(stats_path) if stats_path is not None else None,
+        "legacy_sample_space": legacy_sample_space,
+    }
     if mode != "refresh" and cache_path.exists():
         try:
             with np.load(cache_path, allow_pickle=False) as data:
@@ -126,7 +206,11 @@ def load_synthetic_cached(
             if mode != "auto":
                 raise
 
-    x, pop, names = load_synthetic(syn_dir)
+    x, pop, names = load_synthetic(
+        syn_dir,
+        stats_path=stats_path,
+        legacy_sample_space=legacy_sample_space,
+    )
     if mode != "off":
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         np.savez(

@@ -15,13 +15,30 @@ import numpy as np
 import os
 
 from src.preprocessing.config import (
-    MAF_THRESHOLD,
-    MAX_VARIANTS_PER_GENE,
     PER_CHROM_VCF_DIR,
     PER_CHROM_VCF_PATTERN,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _filter_and_impute_dosage(
+    dosage: np.ndarray,
+    train_indices: np.ndarray | None,
+    *,
+    maf_threshold: float,
+) -> np.ndarray | None:
+    fit = dosage if train_indices is None else dosage[train_indices]
+    valid_fit = fit[~np.isnan(fit)]
+    if valid_fit.size == 0:
+        return None
+    train_mean = float(valid_fit.mean())
+    allele_frequency = train_mean / 2.0
+    if min(allele_frequency, 1.0 - allele_frequency) < maf_threshold:
+        return None
+    imputed = dosage.copy()
+    imputed[np.isnan(imputed)] = train_mean
+    return imputed
 
 # Attempt Rust import with Python fallback
 try:
@@ -33,31 +50,36 @@ except ImportError:
     logger.info("Rust VCF parser not available, using Python/cyvcf2 fallback")
 
 
-def _build_gene_index(gene_list: list[dict]) -> tuple[list[int], list[dict]]:
-    """Build a sorted start-position index for bisect lookup.
+def _build_gene_index(
+    gene_list: list[dict],
+) -> tuple[list[int], list[dict], list[int]]:
+    """Build start and prefix-maximum-end indexes for overlap lookup.
 
     Args:
         gene_list: Sorted list of {"name", "start", "end"} dicts.
 
     Returns:
-        starts: Sorted list of gene start positions.
-        genes: Corresponding gene dicts (same order as starts).
+        starts: Sorted gene start positions.
+        genes: Corresponding gene records.
+        max_ends: Maximum end position through each index.
     """
     starts = [g["start"] for g in gene_list]
-    return starts, gene_list
+    max_ends = np.maximum.accumulate([g["end"] for g in gene_list]).tolist()
+    return starts, gene_list, max_ends
 
 
 def _find_genes_for_position(
     pos: int,
     starts: list[int],
     genes: list[dict],
+    max_ends: list[int],
 ) -> list[str]:
-    """Find all genes whose [start, end] contains the given position.
+    """Find genes where zero-based RefGene bounds satisfy ``start < POS <= end``.
 
     Uses bisect for O(log n) lookup instead of linear scan.
     """
-    # Find rightmost gene whose start <= pos
-    idx = bisect.bisect_right(starts, pos) - 1
+    # RefGene starts are zero-based; VCF positions are one-based.
+    idx = bisect.bisect_left(starts, pos) - 1
     if idx < 0:
         return []
 
@@ -67,9 +89,10 @@ def _find_genes_for_position(
         g = genes[i]
         if g["start"] > pos:
             continue
-        if g["end"] < pos:
+        if g["end"] >= pos:
+            matched.append(g["name"])
+        if i == 0 or max_ends[i - 1] < pos:
             break
-        matched.append(g["name"])
 
     return matched
 
@@ -82,15 +105,18 @@ def _get_per_chrom_vcf(chrom_num: int) -> str | None:
 
 def process_one_chromosome(args: tuple) -> tuple[int, dict, list]:
     """Dispatch to Rust (per-chromosome VCF) or Python (merged VCF + tabix)."""
+    train_indices = args[5] if len(args) > 5 else None
     if _USE_RUST:
         chrom_num = args[0]
+        train_indices_arg = train_indices.tolist() if train_indices is not None else None
         per_chrom_path = _get_per_chrom_vcf(chrom_num)
         if per_chrom_path:
             # Use per-chromosome file for Rust (no full-file scan needed)
-            rust_args = (args[0], per_chrom_path, args[2], args[3], args[4])
+            rust_args = (args[0], per_chrom_path, args[2], args[3], args[4], train_indices_arg)
             return _process_rust(rust_args)
         # Fallback: use merged VCF (slower — scans from beginning)
-        return _process_rust(args)
+        rust_args = (args[0], args[1], args[2], args[3], args[4], train_indices_arg)
+        return _process_rust(rust_args)
     return _process_one_chromosome_python(args)
 
 
@@ -112,19 +138,22 @@ def _process_one_chromosome_python(args: tuple) -> tuple[int, dict, list]:
     Returns:
         (chrom_num, gene_matrices, sample_ids)
     """
-    chrom_num, vcf_path, maf_threshold, max_variants, gene_list = args
+    chrom_num, vcf_path, maf_threshold, max_variants, gene_list = args[:5]
+    train_indices = args[5] if len(args) > 5 else None
     from cyvcf2 import VCF
 
     t0 = time.time()
 
     try:
-        vcf = VCF(vcf_path)
+        # ponytail: cyvcf2 returns nothing for chr2+ region queries on the merged
+        # VCF (htslib bug at chromosome starts); per-chrom files sidestep it.
+        vcf = VCF(_get_per_chrom_vcf(chrom_num) or vcf_path)
         sample_ids = list(vcf.samples)
     except Exception as e:
         logger.error(f"[chr{chrom_num}] VCF open failed: {e}")
         return chrom_num, {}, []
 
-    starts, genes = _build_gene_index(gene_list)
+    starts, genes, max_ends = _build_gene_index(gene_list)
     gene_variants: dict[str, list[np.ndarray]] = {}
     n_variants = 0
     n_intergenic = 0
@@ -142,24 +171,16 @@ def _process_one_chromosome_python(args: tuple) -> tuple[int, dict, list]:
             dosage[gt == 3] = 2.0
             dosage[gt == 2] = np.nan
 
-            if np.all(np.isnan(dosage)):
+            dosage = _filter_and_impute_dosage(
+                dosage,
+                train_indices,
+                maf_threshold=maf_threshold,
+            )
+            if dosage is None:
                 continue
-
-            valid = ~np.isnan(dosage)
-            n_valid = valid.sum()
-            if n_valid == 0:
-                continue
-
-            af = np.nanmean(dosage[valid]) / 2.0
-            maf = min(af, 1.0 - af)
-            if maf < maf_threshold:
-                continue
-
-            # Mean imputation
-            dosage[np.isnan(dosage)] = np.nanmean(dosage[valid])
 
             # Find which gene(s) this variant belongs to
-            matched_genes = _find_genes_for_position(v.POS, starts, genes)
+            matched_genes = _find_genes_for_position(v.POS, starts, genes, max_ends)
 
             if not matched_genes:
                 n_intergenic += 1

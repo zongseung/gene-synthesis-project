@@ -70,7 +70,7 @@ class FiLMConvBlock(nn.Module):
 
         # Residual (handle potential length mismatch from convolution)
         skip = h + residual[..., : h.shape[-1]]
-        out = self.downsample(h)
+        out = self.downsample(skip)
         return out, skip
 
 
@@ -221,10 +221,9 @@ class CNNDecoder(nn.Module):
             skip_ch = reversed_channels[i]  # Skip from corresponding encoder block
             if i < len(reversed_channels) - 1:
                 out_ch = reversed_channels[i + 1]
-                upsample = True
             else:
                 out_ch = reversed_channels[i]
-                upsample = False
+            upsample = i > 0
             self.blocks.append(
                 FiLMDeconvBlock(in_ch, skip_ch, out_ch, kernel_size, upsample)
             )

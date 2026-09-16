@@ -36,7 +36,20 @@ class TestSchemaParity:
         res_p = pca_single_gene("BRCA1", binomial_dosage_matrix, n_components=K)
         res_g = glm_pca_single_gene("BRCA1", binomial_dosage_matrix, n_components=K)
         assert res_p is not None and res_g is not None
-        assert set(res_p.keys()) == set(res_g.keys())
+        assert set(res_p).issubset(res_g)
+        assert {
+            "loadings",
+            "intercept",
+            "family",
+            "link",
+            "penalty",
+            "backend",
+            "backend_version",
+            "projection",
+        }.issubset(res_g)
+        assert res_g["family"] == "poi"
+        assert res_g["link"] == "log"
+        assert res_g["penalty"] == 1.0
 
         # Feature dict has the same keys (one per latent component)
         assert sorted(res_p["features"].keys()) == sorted(res_g["features"].keys())
@@ -57,6 +70,69 @@ class TestSchemaParity:
 
 # ── Train-only fit + held-out projection ────────────────────────────────
 class TestTrainOnlyProjection:
+    def test_poisson_projection_optimizes_fixed_decoder_likelihood(self):
+        from src.preprocessing.glm_pca import project_glm_factors
+
+        rng = np.random.default_rng(11)
+        loadings = rng.normal(scale=0.4, size=(20, 3)).astype(np.float32)
+        intercept = rng.normal(loc=-0.2, scale=0.2, size=20).astype(np.float32)
+        latent = rng.normal(size=(8, 3)).astype(np.float32)
+        observed = rng.poisson(np.exp(intercept + latent @ loadings.T)).astype(np.float32)
+
+        projected = project_glm_factors(
+            observed, loadings, intercept, family="poi", max_iter=100,
+        )
+        ols = (observed - observed.mean(axis=0)) @ loadings @ np.linalg.pinv(
+            loadings.T @ loadings
+        )
+
+        projected_eta = intercept + projected @ loadings.T
+        ols_eta = np.clip(intercept + ols @ loadings.T, -20.0, 20.0)
+        projected_objective = np.sum(np.exp(projected_eta) - observed * projected_eta)
+        projected_objective += 0.5 * np.sum(projected**2)
+        ols_objective = np.sum(np.exp(ols_eta) - observed * ols_eta)
+        ols_objective += 0.5 * np.sum(ols**2)
+        score = (observed - np.exp(projected_eta)) @ loadings - projected
+
+        assert projected.shape == latent.shape
+        assert np.isfinite(projected).all()
+        assert projected_objective < ols_objective
+        assert np.max(np.abs(score)) < 1e-3
+
+    def test_poisson_projection_backtracks_large_newton_steps(self):
+        from src.preprocessing.glm_pca import project_glm_factors
+
+        rng = np.random.default_rng(0)
+        loadings = rng.normal(scale=2.0, size=(12, 3)).astype(np.float32)
+        intercept = rng.normal(loc=-2.0, scale=2.0, size=12).astype(np.float32)
+        latent = rng.normal(scale=3.0, size=(4, 3)).astype(np.float32)
+        observed = rng.poisson(
+            np.exp(np.clip(intercept + latent @ loadings.T, -8.0, 8.0))
+        ).astype(np.float32)
+
+        projected = project_glm_factors(
+            observed, loadings, intercept, family="poi", max_iter=100,
+        )
+
+        projected_eta = intercept + projected @ loadings.T
+        projected_objective = np.sum(np.exp(projected_eta) - observed * projected_eta)
+        projected_objective += 0.5 * np.sum(projected**2)
+        zero_objective = np.sum(np.exp(intercept) - observed * intercept)
+
+        assert np.isfinite(projected_objective)
+        assert projected_objective < zero_objective
+
+    def test_poisson_projection_rejects_negative_observations(self):
+        from src.preprocessing.glm_pca import project_glm_factors
+
+        with pytest.raises(ValueError, match="non-negative"):
+            project_glm_factors(
+                np.array([[-1.0]], dtype=np.float32),
+                np.array([[1.0]], dtype=np.float32),
+                np.array([0.0], dtype=np.float32),
+                family="poi",
+            )
+
     def test_held_out_rows_get_projected(self, binomial_dosage_matrix):
         from src.preprocessing.glm_pca import glm_pca_single_gene
         rng = np.random.default_rng(1)

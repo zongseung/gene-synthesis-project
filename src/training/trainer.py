@@ -5,7 +5,9 @@ Supports:
 - DDP training on 2 GPUs via torchrun (nccl backend)
 - Single-GPU debug mode via --single_gpu flag
 - bf16 autocast without GradScaler (Ampere GPU)
-- EMA (decay 0.9999) with shadow parameter checkpointing
+- EMA with shadow parameter checkpointing; decay 0.999 from
+  `configs/default.yaml: training.ema_decay` (the 0.9999 in src/utils/ema.py is the
+  EMAModel class default, used only when a config omits ema_decay)
 - Population-balanced sqrt-proportional oversampling
 - Cosine warmup scheduler
 - Min-SNR-gamma loss weighting
@@ -22,18 +24,19 @@ Usage:
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import math
 import os
-import shutil
 import sys
-import time
+from functools import partial
 from pathlib import Path
 
 import numpy as np
 import torch
 import torch.distributed as dist
 import torch.nn as nn
-from torch.utils.data import DataLoader, DistributedSampler
+from torch.utils.data import DataLoader
 
 # Allow direct execution: torchrun src/training/trainer.py
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -44,7 +47,7 @@ if _PROJECT_ROOT not in sys.path:
 # Project imports
 from src.data.dataloader import create_dataloaders
 from src.models import GaussianDiffusion, HybridCNNDiTFiLM
-from src.utils.config import load_config, parse_args_with_config
+from src.utils.config import parse_args_with_config
 from src.utils.ddp import cleanup_ddp, get_rank, get_world_size, is_main_process, setup_ddp
 from src.training.losses import compute_training_loss
 from src.utils.ema import EMAModel
@@ -57,38 +60,68 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _bind_normalization_stats(config: dict) -> None:
+    data_cfg = config["data"]
+    if not data_cfg.get("normalize", False):
+        return
+    stats_path = Path(
+        data_cfg.get("normalization_stats_path", "data/processed/normalization_stats.pkl")
+    )
+    if not stats_path.exists():
+        raise FileNotFoundError(f"Normalization stats not found: {stats_path}")
+    data_cfg["normalization_stats_sha256"] = hashlib.sha256(
+        stats_path.read_bytes()
+    ).hexdigest()
+
+
 # ───────────────────────────────────────────────────────────────────
-# Cosine warmup scheduler
+# Cosine warmup scheduler (LambdaLR + module-level multiplier fn)
 # ───────────────────────────────────────────────────────────────────
 
-class CosineWarmupScheduler(torch.optim.lr_scheduler._LRScheduler):
-    """Cosine annealing with linear warmup.
+def cosine_warmup_lr_lambda(step: int, warmup: int, max_iters: int) -> float:
+    """LR multiplier: linear warmup then cosine decay to 0.
 
-    Args:
-        optimizer: Optimizer instance.
-        warmup: Number of warmup steps.
-        max_iters: Total training steps.
+    Reproduces the old hand-rolled ``CosineWarmupScheduler(_LRScheduler)``
+    exactly (verified in scratchpad: identical LR sequence, rel_tol=1e-12).
     """
+    if step < warmup:
+        return step / max(1, warmup)
+    progress = (step - warmup) / max(1, max_iters - warmup)
+    return 0.5 * (1.0 + math.cos(math.pi * progress))
 
-    def __init__(
-        self,
-        optimizer: torch.optim.Optimizer,
-        warmup: int,
-        max_iters: int,
-        last_epoch: int = -1,
-    ) -> None:
-        self.warmup = warmup
-        self.max_iters = max_iters
-        super().__init__(optimizer, last_epoch)
 
-    def get_lr(self):
-        step = self.last_epoch
-        if step < self.warmup:
-            scale = step / max(1, self.warmup)
-        else:
-            progress = (step - self.warmup) / max(1, self.max_iters - self.warmup)
-            scale = 0.5 * (1.0 + np.cos(np.pi * progress))
-        return [base_lr * scale for base_lr in self.base_lrs]
+def make_cosine_warmup_scheduler(
+    optimizer: torch.optim.Optimizer,
+    warmup: int,
+    max_iters: int,
+) -> torch.optim.lr_scheduler.LambdaLR:
+    """Build a LambdaLR with the cosine-warmup multiplier."""
+    return torch.optim.lr_scheduler.LambdaLR(
+        optimizer,
+        lr_lambda=partial(cosine_warmup_lr_lambda, warmup=warmup, max_iters=max_iters),
+    )
+
+
+# ───────────────────────────────────────────────────────────────────
+# Precision (autocast) resolution
+# ───────────────────────────────────────────────────────────────────
+
+PRECISION_DTYPES: dict[str, torch.dtype] = {"bf16": torch.bfloat16, "fp32": torch.float32}
+
+
+def resolve_precision(training_cfg: dict) -> tuple[torch.dtype, bool]:
+    """Map training.precision to (autocast_dtype, autocast_enabled).
+
+    fp32 runs without autocast (single code path via ``enabled=False``,
+    rather than a separate branch). Default (key absent): bf16.
+    """
+    precision = training_cfg.get("precision", "bf16")
+    if precision not in PRECISION_DTYPES:
+        raise ValueError(
+            f"Unsupported training.precision: {precision!r}. "
+            f"Allowed values: {sorted(PRECISION_DTYPES)}"
+        )
+    return PRECISION_DTYPES[precision], precision != "fp32"
 
 
 # ───────────────────────────────────────────────────────────────────
@@ -102,6 +135,8 @@ def validate(
     val_loader: DataLoader,
     device: torch.device,
     config: dict,
+    autocast_dtype: torch.dtype = torch.bfloat16,
+    autocast_enabled: bool = True,
 ) -> float:
     """Compute validation reconstruction error.
 
@@ -129,7 +164,7 @@ def validate(
         # Assign fixed timesteps deterministically (round-robin)
         t = fixed_timesteps[torch.arange(batch_size, device=device) % len(fixed_timesteps)]
 
-        with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+        with torch.autocast(device_type="cuda", dtype=autocast_dtype, enabled=autocast_enabled):
             loss_dict = diffusion.p_losses(
                 model=model,
                 x_start=x,
@@ -163,7 +198,7 @@ def save_checkpoint(
     model: nn.Module,
     ema: EMAModel,
     optimizer: torch.optim.Optimizer,
-    scheduler: CosineWarmupScheduler,
+    scheduler: torch.optim.lr_scheduler.LambdaLR,
     epoch: int,
     val_loss: float,
     config: dict,
@@ -226,6 +261,7 @@ def train(config: dict) -> None:
     """Full training pipeline with DDP, bf16, EMA, and wandb logging."""
 
     # ── Setup ──
+    _bind_normalization_stats(config)
     training_cfg = config["training"]
     distributed_cfg = config.get("distributed", {})
     single_gpu = distributed_cfg.get("num_gpus", 2) == 1
@@ -299,9 +335,20 @@ def train(config: dict) -> None:
         null_class=data_cfg.get("num_classes", 26),
         cfg_dropout_rate=diffusion_cfg.get("cfg_dropout_rate", 0.1),
         schedule_type=diffusion_cfg.get("noise_schedule", "cosine"),
+        prediction_target=diffusion_cfg.get("prediction_target", "epsilon"),
+        sample_clip=diffusion_cfg.get("sample_clip", 6.0),
+        feature_schedule=diffusion_cfg.get("feature_schedule"),
     ).to(device)
 
+    # ── Precision (resolved once, used for train + validate autocast) ──
+    autocast_dtype, autocast_enabled = resolve_precision(training_cfg)
+
     # ── Optimizer (NO GradScaler for bf16) ──
+    optimizer_name = training_cfg.get("optimizer", "adamw")
+    if optimizer_name != "adamw":
+        raise ValueError(
+            f"Unsupported training.optimizer: {optimizer_name!r}. Only 'adamw' is implemented."
+        )
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=training_cfg["lr"],
@@ -311,7 +358,7 @@ def train(config: dict) -> None:
 
     # ── Scheduler ──
     total_steps = training_cfg["epochs"] * len(train_loader)
-    scheduler = CosineWarmupScheduler(
+    scheduler = make_cosine_warmup_scheduler(
         optimizer,
         warmup=training_cfg.get("warmup_steps", 100),
         max_iters=total_steps,
@@ -358,8 +405,8 @@ def train(config: dict) -> None:
 
             optimizer.zero_grad(set_to_none=True)
 
-            # ── bf16 autocast (NO GradScaler) ──
-            with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+            # ── autocast (NO GradScaler) ──
+            with torch.autocast(device_type="cuda", dtype=autocast_dtype, enabled=autocast_enabled):
                 loss_dict = compute_training_loss(
                     model=model,
                     diffusion=diffusion,
@@ -428,7 +475,10 @@ def train(config: dict) -> None:
 
         # ── Validation (every epoch, using EMA weights) ──
         ema.apply_shadow(base_model)
-        val_rec_error = validate(model, diffusion, val_loader, device, config)
+        val_rec_error = validate(
+            model, diffusion, val_loader, device, config,
+            autocast_dtype=autocast_dtype, autocast_enabled=autocast_enabled,
+        )
         ema.restore(base_model)
 
         if is_main_process():

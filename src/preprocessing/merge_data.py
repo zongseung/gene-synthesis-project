@@ -13,7 +13,6 @@
 
 import os
 import sys
-import subprocess
 import time
 import argparse
 import numpy as np
@@ -29,8 +28,15 @@ from functools import partial
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, "..", ".."))
 
-VCF_DIR = os.path.expanduser("~/GeneDiffusion")
-VCF_PATTERN = "ALL.chr{chrom}.phase3_shapeit2_mvncall_integrated_v5b.20130502.genotypes.vcf.gz"
+# Allow direct execution: python src/preprocessing/merge_data.py
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
+from src.preprocessing.config import (  # noqa: E402
+    PER_CHROM_VCF_DIR as VCF_DIR,
+    PER_CHROM_VCF_PATTERN as VCF_PATTERN,
+)
+
 CHROMOSOMES = list(range(1, 23))
 N_WORKERS = min(22, cpu_count())
 OUTPUT_DIR = os.path.join(PROJECT_ROOT, "data")

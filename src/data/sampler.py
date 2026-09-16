@@ -7,8 +7,6 @@ representation during training. Compatible with DDP via set_epoch().
 from __future__ import annotations
 
 import math
-import pickle
-from pathlib import Path
 from typing import Iterator
 
 import numpy as np

@@ -59,7 +59,6 @@ class HybridCNNDiTFiLM(nn.Module):
         patch_size = model_cfg.get("patch_size", 16)
         n_pops = model_cfg.get("n_pops", 26)
         n_superpops = model_cfg.get("n_superpops", 5)
-
         pop_to_superpop = model_cfg.get("pop_to_superpop", None)
         if pop_to_superpop is None:
             raise ValueError(
@@ -143,26 +142,6 @@ class HybridCNNDiTFiLM(nn.Module):
             d_model=d_model,
         )
 
-        # Optional zero mask for enforcing biological constraints
-        self.register_buffer("zero_mask", None)
-
-    def set_zero_mask(self, zero_mask: torch.Tensor) -> None:
-        """
-        Set the zero mask for enforcing biological constraints.
-
-        Args:
-            zero_mask: Boolean tensor of shape (K, gene_size) or (gene_size,).
-                       True indicates positions that must always be zero.
-        """
-        self.zero_mask = zero_mask.bool()
-
-    def enforce_zeros(self, x: torch.Tensor) -> torch.Tensor:
-        """Apply zero mask: positions where zero_mask is True are set to 0."""
-        if self.zero_mask is not None:
-            # Broadcast: zero_mask may be (K, gene_size) or (gene_size,)
-            x = x * (~self.zero_mask).to(x.dtype)
-        return x
-
     def forward(
         self,
         x: torch.Tensor,
@@ -208,8 +187,5 @@ class HybridCNNDiTFiLM(nn.Module):
         # Ensure output matches input spatial size
         if output.shape[-1] != self.gene_size:
             output = output[..., : self.gene_size]
-
-        # Enforce zero constraints
-        output = self.enforce_zeros(output)
 
         return output

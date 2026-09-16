@@ -1,9 +1,7 @@
 """Training loss functions for HiPoDiT diffusion model.
 
 Provides:
-- masked_mse_loss: MSE ignoring zero_mask (padding) positions.
 - mmd_loss: Maximum Mean Discrepancy with RBF kernel (auxiliary).
-- min_snr_weight: Min-SNR-gamma per-timestep weighting (Hang et al., 2023).
 - compute_training_loss: Orchestrator that combines noise addition, model
   forward pass, and loss computation.
 """
@@ -13,35 +11,6 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
-
-def masked_mse_loss(
-    pred: torch.Tensor,
-    target: torch.Tensor,
-    zero_mask: torch.Tensor,
-) -> torch.Tensor:
-    """MSE loss excluding zero_mask positions (padding / biologically zero).
-
-    Args:
-        pred: (B, K, gene_size) predicted noise.
-        target: (B, K, gene_size) actual noise.
-        zero_mask: (gene_size, K) or (K, gene_size) bool tensor where True
-            means the position is always zero and should be excluded.
-
-    Returns:
-        Scalar masked MSE loss.
-    """
-    # Build not_zero_mask with shape (K, gene_size) matching model layout
-    if zero_mask.shape[0] != pred.shape[1]:
-        # Stored as (gene_size, K) on disk, transpose to (K, gene_size)
-        not_zero = ~zero_mask.T.to(pred.device)
-    else:
-        not_zero = ~zero_mask.to(pred.device)
-
-    # Expand to (B, K, gene_size)
-    mask = not_zero.unsqueeze(0).expand_as(pred)
-    diff = (pred - target) ** 2
-    return (diff * mask).sum() / mask.sum().clamp(min=1)
 
 
 def mmd_loss(
@@ -180,30 +149,6 @@ def class_centroid_alignment_loss(
     return torch.stack(losses).mean()
 
 
-def min_snr_weight(
-    timesteps: torch.Tensor,
-    alphas_cumprod: torch.Tensor,
-    gamma: float = 5.0,
-) -> torch.Tensor:
-    """Compute Min-SNR-gamma per-timestep loss weights (Hang et al., 2023).
-
-    SNR(t) = alpha_bar_t / (1 - alpha_bar_t)
-    weight(t) = min(SNR(t), gamma) / SNR(t)
-
-    Args:
-        timesteps: (B,) timestep indices.
-        alphas_cumprod: (T,) cumulative product of alphas.
-        gamma: SNR clamp value (default 5.0).
-
-    Returns:
-        (B,) per-sample weights.
-    """
-    alpha_bar = alphas_cumprod[timesteps]
-    snr = alpha_bar / (1.0 - alpha_bar).clamp(min=1e-8)
-    weights = torch.clamp(snr, max=gamma) / snr.clamp(min=1e-8)
-    return weights
-
-
 def compute_training_loss(
     model: nn.Module,
     diffusion: nn.Module,
@@ -243,7 +188,6 @@ def compute_training_loss(
 
     # Pre-sample noise so we can reuse it for aux loss (avoid double forward)
     noise = torch.randn_like(x)
-    x_t = diffusion.q_sample(x, t, noise)
 
     loss_dict = diffusion.p_losses(
         model=model,
@@ -281,6 +225,7 @@ def compute_training_loss(
 
         # Reuse pred_noise from p_losses (same noise, same x_t, no double forward)
         pred_noise = loss_dict["pred_noise"]
+        x_t = diffusion.q_sample(x, t, noise)
         pred_x0 = diffusion._predict_x0_from_eps(x_t, t, pred_noise)
         pred_x0 = pred_x0.clamp(-6, 6)
 
@@ -317,14 +262,10 @@ def compute_training_loss(
 
         if lambda_class > 0:
             level = aux_cfg.get("class_alignment_level", "superpop")
-            if level == "superpop":
-                class_labels = map_to_superpop_labels(y, config)
-                weights = aux_cfg.get("class_alignment_weights", None)
-            elif level == "pop":
-                class_labels = y
-                weights = aux_cfg.get("pop_alignment_weights", None)
-            else:
+            if level != "superpop":
                 raise ValueError(f"Unsupported aux_loss.class_alignment_level: {level}")
+            class_labels = map_to_superpop_labels(y, config)
+            weights = aux_cfg.get("class_alignment_weights", None)
 
             class_centroid = class_centroid_alignment_loss(
                 real_flat,

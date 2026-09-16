@@ -3,27 +3,26 @@ data:
   gene_size: 24576
   num_channels: 4
   num_classes: 26
-  num_superpops: 5
-  num_samples: 2504
   test_ratio: 0.1
-  split_seed: 20260327
   normalize: true
   enforce_zeros: true
+  dim_reduction_method: "glm_pca"
+  preprocessing_metadata_path: "data/processed/preprocessing_metadata.json"
+  normalization_stats_path: "data/processed/normalization_stats.pkl"
   zero_mask_path: "data/processed/zero_mask.pt"
   label_hierarchy_path: "data/processed/label_hierarchy.pkl"
-  split_manifest_path: "data/processed/split_manifest.json"
 
 # ── 모델 ──
 model:
   name: "HybridCNNDiTFiLM"
   # CNN
-  base_channels: 128
+  base_channels: 64
   channel_mult: [1, 1, 2, 2, 4]
   kernel_size: 3
   # DiT
-  d_model: 768
-  n_dit_blocks: 16
-  n_heads: 12
+  d_model: 256
+  n_dit_blocks: 4
+  n_heads: 4
   mlp_ratio: 4.0
   dropout: 0.1
   # Patch
@@ -37,8 +36,9 @@ diffusion:
   max_timesteps: 1000
   noise_schedule: "linear"
   prediction_target: "epsilon"
+  sample_clip: 6.0
   guidance_type: "classifier_free"
-  guidance_weight: 1.0
+  guidance_weight: 0.0
   cfg_dropout_rate: 0.1
   sampling_timesteps: 100
   ddim_eta: 0.5
@@ -59,10 +59,9 @@ training:
 
 # ── 실험 운영 ──
 experiment:
-  run_name: "20260428_glmpca_k4_sym_gpu1"
-  tags: ["baseline", "hybrid-genodit", "glm-pca", "k4", "sym-fix"]
+  run_name: "20260915_glm_pca_baseline"
+  tags: ["hybrid-genodit", "glm-pca", "baseline", "adaln-zero"]
   save_top_k_checkpoints: 3
-  export_policy: "internal_only"
 
 # ── DDP ──
 distributed:
@@ -71,7 +70,7 @@ distributed:
 
 # ── 보조 손실 ──
 aux_loss:
-  enabled: true
+  enabled: false
   lambda_pca_dist: 0.02
   lambda_pop_structure: 0.02
   lambda_class_centroid: 0.05
@@ -87,4 +86,4 @@ aux_loss:
   warmup_epochs: 20
 
 # ── 저장 ──
-save_dir: "outputs/20260428_glmpca_k4_sym_gpu1"
+save_dir: "outputs/20260915_glm_pca_baseline"
