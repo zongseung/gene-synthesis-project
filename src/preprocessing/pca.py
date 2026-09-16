@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import gc
 import logging
+import multiprocessing as mp
 import os
 import pickle
 
@@ -20,7 +21,6 @@ from sklearn.decomposition import PCA
 from src.preprocessing.config import (
     CHROMOSOMES,
     DIM_RED_METHOD,
-    GLM_PCA_FAMILY,
     GLM_PCA_MAX_ITER,
     MAF_THRESHOLD,
     MAX_VARIANTS_PER_GENE,
@@ -80,6 +80,29 @@ def pca_single_gene(
         return None
 
 
+def _pool_init_no_blas_threads() -> None:
+    """Pool initializer: pin each worker to 1 BLAS thread (avoid oversubscription)."""
+    os.environ["OMP_NUM_THREADS"] = "1"
+    os.environ["MKL_NUM_THREADS"] = "1"
+    os.environ["OPENBLAS_NUM_THREADS"] = "1"
+
+
+def _reduce_one(
+    task: tuple[str, np.ndarray, str, int, np.ndarray | None, int],
+) -> tuple[str, dict | None]:
+    """Picklable top-level worker: unpack one gene's task and dispatch it."""
+    gene_name, matrix, method, n_components, train_indices, max_iter = task
+    result = reduce_single_gene(
+        method=method,
+        gene_name=gene_name,
+        matrix=matrix,
+        n_components=n_components,
+        train_indices=train_indices,
+        max_iter=max_iter,
+    )
+    return gene_name, result
+
+
 def stream_vcf_and_pca(
     vcf_path: str,
     optimal_k: int,
@@ -114,74 +137,97 @@ def stream_vcf_and_pca(
         f"{len(chroms)} chromosomes (OOM-safe: 1 chr at a time)"
     )
 
-    for i, chrom_num in enumerate(chroms):
-        chrom_genes = gene_coords.get(str(chrom_num), [])
-        if not chrom_genes:
-            logger.warning(f"[chr{chrom_num}] No gene annotations found, skipping")
-            continue
+    # ponytail: one Pool for the whole run (not per-chromosome) to amortize
+    # spin-up cost; ceiling is per-task IPC pickling of each gene's matrix,
+    # fine at current gene_size but would need a shared-memory array if genes
+    # grow much larger. Uses the "spawn" start method, not the Linux default
+    # "fork": forking a process that already has BLAS/OpenMP background
+    # threads (numpy/scipy are imported well before this point) can deadlock
+    # every child on a futex forever (verified locally) because fork() only
+    # copies the calling thread, leaving other threads' held locks stuck.
+    ctx = mp.get_context("spawn")
+    with ctx.Pool(os.cpu_count(), initializer=_pool_init_no_blas_threads) as pool:
+        for i, chrom_num in enumerate(chroms):
+            chrom_genes = gene_coords.get(str(chrom_num), [])
+            if not chrom_genes:
+                logger.warning(f"[chr{chrom_num}] No gene annotations found, skipping")
+                continue
 
-        args = (
-            chrom_num,
-            vcf_path,
-            MAF_THRESHOLD,
-            MAX_VARIANTS_PER_GENE,
-            chrom_genes,
-            train_indices,
-        )
-        _, gene_matrices, sids = process_one_chromosome(args)
-
-        if not sample_ids and sids:
-            sample_ids = sids
-
-        n_genes_chr = len(gene_matrices)
-        gene_loci = {gene["name"]: gene for gene in chrom_genes}
-
-        for gene_name in sorted(gene_matrices.keys()):
-            result = reduce_single_gene(
-                method=DIM_RED_METHOD,
-                gene_name=gene_name,
-                matrix=gene_matrices[gene_name],
-                n_components=optimal_k,
-                train_indices=train_indices,
-                fam=GLM_PCA_FAMILY,
-                max_iter=GLM_PCA_MAX_ITER,
+            args = (
+                chrom_num,
+                vcf_path,
+                MAF_THRESHOLD,
+                MAX_VARIANTS_PER_GENE,
+                chrom_genes,
+                train_indices,
             )
-            if result is not None:
-                all_pca_features.update(result["features"])
-                if "loadings" in result:
-                    all_glm_decoders[gene_name] = {
-                        key: result[key]
-                        for key in (
-                            "loadings",
-                            "intercept",
-                            "family",
-                            "link",
-                            "penalty",
-                            "backend",
-                            "backend_version",
-                            "projection",
-                        )
+            _, gene_matrices, sids = process_one_chromosome(args)
+
+            # Fail loudly: a parser that silently returned nothing for chr2-22
+            # once produced a "complete" chr1-only dataset.
+            if not gene_matrices:
+                raise RuntimeError(
+                    f"chr{chrom_num}: parser returned 0 genes for "
+                    f"{len(chrom_genes)} annotated loci"
+                )
+            if not sample_ids:
+                sample_ids = sids
+            elif sids != sample_ids:
+                raise RuntimeError(f"chr{chrom_num}: sample order differs from earlier chromosomes")
+
+            n_genes_chr = len(gene_matrices)
+            gene_loci = {gene["name"]: gene for gene in chrom_genes}
+
+            sorted_gene_names = sorted(gene_matrices.keys())
+            tasks = [
+                (
+                    gene_name,
+                    gene_matrices[gene_name],
+                    DIM_RED_METHOD,
+                    optimal_k,
+                    train_indices,
+                    GLM_PCA_MAX_ITER,
+                )
+                for gene_name in sorted_gene_names
+            ]
+
+            for gene_name, result in pool.imap(_reduce_one, tasks):
+                if result is not None:
+                    all_pca_features.update(result["features"])
+                    if "loadings" in result:
+                        all_glm_decoders[gene_name] = {
+                            key: result[key]
+                            for key in (
+                                "loadings",
+                                "intercept",
+                                "family",
+                                "link",
+                                "penalty",
+                                "backend",
+                                "backend_version",
+                                "projection",
+                            )
+                        }
+                    stat_row = {
+                        "gene": gene_name,
+                        "chrom": chrom_num,
+                        "start": gene_loci[gene_name]["start"],
+                        "end": gene_loci[gene_name]["end"],
+                        "n_variants": result["n_variants"],
+                        "actual_k": result["actual_k"],
+                        "explained_total": result["explained_total"],
                     }
-                stat_row = {
-                    "gene": gene_name,
-                    "chrom": chrom_num,
-                    "start": gene_loci[gene_name]["start"],
-                    "end": gene_loci[gene_name]["end"],
-                    "n_variants": result["n_variants"],
-                    "actual_k": result["actual_k"],
-                    "explained_total": result["explained_total"],
-                }
-                for j, v in enumerate(result["explained_per_component"]):
-                    stat_row[f"explained_pc{j + 1}"] = v
-                all_pca_stats.append(stat_row)
+                    for j, v in enumerate(result["explained_per_component"]):
+                        stat_row[f"explained_pc{j + 1}"] = v
+                    all_pca_stats.append(stat_row)
 
-        del gene_matrices
-        gc.collect()
+            del gene_matrices, tasks  # tasks also references every matrix
+            gc.collect()
 
-        logger.info(
-            f"  [{i + 1}/{len(chroms)}] chr{chrom_num}: {n_genes_chr} genes → "
-            f"PCA done, {len(all_pca_features)} total features"
-        )
+            logger.info(
+                f"  [{i + 1}/{len(chroms)}] chr{chrom_num}: {n_genes_chr} genes → "
+                f"PCA done, {len(all_pca_features)} total features"
+            )
 
     pca_stats_df = pd.DataFrame(all_pca_stats)
 
