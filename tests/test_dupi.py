@@ -12,6 +12,7 @@ that any future refactor is anchored to the published reference values.
 
 from __future__ import annotations
 
+import itertools
 import math
 
 import numpy as np
@@ -33,7 +34,7 @@ from src.evaluation.distribution_metrics import (
 # ── DUPI ────────────────────────────────────────────────────────────────
 class TestDupiBenchmark:
     def test_k1_closed_form(self) -> None:
-        # Eq. (8) collapses to m / (n + m - 1) when k = 1
+        # Eq. (10) collapses to m / (n + m - 1) when k = 1
         assert kth_dupi_benchmark(251, 2504, 1) == pytest.approx(2504 / (251 + 2504 - 1))
 
     def test_in_unit_interval(self) -> None:
@@ -185,16 +186,28 @@ class TestPaperReproduction:
         for n, m in [(100, 100), (251, 2504), (300, 1500)]:
             assert kth_dupi_benchmark(n, m, 1) == pytest.approx(m / (n + m - 1))
 
-    def test_eq10_general_consistent_with_k1_formula(self) -> None:
-        """The general Eq. (10) sum must match the k=1 special case at k=1."""
-        # general formula path (range(k, 2k) = [1] for k=1)
-        denominator = math.lgamma(100 + 50) - math.lgamma(50 + 1) - math.lgamma(99 + 1)
-        log_num = (
-            math.lgamma(50 + 1) - math.lgamma(0 + 1) - math.lgamma(50 + 1)  # C(0,0)=1
-            + math.lgamma(50 + 100 - 1 + 1) - math.lgamma(50 - 1 + 1) - math.lgamma(100 + 1)
-        )
-        # Just verify our function returns the closed form to many digits.
-        assert kth_dupi_benchmark(50, 100, 1) == pytest.approx(100 / (50 + 100 - 1), rel=1e-12)
+    def test_eq10_general_k_matches_exact_enumeration(self) -> None:
+        """Eq. (10) for k ≥ 2 equals the exact probability over all interleavings.
+
+        Under a common continuous F, the ranks of the m synthetic points among
+        the n−1 other real points are a uniform random interleaving; DUPI₀ is
+        the fraction of interleavings whose k-th synthetic point precedes the
+        k-th real point.
+        """
+        for n, m, k in [(6, 5, 2), (7, 6, 3), (5, 8, 2)]:
+            slots = n - 1 + m
+            hits = total = 0
+            for syn_pos in itertools.combinations(range(slots), m):
+                real_pos = sorted(set(range(slots)) - set(syn_pos))
+                hits += syn_pos[k - 1] < real_pos[k - 1]
+                total += 1
+            assert kth_dupi_benchmark(n, m, k) == pytest.approx(hits / total, rel=1e-12)
+
+    def test_eq11_tie_counts_as_hit(self) -> None:
+        """Eq. (11) uses ``≤``: a synthetic point exactly as far as the real neighbour counts."""
+        x_real = np.array([[0.0], [1.0]])
+        x_syn = np.array([[2.0]])  # x=1: d_syn = d_real = 1 (tie); x=0: d_syn = 2 > 1
+        assert dupi_score(x_real, x_syn, k=1)["dupi"] == pytest.approx(0.5)
 
     # ── Wine illustration (paper page 722) ─────────────────────────────
     def test_wine_example_ui_pi(self) -> None:
@@ -225,19 +238,10 @@ class TestPaperReproduction:
         equal_out = ui_pi_from_dupi(0.5, 0.5, tau=tau)
         assert equal_out["utility_privacy_product"] == pytest.approx(bound)
 
-    # ── Default tau ────────────────────────────────────────────────────
-    def test_default_tau_matches_paper(self) -> None:
-        """Paper page 721: ``The default value is set at τ = 5 in this paper.``"""
-        # Calling without tau should match calling with tau=5.0 explicitly.
-        a = ui_pi_from_dupi(0.3, 0.5)
-        b = ui_pi_from_dupi(0.3, 0.5, tau=5.0)
-        assert a == b
-
     # ── Simulation S1 limit (paper page 722, Fig. 3) ──────────────────
     def test_s1_simulation_dupi_near_benchmark(self) -> None:
         """Paper S1: ``Y_i ~ MVN_5(0, I)`` matches ``X_i ~ MVN_5(0, I)``; DUPI should converge to ``m/(n+m-1) ≈ 0.5001``."""
         # Smaller m=n=600 to keep test fast (paper used 2000 with 1000 reps).
-        rng = np.random.default_rng(2023)
         m = n = 600
         bench = m / (n + m - 1)  # ≈ 0.50042
         # Average over 30 reps — sample variance shrinks like 1/sqrt(30) ≈ 0.18
@@ -254,16 +258,10 @@ class TestPaperReproduction:
     def test_eq8_identity_nn_excluding_self(self) -> None:
         """Eq. (8): ``d_{X_n}^{<k+1>}(x_i) = d_{X_{n\\i}}^{<k>}(x_i)``.
 
-        Cross-check that ``dupi_score`` indexes ``kneighbors`` correctly:
-        when synthetic is identical to real (modulo a tiny perturbation),
-        the empirical DUPI should be ≈ 1 because the syn-NN distance is
-        always smaller than the real-NN-excluding-self distance.
+        Real points 1 apart, synthetic points 0.1 from each real point.
+        Excluding self: d_syn = 0.1 ≤ d_real = 1 → DUPI = 1. If column 0
+        (self, distance 0) were used instead, 0.1 > 0 → DUPI = 0.
         """
-        rng = np.random.default_rng(0)
-        x_real = rng.standard_normal((100, 4))
-        x_syn = x_real.copy()  # m = n, perfectly aligned
-        # Without an "exclude self" rule, the real side would also have
-        # distance 0 → DUPI = 0.5 (ties). With the rule, syn-NN is 0 vs
-        # real-NN-without-self > 0 → DUPI = 1.
-        out = dupi_score(x_real, x_syn, k=1)
-        assert out["dupi"] == pytest.approx(1.0)
+        x_real = np.arange(20, dtype=float)[:, None]
+        x_syn = x_real + 0.1
+        assert dupi_score(x_real, x_syn, k=1)["dupi"] == pytest.approx(1.0)

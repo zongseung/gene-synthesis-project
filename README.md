@@ -1275,7 +1275,7 @@ Total per GPU                                          ≈ 4–6 GB
 
 ```bash
 pytest tests/                 # 전체 228 tests (CPU 전용, 수 분)
-pytest tests/test_dupi.py -v  # DUPI 만: 29 tests · < 1 s
+pytest tests/test_dupi.py -v  # DUPI 만: 29 tests · 수 초
 ```
 
 `test_dupi.py` categories:
@@ -1288,7 +1288,9 @@ pytest tests/test_dupi.py -v  # DUPI 만: 29 tests · < 1 s
     - Wine 예시 (p. 722): DUPI=0.25, DUPI₀=0.5, τ=5 → (UI, PI) = (0.652, 0.954)
     - 최적점: g=0.5 → UI=PI=0.867
     - Theorem 5 상한: UI · PI ≤ (arctan(τ/2)/arctan(τ))²
-    - S1 시뮬레이션: m=n=600, MVN_5(0, I) 30 reps 평균이 benchmark `m/(2n−1)` ±0.02 이내
+    - S1 시뮬레이션: m=n=600, MVN_5(0, I) 30 reps 평균이 benchmark `m/(2n−1)` ±0.02 이내 (논문은 n=2000, 1000 reps)
+    - Eq. (10) 일반 k: 순위 interleaving 전수 열거와 일치
+    - Eq. (11) 동점 규칙 `≤`
     - Eq. (8) `kneighbors` self-exclusion identity
 
 ---

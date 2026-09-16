@@ -31,7 +31,6 @@ __all__ = [
     "centroid_rows",
     "class_metric_rows",
     "evaluate",
-    "global_metrics",
 ]
 
 
@@ -92,29 +91,6 @@ def evaluate(
             real_pcs, syn_pcs, real_sp, syn_sp, k=k, tau=tau
         ),
     )
-
-
-def global_metrics(
-    real_pcs: np.ndarray,
-    syn_pcs: np.ndarray,
-    *,
-    k: int = 1,
-    tau: float = 5.0,
-) -> dict[str, Any]:
-    """Compute only the global (non-classwise) DUPI and distance metrics."""
-    g_dupi = dupi_score(real_pcs, syn_pcs, k)
-    g_ui_pi = ui_pi_from_dupi(
-        float(g_dupi["dupi"]), float(g_dupi["dupi_benchmark"]), tau=tau
-    )
-    g_mmd = mmd_rbf(real_pcs, syn_pcs)
-    return {
-        "dupi": {**g_dupi, **g_ui_pi},
-        "distribution_distances": {
-            "centroid_distance": centroid_distance(real_pcs, syn_pcs),
-            "gaussian_w2_distance": gaussian_w2_distance(real_pcs, syn_pcs),
-            **g_mmd,
-        },
-    }
 
 
 def centroid_rows(

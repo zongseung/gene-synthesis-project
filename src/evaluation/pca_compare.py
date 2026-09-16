@@ -23,17 +23,7 @@ _PROJECT_ROOT = str(Path(__file__).parents[2])
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
-from src.evaluation._io import load_real, load_synthetic
-
-
-def subsample_genes(X: np.ndarray, n_genes: int, seed: int = 42) -> np.ndarray:
-    rng = np.random.default_rng(seed)
-    G = X.shape[1]
-    if n_genes >= G:
-        idx = np.arange(G)
-    else:
-        idx = rng.choice(G, size=n_genes, replace=False)
-    return X[:, idx, :].reshape(X.shape[0], -1)
+from src.evaluation._io import flatten_subsample_genes, load_real, load_synthetic
 
 
 def main() -> None:
@@ -66,8 +56,8 @@ def main() -> None:
     print(f"      syn shape: {X_syn.shape}, labels: {y_syn.shape}")
 
     print(f"[3/5] Subsampling {args.n_genes} genes (seed={args.seed})")
-    Xr = subsample_genes(X_real, args.n_genes, args.seed)
-    Xs = subsample_genes(X_syn, args.n_genes, args.seed)
+    Xr, gene_idx = flatten_subsample_genes(X_real, args.n_genes, args.seed)
+    Xs, _ = flatten_subsample_genes(X_syn, args.n_genes, args.seed, gene_idx)
     print(f"      flattened: real {Xr.shape}, syn {Xs.shape}")
 
     print("[4/5] Fitting PCA(2) on real, projecting both")

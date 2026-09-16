@@ -1,4 +1,4 @@
-"""DUPI (Distance-based Utility-Privacy Index) for synthetic-data evaluation.
+"""DUPI (Data Utility and Privacy Index) for synthetic-data evaluation.
 
 A faithful re-implementation of the kth-order DUPI score and its
 accompanying Utility / Privacy indices proposed in
@@ -28,7 +28,7 @@ Equation map (paper → code)
 
     Eq. (12) ``UI(DUPI) = arctan(τ · g(DUPI)) / arctan(τ)``
     Eq. (13) ``PI(DUPI) = arctan(τ · (1 − g(DUPI))) / arctan(τ)``
-             ↳ :func:`ui_pi_from_dupi`. Default ``τ = 5`` per p. 721.
+             ↳ :func:`ui_pi_from_dupi`. Default ``τ = 5`` per p. 722.
 
     Eq. (14) ``UI · PI ≤ (arctan(τ/2) / arctan(τ))²`` with equality at
              ``DUPI = DUPI₀``. Verified by ``test_theorem5_upper_bound``.
@@ -53,7 +53,6 @@ README's BibTeX entry for this package.
 from __future__ import annotations
 
 import math
-from typing import Iterable
 
 import numpy as np
 from sklearn.neighbors import NearestNeighbors
@@ -68,9 +67,8 @@ __all__ = [
 def kth_dupi_benchmark(n: int, m: int, k: int) -> float:
     """Theoretical DUPI value when real and synthetic share the same distribution.
 
-    Implements Eq. (8) of Jeong, Kim, and Im (2023). For ``k = 1`` this
-    collapses to ``m / (n + m - 1)``; for higher ``k`` it sums the
-    binomial-coefficient contributions in log space for numerical stability.
+    Implements Eq. (10) of Jeong, Kim, and Im (2023). For ``k = 1`` this
+    collapses to ``m / (n + m - 1)``.
 
     Parameters
     ----------
@@ -90,15 +88,9 @@ def kth_dupi_benchmark(n: int, m: int, k: int) -> float:
         raise ValueError(f"k must satisfy 1 <= k <= min(n - 1, m); got {k}")
     if k == 1:
         return m / (n + m - 1)
-
-    denominator = _log_comb(n - 1 + m, m)
-    terms = [
-        _log_comb(s - 1, k - 1)
-        + _log_comb(n - 1 + m - s, m - k)
-        - denominator
-        for s in range(k, 2 * k)
-    ]
-    return float(math.exp(_logsumexp(terms)))
+    return sum(
+        math.comb(s - 1, k - 1) * math.comb(n - 1 + m - s, m - k) for s in range(k, 2 * k)
+    ) / math.comb(n - 1 + m, m)
 
 
 def dupi_score(x_real: np.ndarray, x_syn: np.ndarray, k: int = 1) -> dict:
@@ -168,9 +160,10 @@ def dupi_score(x_real: np.ndarray, x_syn: np.ndarray, k: int = 1) -> dict:
 def ui_pi_from_dupi(dupi_value: float, dupi0: float, tau: float = 5.0) -> dict:
     """Map a DUPI value into the (Utility Index, Privacy Index) pair.
 
-    Implements Eqs. (10)-(11) of Jeong, Kim, and Im (2023). The DUPI value is
-    first normalised by its benchmark into ``g ∈ [0, 1]``, then transformed
-    through ``atan(τ · ·) / atan(τ)`` to yield UI and PI.
+    Implements the rescaling ``g`` (p. 721) and Eqs. (12)-(13) of Jeong, Kim,
+    and Im (2023). The DUPI value is first normalised by its benchmark into
+    ``g ∈ [0, 1]``, then transformed through ``atan(τ · ·) / atan(τ)`` to
+    yield UI and PI.
 
     Parameters
     ----------
@@ -210,18 +203,3 @@ def ui_pi_from_dupi(dupi_value: float, dupi0: float, tau: float = 5.0) -> dict:
         "privacy_index": float(pi),
         "utility_privacy_product": float(ui * pi),
     }
-
-
-# ── numerical helpers ─────────────────────────────────────────────────────
-def _log_comb(n: int, r: int) -> float:
-    if r < 0 or r > n:
-        return -math.inf
-    return math.lgamma(n + 1) - math.lgamma(r + 1) - math.lgamma(n - r + 1)
-
-
-def _logsumexp(values: Iterable[float]) -> float:
-    vals = list(values)
-    max_val = max(vals)
-    if max_val == -math.inf:
-        return -math.inf
-    return max_val + math.log(sum(math.exp(v - max_val) for v in vals))

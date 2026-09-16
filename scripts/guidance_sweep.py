@@ -4,12 +4,15 @@
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 import os
 import subprocess
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from src.evaluation._io import write_csv  # noqa: E402
 
 
 def guidance_tag(weight: float) -> str:
@@ -125,10 +128,7 @@ def main() -> None:
         })
 
     summary_path = run_dir / "guidance_sweep_summary.csv"
-    with summary_path.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
-        writer.writeheader()
-        writer.writerows(rows)
+    write_csv(summary_path, rows)
     print(f"Saved sweep summary: {summary_path}")
 
 

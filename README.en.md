@@ -1275,7 +1275,7 @@ Total per GPU                                          ≈ 4–6 GB
 
 ```bash
 pytest tests/                 # All 228 tests (CPU only, a few minutes)
-pytest tests/test_dupi.py -v  # DUPI only: 29 tests · < 1 s
+pytest tests/test_dupi.py -v  # DUPI only: 29 tests · a few seconds
 ```
 
 `test_dupi.py` categories:
@@ -1288,7 +1288,9 @@ pytest tests/test_dupi.py -v  # DUPI only: 29 tests · < 1 s
     - Wine example (p. 722): DUPI=0.25, DUPI₀=0.5, τ=5 → (UI, PI) = (0.652, 0.954)
     - Optimum: g=0.5 → UI=PI=0.867
     - Theorem 5 upper bound: UI · PI ≤ (arctan(τ/2)/arctan(τ))²
-    - S1 simulation: m=n=600, the mean over 30 reps of MVN_5(0, I) is within ±0.02 of the benchmark `m/(2n−1)`
+    - S1 simulation: m=n=600, the mean over 30 reps of MVN_5(0, I) is within ±0.02 of the benchmark `m/(2n−1)` (the paper uses n=2000, 1000 reps)
+    - Eq. (10) general k: matches exact enumeration of rank interleavings
+    - Eq. (11) tie rule `≤`
     - Eq. (8) `kneighbors` self-exclusion identity
 
 ---

@@ -126,8 +126,6 @@ def _load_or_compute_pcs(
         stats_path=args.stats_path,
         legacy_sample_space=args.legacy_synthetic_space,
     )
-    syn_x = syn_x.astype(np.float32, copy=False)
-
     real_flat, gene_indices = flatten_subsample_genes(real_x, args.n_genes, args.seed)
     syn_flat, _ = flatten_subsample_genes(syn_x, args.n_genes, args.seed, gene_indices)
 
@@ -140,7 +138,6 @@ def _load_or_compute_pcs(
     syn_sp = pop_to_superpop(syn_pop, hierarchy)
     pca_info = {
         "explained_variance_ratio": [float(v) for v in ev],
-        "explained_variance_percent": [float(v * 100) for v in ev],
         "components_shape": list(pca.components_.shape),
         "n_features_before_pca": int(real_flat.shape[1]),
     }
@@ -226,7 +223,7 @@ def main() -> None:
         "dupi": report.dupi,
         "distribution_distances": report.distribution_distances,
         "notes": {
-            "dupi_source": "Jeong, Kim, and Im (2023), Eq. (8)-(11).",
+            "dupi_source": "Jeong, Kim, and Im (2023), Eqs. (10)-(13).",
             "dupi_interpretation": (
                 "DUPI near 1 means synthetic samples are too close to real samples; "
                 "DUPI near 0 means utility loss; values near the benchmark indicate balance."

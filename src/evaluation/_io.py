@@ -254,13 +254,7 @@ def flatten_subsample_genes(
 
 # ── PCA-coordinate caching ─────────────────────────────────────────────
 def pca_cache_matches(meta_path: Path, fingerprint: dict[str, Any]) -> bool:
-    if not meta_path.exists():
-        return False
-    try:
-        cached = json.loads(meta_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return False
-    return cached.get("fingerprint") == fingerprint
+    return (load_pca_cache_meta(meta_path) or {}).get("fingerprint") == fingerprint
 
 
 def write_pca_cache_meta(

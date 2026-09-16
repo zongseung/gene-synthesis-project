@@ -11,7 +11,7 @@ Distribution-distance metrics:
 
 High-level pipeline:
     :class:`EvaluationReport`, :func:`evaluate`,
-    :func:`global_metrics`, :func:`centroid_rows`, :func:`class_metric_rows`
+    :func:`centroid_rows`, :func:`class_metric_rows`
 """
 
 from src.evaluation.distribution_metrics import (
@@ -30,7 +30,6 @@ from src.evaluation.synthetic_pipeline import (
     centroid_rows,
     class_metric_rows,
     evaluate,
-    global_metrics,
 )
 
 __all__ = [
@@ -46,7 +45,6 @@ __all__ = [
     # pipeline
     "EvaluationReport",
     "evaluate",
-    "global_metrics",
     "centroid_rows",
     "class_metric_rows",
 ]

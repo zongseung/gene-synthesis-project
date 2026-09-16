@@ -58,8 +58,7 @@ rng = np.random.default_rng(0)
 x_real = rng.standard_normal((300, 8))
 x_syn  = rng.standard_normal((1500, 8))   # iid → DUPI ≈ benchmark
 
-out  = dupi_score(x_real, x_syn, k=1)         # Eq. (11)
-b    = kth_dupi_benchmark(*out["n_real":"n_synthetic"], 1)  # placeholder, see below
+out  = dupi_score(x_real, x_syn, k=1)         # Eq. (11); includes Eq. (10) benchmark
 ui_pi = ui_pi_from_dupi(out["dupi"], out["dupi_benchmark"])   # Eqs. (12)–(13)
 
 print(out["dupi"], out["dupi_benchmark"])
@@ -83,15 +82,16 @@ print(report.class_metric_rows)       # per-superpopulation breakdown
 ## Reproducing the paper's printed examples
 
 The values below are **literal** quotes from the paper. They are checked
-in CI:
+by `tests/test_dupi.py`:
 
 * **Wine illustration** (p. 722, caption of Fig. 2):
   `DUPI = 0.25, DUPI₀ = 0.5, τ = 5  →  (UI, PI) = (0.652, 0.954)`
 * **Optimal point** (p. 722): `DUPI = DUPI₀, τ = 5  →  UI = PI = 0.867`,
-  `U × P = 0.751`
+  `U × P = 0.7511` (p. 725)
 * **Theorem 5 upper bound** (Eq. 14): `UI · PI ≤ (arctan(τ/2)/arctan(τ))²`
   with equality iff `DUPI = DUPI₀`
-* **Eq. (10) special case** (k = 1): `DUPI₀ = m / (n + m − 1)`
+* **Eq. (10)**: k = 1 special case `DUPI₀ = m / (n + m − 1)`; k ≥ 2 checked
+  against exact enumeration of all real/synthetic rank interleavings
 * **Simulation S1** (p. 722): `MVN_5(0, I)` real and synthetic both at
   `m = n` should converge to the benchmark — averaged over 30 reps with
   `m = n = 600` yields DUPI within ±0.02 of `m / (2n − 1)`.
@@ -164,18 +164,21 @@ pytest tests/test_dupi.py -v
 * `TestUiPi` — Eqs. (12)–(13) edge cases, atan-sigmoid symmetry
 * `TestDistributionMetrics` — W2 / MMD / coverage non-negativity, zero
   on identical input
-* `TestPaperReproduction` — Wine illustration, optimal point, Theorem 5
-  upper bound, default `τ`, S1 simulation, Eq. (8) self-exclusion
+* `TestPaperReproduction` — Eq. (10) general-`k` enumeration, Eq. (11) tie
+  rule (`≤`), Wine illustration, optimal point, Theorem 5 upper bound,
+  S1 simulation, Eq. (8) self-exclusion
 
-29 tests · runs in < 1 s.
+29 tests · runs in a few seconds.
 
 ---
 
 ## Assumptions inherited from the paper
 
 1. **No duplicates** in `x_real` (paper §III.B(b)). The code identifies
-   the column-0 nearest neighbour as the query point itself; if you have
-   exact duplicates, deduplicate first or expect undefined behaviour.
+   the column-0 nearest neighbour as the query point itself. With exact
+   duplicates the k-th real distance is still correct (a duplicate is a
+   legitimate neighbour at distance 0), but the paper's benchmark assumes a
+   continuous marginal; its remedy is to append an `N(0, ε²)` column.
 2. **Common support** between real and synthetic distributions
    (§III.B(a)).
 3. The provided metric is a **proper distance** in the chosen feature
