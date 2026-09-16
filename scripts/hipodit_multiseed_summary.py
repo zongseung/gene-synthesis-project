@@ -12,7 +12,7 @@ import json
 import math
 from pathlib import Path
 from statistics import mean, stdev
-from typing import Final, TypedDict
+from typing import Final
 
 SCHEDULES: Final = ("standard", "fisher")
 METRICS: Final = ("af_mae", "local_dosage_covariance_mae")
@@ -28,38 +28,7 @@ DECODER_FIELDS: Final = ("B0_mean", "T_mean", "difference_mean", "difference_sd"
 
 
 class ExperimentError(ValueError):
-    def __init__(self, detail: str) -> None:
-        self.detail = detail
-        super().__init__(detail)
-
-
-class Estimate(TypedDict):
-    mean: float
-    sample_sd: float
-
-
-class MetricSummary(TypedDict):
-    standard: Estimate
-    fisher: Estimate
-    paired_difference: Estimate
-    fisher_wins: int
-    ties: int
-
-
-class PairedDifference(TypedDict):
-    seed: int
-    af_mae: float
-    local_dosage_covariance_mae: float
-
-
-class Summary(TypedDict):
-    status: str
-    seed_count: int
-    metrics: dict[str, MetricSummary]
-    paired_differences: list[PairedDifference]
-    raw_reports: list[str]
-    alignment: list[str]
-    limitation: str
+    """A frozen-artifact or declared-contract violation in a multiseed experiment."""
 
 
 def verify_fingerprints(directory: Path) -> None:
@@ -129,7 +98,7 @@ def _validated_run(directory: Path, manifest: dict, seed: int, schedule: str,
     return report, evaluation, run, aligned
 
 
-def summarize(directory: Path) -> Summary:
+def summarize(directory: Path) -> dict:
     """Reject incomplete or unpaired artifacts before calculating across-seed statistics."""
     import numpy as np
 
@@ -164,14 +133,14 @@ def summarize(directory: Path) -> Summary:
             observed[metric] = float(value)
         values[seed, schedule] = observed
         raw_reports.append(str(report_path))
-    differences: list[PairedDifference] = [
+    differences: list[dict] = [
         {"seed": seed,
          "af_mae": values[seed, "fisher"]["af_mae"] - values[seed, "standard"]["af_mae"],
          "local_dosage_covariance_mae": values[seed, "fisher"]["local_dosage_covariance_mae"]
          - values[seed, "standard"]["local_dosage_covariance_mae"]}
         for seed in seeds
     ]
-    metrics: dict[str, MetricSummary] = {}
+    metrics: dict[str, dict] = {}
     for metric in METRICS:
         standard = [values[seed, "standard"][metric] for seed in seeds]
         fisher = [values[seed, "fisher"][metric] for seed in seeds]
@@ -193,7 +162,7 @@ def summarize(directory: Path) -> Summary:
             "Fixed-t noise probes are not compared across schedules."}
 
 
-def write_summary(directory: Path, summary: Summary) -> None:
+def write_summary(directory: Path, summary: dict) -> None:
     for name in ("summary.json", "summary.csv", "paired_differences.csv"):
         if (directory / name).exists():
             raise FileExistsError(directory / name)

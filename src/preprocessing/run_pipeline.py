@@ -2,7 +2,7 @@
 """Full preprocessing pipeline: VCF -> Gene PCA -> tokenized tensors.
 
 OOM-safe 2-pass approach:
-  Pass 1: Parse chr1,11,22 → PCA grid search → find optimal K → free
+  Pass 1: Labels + stratified split → K fixed to PCA_CANDIDATES[0] (no VCF parsing)
   Pass 2: Stream all 22 chr one-by-one → PCA immediately → free variants
 Peak RAM ≈ 1 chromosome (~3-5GB for chr1) + accumulated PCA features (~2GB)
 
@@ -93,7 +93,7 @@ def main() -> None:
     # Step 0.5: Labels + stratified split *before* PCA.
     # The gene PCA bases must be fit on train samples only (otherwise val/test
     # genotypes leak into every gene's loadings). Computing indices up front
-    # lets us pass train_indices through the grid search and the streaming PCA.
+    # lets us pass train_indices through the streaming PCA.
     labels = create_hierarchical_labels(PANEL_PATH)
     train_idx, val_idx, test_idx = compute_split_indices(
         labels["pop_labels"],

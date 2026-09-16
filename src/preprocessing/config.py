@@ -25,7 +25,7 @@ PER_CHROM_VCF_PATTERN = "ALL.chr{chrom}.phase3_shapeit2_mvncall_integrated_v5b.2
 CHROMOSOMES = list(range(1, 23))
 PREPROCESS_SEED = 20260327
 
-# PCA grid search
+# Per-gene component counts; run_pipeline.py uses PCA_CANDIDATES[0] as K.
 PCA_CANDIDATES = [4, 6, 8, 10, 12, 16]
 
 # Per-gene dimensionality reduction backend.
