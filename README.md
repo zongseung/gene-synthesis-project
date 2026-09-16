@@ -106,6 +106,13 @@ FiLM: output = γ · input + β
 
 ## Model Architecture
 
+### 전체 개요
+
+![HiPoDiT overview: GLM-PCA encoder, latent diffusion, hierarchical conditioning, HiPoDiT-T decoder](docs/figures/hipodit_overview.svg)
+
+* **(a) Overview**: 실제 유전형 `G_i` 를 동결된 GLM-PCA 인코더 `E` 가 유전자별 잠재 `z_0 ∈ ℝ^{K×G}` 로 줄인다. diffusion 은 이 잠재 공간에서만 학습하고, 생성 시에는 `z_T ~ N(0, I)` 에서 DDIM 으로 `ẑ_0` 를 복원한다. cohort `c` 와 superpop `s(c)` 의 계층 임베딩, timestep `t` 가 MLP `h` 를 거쳐 denoiser 에 FiLM 파라미터 `(γ, β, α)` 로 들어간다.
+* **(b) HiPoDiT-T decoder**: 역정규화한 유전자 잠재에서 동결된 GLM-PCA 계수 `α_j, v_j` 와 적합한 cohort×SNP offset `u_{c,j}` 로 logit 을 만들고, SNP별 heterozygosity tilt `τ_j` 를 더해 `{0, 1, 2}` 를 SNP마다 독립으로 샘플링한다. tilt 는 기대 dosage `E[G_ij] = 2p_ij` 를 닫힌 해로 정확히 보존한다. 이 디코더는 chr17 고정 패널 실험(`scripts/hipodit_*.py`, `src/models/genotype_decoder.py`) 경로다.
+
 ### Default config (baseline `configs/default.yaml`)
 
 | 항목 | 값 | 근거 |
@@ -126,6 +133,15 @@ FiLM: output = γ · input + β
 | `n_superpops (+null)` | 5 (+1 = 6) | `model.n_superpops` |
 | `dropout` | 0.1 | `model.dropout` |
 | **Total parameters** | **9,331,588 (~9.33 M)** | bf16 ≈ 18 MB weight |
+
+### Denoiser 구조 한눈에 보기
+
+![HiPoDiT denoiser: FiLM ResBlock U-shape with DiT core, conditioning MLP, FiLM ResBlock and adaLN-Zero DiT block](docs/figures/hipodit_denoiser.svg)
+
+* **(a) Denoiser `ε_θ(z_t, t, c)`**: FiLM ResBlock 인코더 → Patchify → DiT 블록 × L → Unpatchify → FiLM ResBlock 디코더. 인코더 출력을 디코더에 concat skip 으로 넘긴다. 그림은 블록 수를 줄여 그린 개략도이며 기본 설정은 인코더 5블록(다운샘플 4회, latent 길이 G/16)이다. 정확한 채널·길이는 아래 [최상위 데이터 흐름](#최상위-데이터-흐름-hybridcnnditfilmforward)을 따른다.
+* **(b) Conditioning**: `c`, `s(c)` 를 각각 임베딩해 concat·MLP 로 `e_c` 를 만들고, sinusoid + MLP 로 만든 `e_t` 와 다시 concat·MLP 해서 `h` 를 얻는다. `h` 는 ResBlock마다 Linear 로 `(γ, β)`, DiT 블록마다 `(γ, β, α)` 가 된다.
+* **(c) FiLM ResBlock**: Conv1d → GroupNorm → `γ·x + β` → SiLU → Conv1d → GroupNorm → SiLU, 채널이 바뀌면 1×1 conv residual. skip 은 stride-2 다운샘플 직전에서 뽑는다. 디코더 블록은 먼저 ×2 업샘플하고 skip 을 concat 한다.
+* **(d) DiT block (adaLN-Zero)**: LayerNorm → scale·shift → Multi-Head Self-Attention → `α` scale → residual, 이어서 같은 구조의 pointwise MLP. `α` 를 내는 Linear 가 0으로 초기화되어 DiT 는 identity 에서 학습을 시작한다.
 
 ### 최상위 데이터 흐름 (`HybridCNNDiTFiLM.forward`)
 
