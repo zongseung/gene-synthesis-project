@@ -1,0 +1,87 @@
+{
+  "arm_set": "t",
+  "assertions_passed": [
+    "splits_disjoint_and_complete",
+    "prepare_report_fit_split_is_train",
+    "prepare_report_glm_family_is_binomial",
+    "prepare_report_maf_filter_is_train_only",
+    "normalization_stats_fit_split_is_train",
+    "glm_pca_parameters_are_binomial_with_two_trials",
+    "offsets_match_gene_variant_map",
+    "positions_ascend_within_every_gene",
+    "observed_calls_are_diploid_dosages",
+    "cohort_labels_within_range",
+    "label_hierarchy_maps_every_cohort"
+  ],
+  "components": 4,
+  "created_utc": "2026-09-15T09:24:04.143283+00:00",
+  "decoder_inputs_from_test": false,
+  "draws": 20,
+  "gate": "gate1_prime",
+  "gene_count": 8,
+  "glm_iterations": 1000,
+  "lambda_a": 1.0,
+  "lambda_tilt": 1.0,
+  "lambda_u": 1.0,
+  "latent_generator_baseline": "standard",
+  "maf_filter": "train-only >= 0.01",
+  "metric_seeds": 5,
+  "pilot": {
+    "dir": "/home/user/gene-synthesis-project/outputs/diagnostics/hipodit_multiseed_20260915",
+    "manifest_sha256": "a18df76d177740d47a9e68bbb63dd1b8069635fd802fba0a774f162b358e8532",
+    "metrics": {
+      "af_mae": {
+        "fisher": 0.024310514175983046,
+        "standard": 0.024099722991689748
+      },
+      "local_dosage_covariance_mae": {
+        "fisher": 0.021509425044751684,
+        "standard": 0.02165389037966306
+      }
+    },
+    "parameters": {
+      "batch_size": 64,
+      "ddim_steps": 100,
+      "device": "cuda",
+      "samples": 251,
+      "steps": 1000
+    },
+    "seeds": [
+      20260327,
+      20260328,
+      20260329,
+      20260330,
+      20260331
+    ],
+    "summary_sha256": "6e3a4b48d5b4206b5eff57491988ce3b3ea2273fe749f529d1356c07b4e0477d"
+  },
+  "plan_revision": "rev2-\u00a79",
+  "prepared_dir": "/home/user/gene-synthesis-project/outputs/diagnostics/hipodit_fisher_20260915_unique",
+  "prepared_sha256": {
+    "dataset.npz": "81bb500665192efdafd4008f32f77824e4510454f5adc914227f5eca7586f81c",
+    "feature_schedule.npy": "ca92a2f014820ff257640dae6d193657c008bc8c7377de046a2b6ba36f0c6e43",
+    "fisher_information.npy": "20be7fb5550d6cf3af246e3d1e1877598a69381e40bc9c0c25d619e0af3d573a",
+    "gene_variant_map.json": "cb7f30c8723b916605a865373f1ed3d5206d84c6a9909ac56129e925bb6c55dc",
+    "genotypes.npz": "1eee0952d8bbbdf7e0a7cfdcf67cfbb2de5721af21ae1f46aaa73c4a01e195df",
+    "glm_pca_parameters.pkl": "e0dc0a89cbda1245fd7451ae60de75979e6288d5cab3079b102817f912a557ff",
+    "label_hierarchy.pkl": "ef1d6eb2a0ffa278f3265a46323e00a34dc47d975a1d43237ac0176baea6e3ce",
+    "normalization_stats.pkl": "86a50d6639c34e6cd834df384ffb0beeb02250830b5626f6f40565a63fd20e5f",
+    "prepare_report.json": "d028488d8a802045544fe39b128785be8fd727fd542c1a7e9094c5d005177fdb",
+    "preprocessing_metadata.json": "f29857aa819e842091e0f31361915d0e454eaf6caf6c530691dc8b38f2e9fb1d",
+    "split_manifest.json": "02a8f9299d2901921d2dc18d36eaa38c99423b04ae62773f1775419db7c21155",
+    "test_data.pkl": "959758d1354c1fb4571d03797bc105e5dc9f66936d30ae845c811914684c47a2",
+    "train_data.pkl": "5c6c98b781cbb82daf86a934dc39bae289e677436b9f7a866ed5a203b5840607",
+    "val_data.pkl": "904ba98a1e651c989788b425213b2dde29428cbf081f41d7b182338145f77cd2"
+  },
+  "seed": 20260327,
+  "snp_count": 361,
+  "source_sha256": {
+    "scripts/hipodit_genotype_check.py": "dc2a4c01d577326d39523445026ed9e298368e33e74a38832c5a8c73d1de692e",
+    "src/models/genotype_decoder.py": "356ee6d9662eec61267e7cedee58f45a4c82d7b1c2702e6466c8c47d80c03650"
+  },
+  "split_sizes": {
+    "test": 251,
+    "train": 2002,
+    "validation": 251
+  }
+}

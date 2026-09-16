@@ -1,0 +1,387 @@
+{
+  "status": "complete",
+  "mode": "decoder",
+  "seed_count": 10,
+  "eval_split": "test",
+  "decoder_dir": "/home/user/gene-synthesis-project/outputs/diagnostics/hipodit_t_oracle_20260915_pooled",
+  "decoder_sha256": "6e65544d086841b13ac6b09a90c67e6d2a23ab5a6f56bb2243e28acbd614f0c7",
+  "bootstrap": {
+    "draws": 2000,
+    "seed": 20260915,
+    "interval": "95% percentile"
+  },
+  "metrics": {
+    "af_mae": {
+      "B0_mean": 0.024378938539470922,
+      "T_mean": 0.024213947533963866,
+      "difference_mean": -0.0001649910055070574,
+      "difference_sd": 0.0005248055687522141,
+      "ci_low": -0.0004778807208837777,
+      "ci_high": 0.00014900232863559668
+    },
+    "cohort_af_mae": {
+      "B0_mean": 0.07258043895163009,
+      "T_mean": 0.06801020539940207,
+      "difference_mean": -0.004570233552228015,
+      "difference_sd": 0.0004430049916301119,
+      "ci_low": -0.004824441813188357,
+      "ci_high": -0.004320601605227641
+    },
+    "genotype_proportion_tv": {
+      "B0_mean": 0.0984185143084173,
+      "T_mean": 0.07035569632826036,
+      "difference_mean": -0.02806281798015694,
+      "difference_sd": 0.001082519439744801,
+      "ci_low": -0.028689728620145467,
+      "ci_high": -0.02740944808025516
+    },
+    "heterozygosity_mae": {
+      "B0_mean": 0.09637461235390846,
+      "T_mean": 0.06692675282250499,
+      "difference_mean": -0.029447859531403477,
+      "difference_sd": 0.0011363766645472169,
+      "ci_low": -0.030139856088112926,
+      "ci_high": -0.028799924953923917
+    },
+    "ld_r2_mae": {
+      "B0_mean": 0.0758938289505428,
+      "T_mean": 0.06075609410912058,
+      "difference_mean": -0.015137734841422215,
+      "difference_sd": 0.0017551606207929454,
+      "ci_low": -0.016165318642617516,
+      "ci_high": -0.014104717970451368
+    },
+    "local_dosage_covariance_mae": {
+      "B0_mean": 0.022109151232619032,
+      "T_mean": 0.021380813927205103,
+      "difference_mean": -0.0007283373054139304,
+      "difference_sd": 0.00048763224089808625,
+      "ci_low": -0.0010241745981157532,
+      "ci_high": -0.0004430404475581429
+    },
+    "ld_r2_mae_by_bin_0": {
+      "B0_mean": 0.14729420681644503,
+      "T_mean": 0.11448978517572345,
+      "difference_mean": -0.03280442164072158,
+      "difference_sd": 0.0054100252273566515,
+      "ci_low": -0.035576160345345165,
+      "ci_high": -0.029013189323768673
+    },
+    "ld_r2_mae_by_bin_1": {
+      "B0_mean": 0.09768848868219313,
+      "T_mean": 0.07315442766983568,
+      "difference_mean": -0.024534061012357444,
+      "difference_sd": 0.003889974977066052,
+      "ci_low": -0.026777813921010182,
+      "ci_high": -0.02232409762586872
+    },
+    "ld_r2_mae_by_bin_2": {
+      "B0_mean": 0.06488309707522438,
+      "T_mean": 0.05435234271747124,
+      "difference_mean": -0.010530754357753146,
+      "difference_sd": 0.0025992278555165616,
+      "ci_low": -0.012074199335615007,
+      "ci_high": -0.008894377873065636
+    },
+    "ld_r2_mae_by_bin_3": {
+      "B0_mean": 0.06120383990570515,
+      "T_mean": 0.050059057766985306,
+      "difference_mean": -0.011144782138719847,
+      "difference_sd": 0.0020267580543868453,
+      "ci_low": -0.012291017160506788,
+      "ci_high": -0.010035521754087864
+    },
+    "classifier_accuracy": {
+      "B0_mean": 0.1254980079681275,
+      "T_mean": 0.2613545816733068,
+      "difference_mean": 0.13585657370517928,
+      "difference_sd": 0.03167546438593374,
+      "ci_low": 0.11713147410358564,
+      "ci_high": 0.15498007968127492
+    },
+    "classifier_macro_auc": {
+      "B0_mean": 0.7244193563602007,
+      "T_mean": 0.8553411095559611,
+      "difference_mean": 0.13092175319576035,
+      "difference_sd": 0.009988732123907097,
+      "ci_low": 0.12479113357298063,
+      "ci_high": 0.13652557467266963
+    }
+  },
+  "paired_differences": [
+    {
+      "seed": 20260327,
+      "af_mae": -0.0005683636644557497,
+      "cohort_af_mae": -0.005087633203976691,
+      "genotype_proportion_tv": -0.0282195318449195,
+      "heterozygosity_mae": -0.028969992605754266,
+      "ld_r2_mae": -0.016130264730178576,
+      "local_dosage_covariance_mae": -0.0012750141506385794,
+      "ld_r2_mae_by_bin_0": -0.03652349365116761,
+      "ld_r2_mae_by_bin_1": -0.0268495575019176,
+      "ld_r2_mae_by_bin_2": -0.011680403406031457,
+      "ld_r2_mae_by_bin_3": -0.011228904956142774,
+      "classifier_accuracy": 0.14342629482071712,
+      "classifier_macro_auc": 0.13590209603135994
+    },
+    {
+      "seed": 20260328,
+      "af_mae": 2.2072375318669957e-05,
+      "cohort_af_mae": -0.004611316661178144,
+      "genotype_proportion_tv": -0.02809813378066682,
+      "heterozygosity_mae": -0.02842921941044685,
+      "ld_r2_mae": -0.014240040066971285,
+      "local_dosage_covariance_mae": -0.0006040305352411623,
+      "ld_r2_mae_by_bin_0": -0.03068485526986159,
+      "ld_r2_mae_by_bin_1": -0.025265699300277708,
+      "ld_r2_mae_by_bin_2": -0.014136878108940272,
+      "ld_r2_mae_by_bin_3": -0.008443845246539065,
+      "classifier_accuracy": 0.19521912350597612,
+      "classifier_macro_auc": 0.13653822130340432
+    },
+    {
+      "seed": 20260329,
+      "af_mae": -0.0008828950127467983,
+      "cohort_af_mae": -0.004149582335177884,
+      "genotype_proportion_tv": -0.02668550176027193,
+      "heterozygosity_mae": -0.02853958128704022,
+      "ld_r2_mae": -0.015234990417067794,
+      "local_dosage_covariance_mae": -0.00108381457662831,
+      "ld_r2_mae_by_bin_0": -0.03619349680994549,
+      "ld_r2_mae_by_bin_1": -0.020324599437964136,
+      "ld_r2_mae_by_bin_2": -0.011111699351288813,
+      "ld_r2_mae_by_bin_3": -0.011569995644529263,
+      "classifier_accuracy": 0.14741035856573703,
+      "classifier_macro_auc": 0.1297105793606439
+    },
+    {
+      "seed": 20260330,
+      "af_mae": -6.069903212633718e-05,
+      "cohort_af_mae": -0.004638597782642098,
+      "genotype_proportion_tv": -0.029643200052973703,
+      "heterozygosity_mae": -0.030669565505291846,
+      "ld_r2_mae": -0.016548590224343275,
+      "local_dosage_covariance_mae": -0.00045261333157306516,
+      "ld_r2_mae_by_bin_0": -0.034026287186063084,
+      "ld_r2_mae_by_bin_1": -0.025748208709771,
+      "ld_r2_mae_by_bin_2": -0.013613512798344364,
+      "ld_r2_mae_by_bin_3": -0.01203491067842638,
+      "classifier_accuracy": 0.07968127490039842,
+      "classifier_macro_auc": 0.13448476130786047
+    },
+    {
+      "seed": 20260331,
+      "af_mae": 2.2072375318669957e-05,
+      "cohort_af_mae": -0.004048636804869513,
+      "genotype_proportion_tv": -0.02623301806623919,
+      "heterozygosity_mae": -0.027943627153436137,
+      "ld_r2_mae": -0.012561506419741311,
+      "local_dosage_covariance_mae": -0.0016043083163376215,
+      "ld_r2_mae_by_bin_0": -0.03084449489624881,
+      "ld_r2_mae_by_bin_1": -0.020681740936424248,
+      "ld_r2_mae_by_bin_2": -0.0068673082586644535,
+      "ld_r2_mae_by_bin_3": -0.009160427865850536,
+      "classifier_accuracy": 0.11553784860557768,
+      "classifier_macro_auc": 0.12528338955058005
+    },
+    {
+      "seed": 20260332,
+      "af_mae": 5.518093829667489e-05,
+      "cohort_af_mae": -0.003976263810058833,
+      "genotype_proportion_tv": -0.027336636832172703,
+      "heterozygosity_mae": -0.028738232664908242,
+      "ld_r2_mae": -0.018280385256352553,
+      "local_dosage_covariance_mae": -0.0007707022841803614,
+      "ld_r2_mae_by_bin_0": -0.036673023668757215,
+      "ld_r2_mae_by_bin_1": -0.02663170570894112,
+      "ld_r2_mae_by_bin_2": -0.011567192372759112,
+      "ld_r2_mae_by_bin_3": -0.015099843166200659,
+      "classifier_accuracy": 0.1155378486055777,
+      "classifier_macro_auc": 0.13670098907846118
+    },
+    {
+      "seed": 20260333,
+      "af_mae": 0.0006952798225381036,
+      "cohort_af_mae": -0.004431594874808181,
+      "genotype_proportion_tv": -0.02783326527684278,
+      "heterozygosity_mae": -0.02975356192956706,
+      "ld_r2_mae": -0.014167801907446147,
+      "local_dosage_covariance_mae": 0.00011610146309637415,
+      "ld_r2_mae_by_bin_0": -0.019375340839197674,
+      "ld_r2_mae_by_bin_1": -0.019887234116832644,
+      "ld_r2_mae_by_bin_2": -0.011734849940931151,
+      "ld_r2_mae_by_bin_3": -0.012609376999102313,
+      "classifier_accuracy": 0.16733067729083664,
+      "classifier_macro_auc": 0.13382993497404516
+    },
+    {
+      "seed": 20260334,
+      "af_mae": 0.0003973027557360592,
+      "cohort_af_mae": -0.0051800231163112165,
+      "genotype_proportion_tv": -0.028771341227886243,
+      "heterozygosity_mae": -0.030239154186577785,
+      "ld_r2_mae": -0.016424383344111226,
+      "local_dosage_covariance_mae": -0.0004488576532540277,
+      "ld_r2_mae_by_bin_0": -0.0317778283841723,
+      "ld_r2_mae_by_bin_1": -0.030829210177010985,
+      "ld_r2_mae_by_bin_2": -0.009788008686378587,
+      "ld_r2_mae_by_bin_3": -0.012242799312038484,
+      "classifier_accuracy": 0.13147410358565736,
+      "classifier_macro_auc": 0.14624736140707206
+    },
+    {
+      "seed": 20260335,
+      "af_mae": -0.0004248932248843984,
+      "cohort_af_mae": -0.0051081882106812915,
+      "genotype_proportion_tv": -0.02927900586021566,
+      "heterozygosity_mae": -0.03157453289335732,
+      "ld_r2_mae": -0.012963400508288161,
+      "local_dosage_covariance_mae": -0.0004823496487984802,
+      "ld_r2_mae_by_bin_0": -0.03354009997603938,
+      "ld_r2_mae_by_bin_1": -0.02064771404096989,
+      "ld_r2_mae_by_bin_2": -0.007944896301936656,
+      "ld_r2_mae_by_bin_3": -0.009008668579467104,
+      "classifier_accuracy": 0.11952191235059759,
+      "classifier_macro_auc": 0.11149412467446107
+    },
+    {
+      "seed": 20260336,
+      "af_mae": -0.0009049673880654682,
+      "cohort_af_mae": -0.004470498722576294,
+      "genotype_proportion_tv": -0.028528545099380867,
+      "heterozygosity_mae": -0.029621127677655026,
+      "ld_r2_mae": -0.014825985539721823,
+      "local_dosage_covariance_mae": -0.0006777840205840699,
+      "ld_r2_mae_by_bin_0": -0.03840529572576265,
+      "ld_r2_mae_by_bin_1": -0.028474940193465123,
+      "ld_r2_mae_by_bin_2": -0.006862794352256604,
+      "ld_r2_mae_by_bin_3": -0.010049048938901885,
+      "classifier_accuracy": 0.14342629482071714,
+      "classifier_macro_auc": 0.11902607426971545
+    }
+  ],
+  "test_nll": {
+    "b0_nll": 0.2012232796699075,
+    "t_nll": 0.10962453212210696,
+    "difference": -0.09159874754780054,
+    "ci_low": -0.09563454883958239,
+    "ci_high": -0.087635925060888,
+    "n_individuals": 251,
+    "n_calls": 90611,
+    "split": "test",
+    "bootstrap_draws": 2000,
+    "resampling_unit": "held-out individuals"
+  },
+  "classifier_real_eval": {
+    "classifier_accuracy": 0.27091633466135456,
+    "classifier_macro_auc": 0.8965756361826578,
+    "cohorts_excluded_from_auc": [],
+    "n_eval": 251
+  },
+  "gate3_prime": {
+    "passed": true,
+    "test_nll_improved": true,
+    "cohort_af_mae_improved": true,
+    "heterozygosity_mae_improved": true,
+    "af_mae_guardrail": true,
+    "numbers": {
+      "test_nll": {
+        "b0_nll": 0.2012232796699075,
+        "t_nll": 0.10962453212210696,
+        "difference": -0.09159874754780054,
+        "ci_low": -0.09563454883958239,
+        "ci_high": -0.087635925060888
+      },
+      "cohort_af_mae": {
+        "B0_mean": 0.07258043895163009,
+        "T_mean": 0.06801020539940207,
+        "difference_mean": -0.004570233552228015,
+        "difference_sd": 0.0004430049916301119,
+        "ci_low": -0.004824441813188357,
+        "ci_high": -0.004320601605227641
+      },
+      "heterozygosity_mae": {
+        "B0_mean": 0.09637461235390846,
+        "T_mean": 0.06692675282250499,
+        "difference_mean": -0.029447859531403477,
+        "difference_sd": 0.0011363766645472169,
+        "ci_low": -0.030139856088112926,
+        "ci_high": -0.028799924953923917
+      },
+      "af_mae": {
+        "B0_mean": 0.024378938539470922,
+        "T_mean": 0.024213947533963866,
+        "difference_mean": -0.0001649910055070574,
+        "difference_sd": 0.0005248055687522141,
+        "ci_low": -0.0004778807208837777,
+        "ci_high": 0.00014900232863559668
+      }
+    },
+    "resampling_unit": {
+      "test_nll": "held-out individuals",
+      "paired_metrics": "seeds"
+    },
+    "descriptive_only": {
+      "ld_r2_mae": {
+        "B0_mean": 0.0758938289505428,
+        "T_mean": 0.06075609410912058,
+        "difference_mean": -0.015137734841422215,
+        "difference_sd": 0.0017551606207929454,
+        "ci_low": -0.016165318642617516,
+        "ci_high": -0.014104717970451368
+      },
+      "ld_r2_mae_by_bin_0": {
+        "B0_mean": 0.14729420681644503,
+        "T_mean": 0.11448978517572345,
+        "difference_mean": -0.03280442164072158,
+        "difference_sd": 0.0054100252273566515,
+        "ci_low": -0.035576160345345165,
+        "ci_high": -0.029013189323768673
+      },
+      "ld_r2_mae_by_bin_1": {
+        "B0_mean": 0.09768848868219313,
+        "T_mean": 0.07315442766983568,
+        "difference_mean": -0.024534061012357444,
+        "difference_sd": 0.003889974977066052,
+        "ci_low": -0.026777813921010182,
+        "ci_high": -0.02232409762586872
+      },
+      "ld_r2_mae_by_bin_2": {
+        "B0_mean": 0.06488309707522438,
+        "T_mean": 0.05435234271747124,
+        "difference_mean": -0.010530754357753146,
+        "difference_sd": 0.0025992278555165616,
+        "ci_low": -0.012074199335615007,
+        "ci_high": -0.008894377873065636
+      },
+      "ld_r2_mae_by_bin_3": {
+        "B0_mean": 0.06120383990570515,
+        "T_mean": 0.050059057766985306,
+        "difference_mean": -0.011144782138719847,
+        "difference_sd": 0.0020267580543868453,
+        "ci_low": -0.012291017160506788,
+        "ci_high": -0.010035521754087864
+      }
+    }
+  },
+  "raw_reports": [
+    "/home/user/gene-synthesis-project/outputs/diagnostics/hipodit_t_multiseed_20260915/seed_20260327/standard/diagnostic_report.json",
+    "/home/user/gene-synthesis-project/outputs/diagnostics/hipodit_t_multiseed_20260915/seed_20260328/standard/diagnostic_report.json",
+    "/home/user/gene-synthesis-project/outputs/diagnostics/hipodit_t_multiseed_20260915/seed_20260329/standard/diagnostic_report.json",
+    "/home/user/gene-synthesis-project/outputs/diagnostics/hipodit_t_multiseed_20260915/seed_20260330/standard/diagnostic_report.json",
+    "/home/user/gene-synthesis-project/outputs/diagnostics/hipodit_t_multiseed_20260915/seed_20260331/standard/diagnostic_report.json",
+    "/home/user/gene-synthesis-project/outputs/diagnostics/hipodit_t_multiseed_20260915/seed_20260332/standard/diagnostic_report.json",
+    "/home/user/gene-synthesis-project/outputs/diagnostics/hipodit_t_multiseed_20260915/seed_20260333/standard/diagnostic_report.json",
+    "/home/user/gene-synthesis-project/outputs/diagnostics/hipodit_t_multiseed_20260915/seed_20260334/standard/diagnostic_report.json",
+    "/home/user/gene-synthesis-project/outputs/diagnostics/hipodit_t_multiseed_20260915/seed_20260335/standard/diagnostic_report.json",
+    "/home/user/gene-synthesis-project/outputs/diagnostics/hipodit_t_multiseed_20260915/seed_20260336/standard/diagnostic_report.json"
+  ],
+  "alignment": [
+    "All declared runs complete",
+    "Prepared/source hashes unchanged",
+    "Configs equal except output path",
+    "Labels, normalization, evaluation counts and runtime versions equal",
+    "Same decoder digest, eval split and Gate 2' verdict in every run"
+  ],
+  "limitation": "One frozen split opened once; seeds are the replicates for the end-to-end metrics and held-out individuals for the deterministic oracle NLL. LD r-squared is descriptive, not evidence of linkage."
+}
