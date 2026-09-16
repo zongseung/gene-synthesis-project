@@ -15,8 +15,6 @@ import numpy as np
 import os
 
 from src.preprocessing.config import (
-    MAF_THRESHOLD,
-    MAX_VARIANTS_PER_GENE,
     PER_CHROM_VCF_DIR,
     PER_CHROM_VCF_PATTERN,
 )

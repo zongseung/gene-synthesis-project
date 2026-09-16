@@ -188,7 +188,6 @@ def compute_training_loss(
 
     # Pre-sample noise so we can reuse it for aux loss (avoid double forward)
     noise = torch.randn_like(x)
-    x_t = diffusion.q_sample(x, t, noise)
 
     loss_dict = diffusion.p_losses(
         model=model,
@@ -226,6 +225,7 @@ def compute_training_loss(
 
         # Reuse pred_noise from p_losses (same noise, same x_t, no double forward)
         pred_noise = loss_dict["pred_noise"]
+        x_t = diffusion.q_sample(x, t, noise)
         pred_x0 = diffusion._predict_x0_from_eps(x_t, t, pred_noise)
         pred_x0 = pred_x0.clamp(-6, 6)
 

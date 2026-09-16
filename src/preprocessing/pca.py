@@ -13,10 +13,14 @@ from sklearn.decomposition import PCA
 
 from src.preprocessing.config import (
     CHROMOSOMES,
+    DIM_RED_METHOD,
+    GLM_PCA_FAMILY,
+    GLM_PCA_MAX_ITER,
     MAF_THRESHOLD,
     MAX_VARIANTS_PER_GENE,
     PROCESSED_DIR,
 )
+from src.preprocessing.dim_reduction import reduce_single_gene
 from src.preprocessing.vcf_parser import process_one_chromosome
 
 logger = logging.getLogger(__name__)
@@ -127,10 +131,6 @@ def stream_vcf_and_pca(
         gene_loci = {gene["name"]: gene for gene in chrom_genes}
 
         for gene_name in sorted(gene_matrices.keys()):
-            from src.preprocessing.config import (
-                DIM_RED_METHOD, GLM_PCA_FAMILY, GLM_PCA_MAX_ITER,
-            )
-            from src.preprocessing.dim_reduction import reduce_single_gene
             result = reduce_single_gene(
                 method=DIM_RED_METHOD,
                 gene_name=gene_name,

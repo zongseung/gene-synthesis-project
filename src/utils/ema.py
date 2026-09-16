@@ -6,7 +6,6 @@ Default decay of 0.9999 follows standard practice for diffusion models.
 
 from __future__ import annotations
 
-import copy
 from typing import Any
 
 import torch

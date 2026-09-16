@@ -25,16 +25,14 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
-import shutil
 import sys
-import time
 from pathlib import Path
 
 import numpy as np
 import torch
 import torch.distributed as dist
 import torch.nn as nn
-from torch.utils.data import DataLoader, DistributedSampler
+from torch.utils.data import DataLoader
 
 # Allow direct execution: torchrun src/training/trainer.py
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -45,7 +43,7 @@ if _PROJECT_ROOT not in sys.path:
 # Project imports
 from src.data.dataloader import create_dataloaders
 from src.models import GaussianDiffusion, HybridCNNDiTFiLM
-from src.utils.config import load_config, parse_args_with_config
+from src.utils.config import parse_args_with_config
 from src.utils.ddp import cleanup_ddp, get_rank, get_world_size, is_main_process, setup_ddp
 from src.training.losses import compute_training_loss
 from src.utils.ema import EMAModel

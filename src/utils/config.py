@@ -8,7 +8,6 @@ Loads nested YAML config and supports dot-notation CLI overrides
 from __future__ import annotations
 
 import argparse
-import copy
 from pathlib import Path
 from typing import Any
 

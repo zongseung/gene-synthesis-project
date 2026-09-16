@@ -7,7 +7,6 @@ runs. Degrades gracefully if wandb is not installed.
 from __future__ import annotations
 
 import logging
-import os
 from typing import Any
 
 from src.utils.ddp import is_main_process
