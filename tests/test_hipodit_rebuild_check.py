@@ -90,7 +90,12 @@ def test_dataloader_uses_validated_processed_directory(tmp_path: Path) -> None:
         json.dumps({"dim_reduction_method": "glm_pca"})
     )
     config = {
-        "data": {"processed_dir": str(tmp_path), "dim_reduction_method": "glm_pca"},
+        "data": {
+            "processed_dir": str(tmp_path),
+            "dim_reduction_method": "glm_pca",
+            "gene_size": 8,
+            "num_channels": 2,
+        },
         "training": {"batch_size": 2, "num_workers": 0},
     }
 
@@ -98,6 +103,14 @@ def test_dataloader_uses_validated_processed_directory(tmp_path: Path) -> None:
 
     assert len(train.dataset) == 4
     assert len(validation.dataset) == 4
+
+    config["data"]["gene_size"] = 24576
+    try:
+        create_dataloaders(config)
+    except ValueError as error:
+        assert "gene_size" in str(error)
+    else:
+        raise AssertionError("a gene_size mismatch with the processed tensors must be rejected")
 
 
 def test_dataloader_rejects_unproven_preprocessing_method(tmp_path: Path) -> None:

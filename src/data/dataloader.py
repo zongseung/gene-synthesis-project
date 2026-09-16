@@ -64,6 +64,13 @@ def create_dataloaders(
     # Create datasets
     train_dataset = GenotypeDataset(data_path=train_path)
     val_dataset = GenotypeDataset(data_path=val_path)
+    expected = (data_cfg["gene_size"], data_cfg["num_channels"])
+    for dataset, path in ((train_dataset, train_path), (val_dataset, val_path)):
+        if tuple(dataset.x_data.shape[1:]) != expected:
+            raise ValueError(
+                f"{path} has (gene_size, K)={tuple(dataset.x_data.shape[1:])}, config expects "
+                f"{expected}; update data.gene_size/num_channels from the preprocessing log"
+            )
 
     batch_size = training_cfg["batch_size"]
     num_workers = training_cfg.get("num_workers", 4)
