@@ -37,12 +37,13 @@ python src/training/trainer.py --config configs/default.yaml --single_gpu
 # Inference (generate synthetic samples)
 python src/inference/generator.py --config configs/default.yaml --model_path outputs/run_001/best_model.pth
 
-# Evaluation (parallel)
-python src/evaluation/run_evaluation.py --config configs/default.yaml --syn_dir outputs/run_001/synthetic_samples
+# Evaluation (DUPI / UI / PI + distribution distances in PCA(2) space)
+python scripts/evaluate_synthetic_metrics.py --syn-dir outputs/run_001/synthetic_samples --out-dir outputs/run_001/evaluation_metrics
 
-# Hyperparameter sweep
-wandb sweep configs/sweep.yaml --project HiPoDiT
-wandb agent <sweep_id>
+# Hyperparameter sweep (wandb) — configs/sweep.yaml is NOT in the repo (configs/ holds only
+# default.yaml). Write the sweep config first, then:
+# wandb sweep configs/sweep.yaml --project HiPoDiT
+# wandb agent <sweep_id>
 
 # Tests
 pytest tests/
@@ -65,8 +66,8 @@ src/
 │       └── dit.py           # DiTBlock (AdaLN-Zero = FiLM), DiTCore, PatchEmbed1D
 ├── training/             # DDP trainer, EMA, losses (masked_mse, min_snr, mmd)
 ├── inference/            # DDIM sampler, CFG, population-conditional generation
-├── evaluation/           # Fidelity, structure, utility, privacy, robustness (parallel)
-└── utils/                # DDP setup, .pth checkpoint, wandb ExperimentLogger
+├── evaluation/           # DUPI/UI/PI, distribution distances (W2, MMD-RBF), PCA(2) compare
+└── utils/                # DDP setup, config loading, EMA, wandb ExperimentLogger
 ```
 
 **Data flow**: `(B, C, gene_size)` → CNN encoder [FiLM] → Patchify → DiT [AdaLN-Zero] → Un-patchify → CNN decoder [FiLM] + skips → `(B, C, gene_size)`. 현재 기본 설정은 `C=4`, `gene_size=24576`.
@@ -79,8 +80,8 @@ src/
 - **DDP on 2 GPUs**: Always `torchrun --nproc_per_node=2`. Logging/saving on rank 0 only. `DistributedSampler` with `set_epoch()`.
 - **No early stopping**: Run full epochs, track best by `val_reconstruction_error`, save `best_model.pth`.
 - **Optimizer**: AdamW with cosine warmup scheduler.
-- **All time-intensive ops parallelized**: VCF parsing (22 workers), gene PCA (joblib), evaluation metrics (ProcessPoolExecutor).
-- **Domain-driven**: CNN captures local LD, DiT captures long-range gene interactions, FiLM modulates per population, `enforce_zeros` + `zero_mask` preserves biological constraints.
+- **Time-intensive preprocessing parallelized**: VCF parsing (22 workers), gene PCA (joblib). Evaluation (`scripts/evaluate_synthetic_metrics.py`) is single-process; it caches loaded tensors and PCA coordinates instead.
+- **Domain-driven**: CNN captures local LD, DiT captures long-range gene interactions, FiLM modulates per population. 생물학적 제약(항상 0인 위치)은 모델이 아니라 `GaussianDiffusion._apply_zero_mask`가 강제한다 — `enforce_zeros` 플래그 + `zero_mask` 버퍼로 q_sample·p_sample·DDIM 각 스텝과 손실에 적용된다. 모델 `forward`에는 zero-mask 경로가 없다.
 - **Model saves as .pth**: `torch.save({'model_state_dict': model.module.state_dict(), 'config': config, ...}, 'best_model.pth')`.
 
 ## chr17 genotype-decoder study (2026-09, 현재 authoritative 실험 경로)

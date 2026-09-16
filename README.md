@@ -166,11 +166,12 @@ flowchart TD
     end
 
     subgraph OUT["OUTPUT"]
-        Z["enforce_zeros<br/>output × (~zero_mask)"]
         OUTX["ε̂ : (B, 4, 24576)"]
+        Z["zero_mask는 모델 밖에서 적용<br/>GaussianDiffusion._apply_zero_mask"]
     end
 
-    X --> E1 --> E2 --> E3 --> E4 --> E5 --> P --> D --> U --> D1 --> D2 --> D3 --> D4 --> D5 --> FC --> Z --> OUTX
+    X --> E1 --> E2 --> E3 --> E4 --> E5 --> P --> D --> U --> D1 --> D2 --> D3 --> D4 --> D5 --> FC --> OUTX
+    OUTX -. 이후 diffusion 스텝/손실에서 .-> Z
 
     T --> FG
     Y --> PE --> FG
@@ -205,6 +206,8 @@ flowchart TD
     class D1,D2,D3,D4,D5,FC dec
     class X,T,Y,Z,OUTX io
 ```
+
+> **참고**: `HybridCNNDiTFiLM.forward`는 zero-mask를 적용하지 않는다. 제약은 `GaussianDiffusion._apply_zero_mask`가 `q_sample`·`p_sample`·DDIM 각 스텝과 손실에서 강제한다.
 
 > **참고**: 인코더는 블록 1–4가 stride-2 downsample을 수행하고 마지막 블록(#5)은 채널만 확장한다. 디코더는 이 구조를 대칭으로 반전해 앞 4개 블록이 ConvTranspose1d로 2배 upsample하고 마지막 블록은 길이를 유지한다. 인코더가 4번 다운샘플하므로 latent 길이는 24576 / 16 = **1,536**, patch_size 16 으로 토큰 수는 **96** 이다.
 
@@ -873,11 +876,10 @@ flowchart TD
     VCF["ALL.autosomes.phase3.genotypes.vcf.gz<br/>(13.9 GB, chr1–22)"]
     PANEL["1KG sample panel<br/>(2,504 samples · 26 pops · 5 superpops)"]
 
-    subgraph PASS1["PASS 1 — K determination"]
-        P1A["VCF parse: chr1, chr11, chr22 only<br/>MAF ≥ 0.01 filter"]
-        P1B["Gene annotation (RefGene)"]
-        P1C["GLM-PCA grid search<br/>K candidates: [4, 6, 8, 10, 12, 16]<br/>Marginal Gain Elbow"]
-        P1D["release memory"]
+    subgraph PASS1["PASS 1 — setup (split 결정 + K 고정)"]
+        P1A["Gene annotation (RefGene)<br/>gene_coords"]
+        P1B["Pre-PCA stratified split<br/>train / val / test (seed = 20260327)"]
+        P1C["K = PCA_CANDIDATES[0] = 4 (고정)<br/>grid search 경로는 없음"]
     end
 
     subgraph PASS2["PASS 2 — full streaming transform"]
@@ -896,15 +898,16 @@ flowchart TD
 
     OUT["data/processed/<br/>gene_pca_features.pkl<br/>train_data.pkl · test_data.pkl<br/>normalization_stats.pkl<br/>label_hierarchy.pkl<br/>zero_mask.pt<br/>split_manifest.json<br/>preprocessing_metadata.json"]
 
-    VCF --> P1A --> P1B --> P1C --> P1D
-    PANEL --> P1A
-    P1D --> P2A --> P2B --> P2C
+    P1A --> P1C
+    PANEL --> P1B --> P1C
+    P1C --> P2A --> P2B --> P2C
+    VCF --> P2A
     P2C --> F1 --> F2 --> F3 --> F4 --> F5 --> OUT
 
     classDef p1 fill:#bfdbfe,stroke:#1e40af,color:#000
     classDef p2 fill:#bbf7d0,stroke:#166534,color:#000
     classDef fin fill:#fde68a,stroke:#b45309,color:#000
-    class P1A,P1B,P1C,P1D p1
+    class P1A,P1B,P1C p1
     class P2A,P2B,P2C p2
     class F1,F2,F3,F4,F5 fin
 ```
@@ -1019,10 +1022,10 @@ gene-synthesis-project/
 │
 ├── src/
 │   ├── preprocessing/
-│   │   ├── config.py               # 전처리 상수 (경로, PCA 후보, MAF 등)
+│   │   ├── config.py               # 전처리 상수 (경로, PCA_CANDIDATES[0]=K, MAF 등)
 │   │   ├── vcf_parser.py           # VCF 파싱 (Rust 바인딩 지원)
 │   │   ├── gene_annotation.py      # RefGene 유전자 어노테이션
-│   │   ├── pca.py                  # Gene PCA (grid search, Marginal Gain Elbow)
+│   │   ├── pca.py                  # Gene PCA (train-only fit + transform)
 │   │   ├── tokenizer.py            # 토큰화 + alignment 패딩
 │   │   ├── labels.py               # 계층적 레이블, split, 정규화, 저장
 │   │   ├── merge_data.py           # VCF 병합 (22 chr 병렬)
@@ -1062,8 +1065,8 @@ gene-synthesis-project/
 │       ├── config.py               # YAML 로드, CLI override, 검증
 │       ├── ddp.py                  # DDP setup/cleanup
 │       ├── ema.py                  # EMA (decay 0.999, configs/default.yaml)
-│       ├── logger.py               # wandb 래퍼 (rank 0 only, project=HiPoDiT)
-│       └── checkpoint.py           # .pth 저장/로드, top-k 관리
+│       └── logger.py               # wandb 래퍼 (rank 0 only, project=HiPoDiT)
+│                                   # (.pth 저장/top-k 관리는 src/training/trainer.py 안에 있다)
 │
 ├── scripts/
 │   ├── evaluate_synthetic_metrics.py # DUPI + 분포 거리 CLI shim
