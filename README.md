@@ -22,7 +22,7 @@
 
 새 연구 실험은 `scripts/hipodit_rebuild_check.py`의 `prepare`와 `train --schedule standard|fisher`로 실행한다.
 `prepare`는 이항 GLM-PCA와 결측 마스크를 사용하고 SNP 중복 배치를 제거한다.
-기존 전체 유전체 전처리의 Poisson 경로 및 캐시는 별도이며, 새 실험 결과로 자동 대체하지 않는다.
+기존 전체 유전체 전처리의 Poisson 경로 및 캐시는 별도이며 새 실험 결과로 자동 대체하지 않는다.
 
 ---
 
@@ -58,13 +58,13 @@
   superpop 기준: AFR 661 vs AMR 347 → ~1.9x 차이
 ```
 
-**근본 원인**: 절대적인 학습 데이터 부족. 61개 샘플로 인구군 특이적 대립유전자 빈도(AF), 연관 불균형(LD), 하플로타입 다양성을 학습하기에 불충분하다.
+**근본 원인**: 학습 데이터가 절대적으로 모자란다. 61개 샘플로 인구군 특이적 대립유전자 빈도(AF), 연관 불균형(LD), 하플로타입 다양성을 학습하기에 불충분하다.
 
-**결과**: 소수 인구군에서 생성된 합성 유전형은 AF 상관이 낮고, LD 구조가 왜곡되며, 다운스트림 분석(GWAS 보정, 임퓨테이션 패널)에 사용할 수 없다.
+**결과**: 소수 인구군에서 생성된 합성 유전형은 AF 상관이 낮고 LD 구조가 왜곡되며 다운스트림 분석(GWAS 보정, 임퓨테이션 패널)에 사용할 수 없다.
 
 ### 해결: FiLM 기반 계층적 인구군 조건화
 
-HiPoDiT는 세 가지 핵심 메커니즘으로 이 문제를 해결한다:
+HiPoDiT는 이 문제를 세 가지 메커니즘으로 해결한다:
 
 #### 1. 계층적 인구군 임베딩 (Hierarchical Population Embedding)
 
@@ -484,8 +484,8 @@ flowchart LR
 ```mermaid
 flowchart TD
     subgraph IN["INPUT"]
-        R["Real test pkl<br/>(N×K×G)"]
-        S["Synthetic .pt<br/>sample_pop*_*.pt"]
+        R["Real test pkl<br/>(N×G×K, normalized)<br/>→ normalization_stats 로 원 스케일 복원"]
+        S["Synthetic .pt<br/>sample_pop*_*.pt<br/>(generation_meta.json sample_space 확인)"]
         H["label_hierarchy.pkl"]
     end
 
@@ -583,7 +583,7 @@ flowchart TD
 
 ### 2. Structure (구조 보존)
 
-실제 데이터의 인구군 간 유전적 구조(클러스터링, 분화)가 보존되었는지 측정한다.
+실제 데이터의 인구군 간 유전적 구조(클러스터링, 분화)가 보존되었는지 본다.
 
 #### 2.1 PCA Overlap (Silhouette Score)
 
@@ -651,7 +651,7 @@ flowchart TD
 
 ### 4. Privacy (프라이버시)
 
-합성 데이터가 원본 개인의 유전 정보를 노출하지 않는지 측정한다.
+합성 데이터가 원본 개인의 유전 정보를 노출하지 않는지 확인한다.
 
 #### 4.1 NNAA (Nearest Neighbor Adversarial Accuracy)
 
@@ -765,7 +765,7 @@ NNAA vs DUPI:
 
 ### 5. Robustness (강건성) -- 핵심 신규 지표
 
-FiLM 기반 계층적 임베딩의 핵심 가설을 검증하는 지표이다.
+FiLM 기반 계층적 임베딩의 핵심 가설을 검증하는 지표다.
 
 #### 5.1 Population Size vs Quality Correlation
 
@@ -822,6 +822,8 @@ FiLM 기반 계층적 임베딩의 핵심 가설을 검증하는 지표이다.
 
 `scripts/guidance_sweep.py` 로 guidance weight 0.5 에서 학습된 모델의 합성 표본 2,504 개 vs 실제 hold-out 251 개 평가. 산출 디렉터리: `outputs/guidance_sweep_best_full/gw_0p5/evaluation_metrics/`.
 
+> **주의 — 이전 전처리 기준 수치다.** 아래 표의 `n_features_before_pca = 16,000 = 2,000 genes × 8 channels` 가 보여 주듯 K=8 시절 데이터로 측정했다. 현재 파이프라인(K=4, RefGene 좌위 분리, Rust 파서 train-only MAF, 원 스케일 평가)으로 다시 만든 데이터에서는 재측정이 필요하다.
+
 ### Global metrics (`summary_metrics.json`)
 
 | Metric | Observed | Reference / Target |
@@ -848,11 +850,11 @@ FiLM 기반 계층적 임베딩의 핵심 가설을 검증하는 지표이다.
 | EUR | 51 | 503 | 0.294 | **0.973** | 0.495 | 3.52 | 13.2 | 0.401 |
 | SAS | 49 | 489 | 0.571 | 0.937 | 0.731 | 3.31 | 12.7 | 0.272 |
 
-전 superpop 에서 **PI ≥ 0.88** — 어느 인구집단도 nearest-neighbor memorization 흔적 없음. EAS / EUR 은 PI 가 0.97+ 로 매우 높지만 동시에 UI 가 0.5 미만으로 떨어지는데, 이는 합성 표본이 real 분포에서 멀리 떨어진 결과 (centroid drift 4–5 PC unit) 이며 *privacy 우수* 라기보다 *utility 손실의 부산물* 로 읽어야 한다.
+전 superpop 에서 **PI ≥ 0.88** 이라 어느 인구집단도 nearest-neighbor memorization 흔적 없음. EAS / EUR 은 PI 가 0.97+ 로 매우 높지만 동시에 UI 가 0.5 미만으로 떨어지는데 이는 합성 표본이 real 분포에서 멀리 떨어진 결과 (centroid drift 4–5 PC unit) 이며 *privacy 우수* 라기보다 *utility 손실의 부산물* 로 읽어야 한다.
 
 ### Privacy 시각화
 
-`outputs/guidance_sweep_best_full/gw_0p5/privacy_per_superpop.png` 가 두 패널로 위 표를 시각화한다 — (1) DUPI vs 동일분포 benchmark 막대그래프, (2) Privacy / Utility Index 막대그래프 (PI ≥ 0.88 임계선 포함).
+`outputs/guidance_sweep_best_full/gw_0p5/privacy_per_superpop.png` 가 두 패널로 위 표를 시각화한다: (1) DUPI vs 동일분포 benchmark 막대그래프, (2) Privacy / Utility Index 막대그래프 (PI ≥ 0.88 임계선 포함).
 
 ### 1줄 요약 (논문 기재용)
 
@@ -866,8 +868,15 @@ FiLM 기반 계층적 임베딩의 핵심 가설을 검증하는 지표이다.
 data/
 ├── ALL.autosomes.phase3.genotypes.vcf.gz          (13.9 GB, 1KG Phase 3, chr1-22)
 ├── ALL.autosomes.phase3.genotypes.vcf.gz.tbi      (tabix index)
-└── integrated_call_samples_v3.20130502.ALL.panel   (sample→pop→superpop mapping)
+├── integrated_call_samples_v3.20130502.ALL.panel   (sample→pop→superpop mapping)
+└── refGene.txt.gz                                  (RefGene 유전자 좌표, 8 MB)
+
+~/GeneDiffusion/                                    (선택, 있으면 Rust 파서가 우선 사용)
+└── ALL.chr{1..22}.phase3_shapeit2_mvncall_integrated_v5b.20130502.genotypes.vcf.gz (+ .tbi)
 ```
+
+* 위 4개 파일은 `run_pipeline.py` 시작 시 `validate_input_files()` 가 존재를 확인하고, 하나라도 없으면 `FileNotFoundError` 로 멈춘다. `.tbi` 가 없으면 `tabix -p vcf data/ALL.autosomes.phase3.genotypes.vcf.gz` 로 만든다.
+* 염색체별 VCF 경로는 `src/preprocessing/config.py` 의 `PER_CHROM_VCF_DIR` / `PER_CHROM_VCF_PATTERN` 이다. 파일이 있으면 해당 염색체만 읽고, 없으면 병합 VCF 를 처음부터 스캔한다(느림).
 
 ### 전처리 파이프라인 흐름 (OOM-safe 2-pass)
 
@@ -877,34 +886,35 @@ flowchart TD
     PANEL["1KG sample panel<br/>(2,504 samples · 26 pops · 5 superpops)"]
 
     subgraph PASS1["PASS 1 — setup (split 결정 + K 고정)"]
-        P1A["Gene annotation (RefGene)<br/>gene_coords"]
-        P1B["Pre-PCA stratified split<br/>train / val / test (seed = 20260327)"]
+        P1A["RefGene → gene_coords<br/>겹치는 transcript만 병합<br/>27,955 loci (이름 487개는 여러 좌위로 분리)"]
+        P1B["Pre-PCA stratified split<br/>train 2,002 / val 251 / test 251 (seed = 20260327)"]
         P1C["K = PCA_K = 4 (고정)<br/>grid search 경로는 없음"]
-        P1D["Hierarchical labels<br/>pop ↔ superpop mapping<br/>(create_hierarchical_labels)"]
+        P1D["Hierarchical labels<br/>pop ↔ superpop mapping<br/>label_hierarchy.pkl 즉시 저장"]
     end
 
-    subgraph PASS2["PASS 2 — full streaming transform"]
-        P2A["VCF parse: chr1..22 sequentially"]
-        P2B["Gene GLM-PCA(K) transform<br/>variant released after fit"]
-        P2C["accumulate gene_pca_features"]
+    subgraph PASS2["PASS 2 — chr1..22 한 번에 하나씩"]
+        P2A["VCF parse (Rust vcf_parser_rs, 단일 스레드)<br/>MAF·결측 대체값 = train 행 기준<br/>유전자당 최대 500 variant, 2개 이상인 유전자만"]
+        P2B["Gene GLM-PCA(K) — multiprocessing Pool (spawn)<br/>유전자 단위로 os.cpu_count() 워커에 분배<br/>train 행으로 fit → 전체 2,504 행 transform"]
+        P2C["accumulate features · decoders · per-gene stats<br/>염색체 행렬은 다음 염색체 전에 해제"]
     end
 
     subgraph FIN["FINALIZATION"]
-        F2["Tokenize (gene_order 정렬)"]
+        F2["Tokenize (chrom, start, end 순 정렬)<br/>유전자 이름 중복 시 ValueError"]
         F3["Stratified split (train / val / test)<br/>PASS 1 인덱스 재사용<br/>(precomputed_indices)"]
         F4["Alignment pad → zero_mask 생성<br/>gene_size = GENE_SIZE_ALIGNMENT(256)의 배수"]
         F5["Normalize (post-pad, fit_split=train)<br/>stats shape = (gene_size, K)"]
     end
 
-    OUT["data/processed/<br/>gene_pca_features.pkl<br/>train_data.pkl · test_data.pkl<br/>normalization_stats.pkl<br/>label_hierarchy.pkl<br/>zero_mask.pt<br/>split_manifest.json<br/>preprocessing_metadata.json"]
+    OUT["data/processed/<br/>train/val/test_data.pkl · gene_pca_features.pkl<br/>normalization_stats.pkl · zero_mask.pt<br/>glm_pca_decoders.pkl · pca_per_gene_stats.csv<br/>label_hierarchy.pkl · split_manifest.json<br/>preprocessing_metadata.json"]
 
     PANEL --> P1D --> P1B
     VCF --> P2A --> P2B --> P2C
     P1A -. gene_coords .-> P2A
+    P1B -. train_idx = MAF · fit rows .-> P2A
     P1B -. train_idx = PCA fit rows .-> P2B
     P1C -. K = 4 .-> P2B
     P1B -. train/val/test 인덱스 .-> F3
-    P1D -. 라벨 (label_hierarchy.pkl 저장은 save_all) .-> F3
+    P1D -. 라벨 .-> F3
     P2C --> F2 --> F3 --> F4 --> F5 --> OUT
 
     classDef p1 fill:#bfdbfe,stroke:#1e40af,color:#000
@@ -915,20 +925,79 @@ flowchart TD
     class F2,F3,F4,F5 fin
 ```
 
-> **Peak RAM 추정** ≈ 1 chromosome (~3–5 GB for chr1) + 누적 PCA features (~2 GB).
+### 실행 시간 · 자원 (실측, 2026-09-16, Threadripper PRO 5955WX 16코어/32스레드 · RAM 125 GB)
+
+| 구간 | chr1 | chr2 | chr3 | chr4 |
+|---|---|---|---|---|
+| 염색체 전체 (파싱 + GLM-PCA) | 10.0 분 | 7.5 분 | 6.5 분 | 5.3 분 |
+| 유전자 수 (variant ≥ 2) | 2,576 | 1,666 | 1,427 | 994 |
+| 누적 feature 수 (유전자 × K) | 10,163 | 16,741 | 22,406 | 26,355 |
+
+* **파싱 구간** (염색체당 약 2분): Rust 파서가 단일 스레드로 gzip 을 풀며 읽는다. 코어 1개만 쓰고 디스크 읽기는 약 11 MB/s.
+* **GLM-PCA 구간** (염색체당 약 3.5–8분): 워커 32개가 CPU 를 ~90% 사용한다.
+* **메모리**: chr1–chr4 구간에서 시스템 전체 사용량이 약 24 GiB 였다(vmstat `used` 기준, 부모 + 워커 32개). 염색체를 하나씩 처리하므로 뒤 염색체로 갈수록 늘지 않는다(누적 feature 만 증가).
+* **로그 형식**: 파서가 stderr 로 `[chr1] 462879 genic variants, 479593 intergenic skipped, 2576 genes with >=2 variants` 를, GLM-PCA 가 끝나면 `[1/22] chr1: 2576 genes → PCA done, 10163 total features` 를 찍는다. 장시간 실행이므로 `nohup ... > outputs/preprocess_*.log 2>&1 &` 로 돌리고 로그를 본다.
+* **중간 저장 없음**: 22개 염색체 결과는 메모리에 쌓였다가 마지막에 한 번에 저장된다. 도중에 죽으면 chr1 부터 다시 돈다.
+
+### RefGene 유전자 좌표 (`gene_annotation.load_refgene`)
+
+* 같은 유전자 이름의 transcript 는 **구간이 겹칠 때만** 하나로 합친다.
+* `RNU1-3`, `MIR6859-1` 처럼 멀리 떨어진 여러 위치에 주석된 이름을 `min(txStart)`–`max(txEnd)` 로 합치면 최대 132 Mb 짜리 가짜 유전자가 생겨 그 사이 variant 를 모두 삼킨다. 이를 막기 위해 겹치지 않는 묶음은 각각 별도 좌위로 둔다.
+* 좌위가 2개 이상인 이름은 `RNU1@chr1-100` 처럼 `@chr{N}-{start}` 를 붙여 feature 키가 겹치지 않게 한다.
+* 현재 `refGene.txt.gz` 기준 22개 상염색체에서 **27,955 좌위**, 여러 좌위로 나뉜 이름은 **487개**다.
+
+### VCF 파서 — Rust 확장 `vcf_parser_rs`
+
+`src/preprocessing/vcf_parser.py` 는 `vcf_parser_rs` 를 import 할 수 있으면 Rust 파서를, 아니면 Python/cyvcf2 파서를 쓴다. 두 구현은 같은 규칙을 따른다.
+
+| 단계 | 규칙 |
+|---|---|
+| 대상 | REF·ALT 가 단일 염기인 biallelic SNP |
+| dosage | `0/0`→0, `0/1`→1, `1/1`→2, 결측→NaN |
+| MAF 필터 | **train 행(2,002명)만으로** allele frequency 계산, `MAF < 0.01` 제외 |
+| 결측 대체 | train 행 평균으로 **전체 2,504행** 의 NaN 을 채움 (val/test 정보 누설 방지) |
+| 유전자 매핑 | RefGene 0-based 시작 · exclusive 끝 → `start < POS <= end`. 정렬된 시작점 이분 탐색 + 끝점 prefix-max 로 겹치는 유전자를 모두 찾는다. 유전자 밖이면 intergenic 으로 건너뜀 |
+| 유전자당 상한 | 위치 순으로 앞의 `MAX_VARIANTS_PER_GENE = 500` 개만 유지 |
+| 반환 | variant 가 2개 이상인 유전자만 `float32 (2504, n_variants)` 행렬로 반환 |
+
+* **설치**: Rust 툴체인이 필요하다. `uv pip install -e ./vcf_parser_rs` (maturin 빌드). Rust 소스를 고치면 **다시 설치해야** `.so` 에 반영된다.
+* **Python fallback**: Rust 확장이 없으면 cyvcf2 로 읽는다. chr1 파싱에 약 1,070초 걸려 Rust(약 2분)보다 훨씬 느리다. 병합 VCF 에서 chr2 이후 region query 가 비는 cyvcf2 문제가 있어 염색체별 VCF 가 있으면 그것을 연다.
+* 자세한 API 는 [`vcf_parser_rs/README.md`](vcf_parser_rs/README.md).
+
+### 실패 시 즉시 중단하는 검사
+
+조용히 잘못된 데이터를 만들지 않도록 아래 경우에는 예외로 멈춘다.
+
+| 조건 | 위치 | 이유 |
+|---|---|---|
+| `HIPODIT_DIM_RED` 가 `glm_pca` 가 아님 | `run_pipeline.main` | 학습·추론 계약이 GLM-PCA decoder 를 전제 |
+| 입력 파일(VCF, .tbi, panel, refGene) 없음 | `validate_input_files` | |
+| 파서가 한 염색체에서 유전자 0개 반환 | `pca.stream_vcf_and_pca` | chr2–22 가 비어 chr1 만 든 "완성" 데이터가 나온 적이 있음 |
+| 염색체 간 샘플 순서 불일치 | `pca.stream_vcf_and_pca` | 행이 섞이면 모든 feature 가 틀어짐 |
+| VCF 샘플 순서 ≠ panel 순서 | `run_pipeline.main` | 라벨 정렬 보장 |
+| 유전자 이름 중복 | `run_pipeline.main` | 다른 좌위의 feature 를 덮어씀 |
 
 ### 전처리 산출물
 
-| 파일 | Shape | 설명 |
+| 파일 | Shape / 내용 | 설명 |
 |------|-------|------|
-| `gene_pca_features.pkl` | DataFrame (2504, N_features) | GLM-PCA 피처 |
-| `train_data.pkl` | (x: N×K×gene_size, y: N) | 패딩 → 정규화된 학습 데이터 |
-| `test_data.pkl` | (x: N×K×gene_size, y: N) | 패딩 → 정규화된 테스트 데이터 |
-| `normalization_stats.pkl` | {mean, std}: (gene_size, K) fp32 | 역정규화용 통계량 |
-| `label_hierarchy.pkl` | dict (8 fields) | pop/superpop 매핑 전체 |
+| `train_data.pkl` · `val_data.pkl` · `test_data.pkl` | `(x: N×gene_size×K, y: N)` | 패딩 → 정규화된 텐서 (train 2,002 · val 251 · test 251) |
+| `gene_pca_features.pkl` | DataFrame (2504, 유전자 수 × K) | 패딩·정규화 전 GLM-PCA 점수 |
+| `normalization_stats.pkl` | {mean, std}: (gene_size, K) fp32 | train 으로만 fit, 역정규화용 |
 | `zero_mask.pt` | (gene_size, K) bool | 항상 0인 위치 마스크 |
-| `split_manifest.json` | dict | 재현성 보장용 split 기록 |
-| `preprocessing_metadata.json` | dict | GLM-PCA 및 정규화 전처리 provenance |
+| `glm_pca_decoders.pkl` | 유전자별 dict | loadings · intercept · family(`poi`) · link · penalty · backend · projection |
+| `pca_per_gene_stats.csv` | 유전자당 1행 | gene · chrom · start · end · n_variants · actual_k · explained_total · explained_pc1..K |
+| `label_hierarchy.pkl` | dict | pop/superpop 매핑 (PASS 1 에서 바로 저장) |
+| `split_manifest.json` | dict | seed · 비율 · split별 인덱스와 샘플 ID · pop별 개수 |
+| `preprocessing_metadata.json` | dict | 차원축소 방식, 정규화 설정, `tensor_layout = N,G,K`, 유전자 순서(gene·chrom·start·end) |
+
+전처리가 끝나면 로그 마지막에 아래가 출력된다. `configs/default.yaml` 의 `data.num_channels` · `data.gene_size` 를 이 값으로 맞춰야 한다. 다르면 `create_dataloaders` 가 학습 시작 전에 `ValueError` 로 거부한다.
+
+```
+--- Config values for configs/default.yaml ---
+data.num_channels: 4
+data.gene_size: <유전자 수를 256 배수로 올림한 값>
+```
 
 ---
 
@@ -943,7 +1012,11 @@ python src/preprocessing/merge_data.py --format vcf
 python src/preprocessing/merge_data.py --format pkl --maf 0.01
 
 # Phase 1: 전처리 (VCF → Gene GLM-PCA → 토큰화)
-python src/preprocessing/run_pipeline.py
+#   Rust VCF 파서 설치 (한 번, Rust 툴체인 필요. 소스 수정 후에도 다시 실행)
+uv pip install -e ./vcf_parser_rs
+#   전 CPU 코어 사용 · 수십 분 이상 → 백그라운드 + 로그
+nohup .venv/bin/python src/preprocessing/run_pipeline.py > outputs/preprocess.log 2>&1 &
+#   끝나면 로그 마지막의 data.num_channels / data.gene_size 를 configs/default.yaml 에 반영
 
 # Phase 2: 모델 shape 검증
 python -c "
@@ -961,7 +1034,9 @@ print(f'Input: {x.shape} → Output: {out.shape}')
 print(f'Parameters: {sum(p.numel() for p in model.parameters()):,}')
 "
 
-# Phase 3: 학습 (DDP 2-GPU, bf16)
+# Phase 3: 학습 (DDP 2-GPU)
+#   training.precision: bf16(기본) | fp32 — 학습·검증 autocast 둘 다 이 값을 따른다
+#   training.optimizer: adamw 만 지원 (다른 값이면 ValueError)
 torchrun --nproc_per_node=2 src/training/trainer.py --config configs/default.yaml
 
 # Phase 3 (single GPU debug)
@@ -974,9 +1049,13 @@ python src/inference/generator.py \
     --output_dir outputs/default/synthetic_samples
 
 # Phase 5: 평가 (DUPI + 분포 거리, PCA(2) 공간)
+#   real·synthetic 둘 다 normalization_stats.pkl 로 원 스케일로 되돌린 뒤 비교한다
+#   --real-space: --real-path 텐서가 normalized(기본, 전처리 산출물 그대로) | original
+#   --legacy-synthetic-space: generation_meta.json 에 sample_space 가 없는 옛 샘플에만 지정
 python scripts/evaluate_synthetic_metrics.py \
     --syn-dir outputs/default/synthetic_samples \
     --out-dir outputs/default/evaluation_metrics \
+    --stats-path data/processed/normalization_stats.pkl \
     --dupi-k 1 \
     --tau 5.0
 
@@ -989,8 +1068,8 @@ python scripts/guidance_sweep.py \
     --weights 0.5 1.0 2.0 4.0 7.0 \
     --base-dir outputs/guidance_sweep
 
-# Tests (DUPI 단위 + 논문 수치 재현 29개)
-pytest tests/test_dupi.py -v
+# Tests (전체 228개, 수 분 소요)
+pytest tests/
 
 # Hyperparameter sweep (wandb)
 # configs/sweep.yaml을 작성한 후 실행
@@ -998,20 +1077,21 @@ pytest tests/test_dupi.py -v
 # wandb agent <sweep_id>
 ```
 
-### 전처리 backend — PCA 또는 GLM-PCA
+### 전처리 차원축소 — Poisson GLM-PCA
 
-기본은 sklearn `PCA`. 통계적으로 옳은 **GLM-PCA (Townes et al. 2019, Poisson family)** 로 교체하려면:
+`run_pipeline.py` 는 **GLM-PCA (Townes et al. 2019, Poisson family) 만** 받는다. `src/preprocessing/dim_reduction.py` 에 sklearn `pca` 분기가 남아 있지만, `HIPODIT_DIM_RED=pca` 로 실행하면 `ValueError("The production preprocessing pipeline requires glm_pca")` 로 멈춘다.
 
-```bash
-# Rust 가속 GLM-PCA 설치 (배포된 패키지, 한 번)
-uv pip install glmpca-fast
+| 설정 | 값 | 위치 |
+|---|---|---|
+| backend | `glm_pca` (고정) | `config.DIM_RED_METHOD`, env `HIPODIT_DIM_RED` |
+| family | Poisson (`poi`) 고정, 다른 family 설정 없음 | `glm_pca.DEFAULT_GLM_FAMILY` |
+| 성분 수 K | 4 | `config.PCA_K` |
+| 최대 반복 | 100 | `config.GLM_PCA_MAX_ITER`, env `HIPODIT_GLM_MAX_ITER` |
+| 가속 | `glmpca-fast` (PyPI, Rust) — `uv sync` 로 설치됨 | `pyproject.toml` |
+| fit / transform | train 행으로 decoder fit → 전체 샘플을 고정 decoder likelihood 로 projection | `glm_pca.glm_pca_single_gene` |
 
-# GLM-PCA 백엔드로 전처리 실행
-HIPODIT_DIM_RED=glm_pca python src/preprocessing/run_pipeline.py
-```
-
-* GLM family는 Poisson(`poi`) 고정이다. 다른 family 설정은 없다
-* 자세한 설명: `src/preprocessing/glm_pca.py` 모듈 docstring
+* 자세한 수식·구현: `src/preprocessing/glm_pca.py` 모듈 docstring
+* chr17 고정 패널 실험의 **이항(Binomial) GLM-PCA** 는 `src/preprocessing/binomial_glm_pca.py` 로 별도이며 이 파이프라인과 섞이지 않는다.
 
 ---
 
@@ -1024,18 +1104,23 @@ gene-synthesis-project/
 │
 ├── src/
 │   ├── preprocessing/
-│   │   ├── config.py               # 전처리 상수 (경로, PCA_K, VAL_RATIO/TEST_RATIO, MAF 등)
-│   │   ├── vcf_parser.py           # VCF 파싱 (Rust 바인딩 지원)
-│   │   ├── gene_annotation.py      # RefGene 유전자 어노테이션
-│   │   ├── pca.py                  # Gene PCA (train-only fit + transform)
-│   │   ├── tokenizer.py            # 토큰화 + alignment 패딩
-│   │   ├── labels.py               # 계층적 레이블, split, 정규화, 저장
+│   │   ├── config.py               # 전처리 상수 (경로, PCA_K, VAL_RATIO/TEST_RATIO, MAF, 유전자당 variant 상한)
+│   │   ├── vcf_parser.py           # VCF 파싱 디스패치: Rust(vcf_parser_rs) 우선, 없으면 cyvcf2
+│   │   ├── gene_annotation.py      # RefGene → 겹치는 transcript만 병합한 유전자 좌위
+│   │   ├── pca.py                  # 염색체 순차 스트리밍 + 유전자별 차원축소 Pool
+│   │   ├── dim_reduction.py        # 유전자 1개 차원축소 디스패치 (glm_pca | pca)
+│   │   ├── glm_pca.py              # Poisson GLM-PCA (glmpca-fast), train fit → 전체 projection
+│   │   ├── binomial_glm_pca.py     # 이항 GLM-PCA (chr17 고정 패널 실험 전용)
+│   │   ├── tokenizer.py            # 토큰화, alignment 패딩, zero_mask, 정규화
+│   │   ├── labels.py               # 계층적 레이블, split, 저장
 │   │   ├── merge_data.py           # VCF 병합 (22 chr 병렬)
 │   │   └── run_pipeline.py         # 전처리 오케스트레이터 (OOM-safe 2-pass)
 │   │
 │   ├── models/
 │   │   ├── hybrid_geno_dit.py      # HybridCNNDiTFiLM (전체 모델)
-│   │   ├── diffusion.py            # GaussianDiffusion (cosine, DDIM, CFG)
+│   │   ├── diffusion.py            # GaussianDiffusion (DDIM, CFG, zero-mask 강제)
+│   │   ├── noise_schedule.py       # cosine / linear beta schedule
+│   │   ├── genotype_decoder.py     # GLM-PCA latent → {0,1,2} 디코더 (chr17 실험)
 │   │   └── modules/
 │   │       ├── base.py             # timestep_embedding, zero_module
 │   │       ├── conditioning.py     # HierarchicalPopEmb + UnifiedFiLMGen
@@ -1043,7 +1128,7 @@ gene-synthesis-project/
 │   │       └── dit.py              # PatchEmbed1D, DiTBlock, DiTCore
 │   │
 │   ├── training/
-│   │   ├── trainer.py              # DDP + bf16 학습 루프
+│   │   ├── trainer.py              # DDP 학습 루프 (precision bf16|fp32, AdamW, cosine warmup LambdaLR)
 │   │   └── losses.py               # masked_mse, MMD, Min-SNR
 │   │
 │   ├── inference/
@@ -1061,7 +1146,7 @@ gene-synthesis-project/
 │   ├── data/
 │   │   ├── dataset.py              # GenotypeDataset (pkl → tensor)
 │   │   ├── sampler.py              # PopulationBalancedSampler (sqrt 비례)
-│   │   └── dataloader.py           # DataLoader 팩토리
+│   │   └── dataloader.py           # DataLoader 팩토리 (텐서 shape ≠ config 이면 ValueError)
 │   │
 │   └── utils/
 │       ├── config.py               # YAML 로드, CLI override, 검증
@@ -1070,14 +1155,29 @@ gene-synthesis-project/
 │       └── logger.py               # wandb 래퍼 (rank 0 only, project=HiPoDiT)
 │                                   # (.pth 저장/top-k 관리는 src/training/trainer.py 안에 있다)
 │
+├── vcf_parser_rs/                     # Rust(PyO3) VCF 파서 — README 는 vcf_parser_rs/README.md
+│   ├── Cargo.toml · pyproject.toml    # maturin 빌드
+│   └── src/
+│       ├── lib.rs                     # Python 진입점 process_one_chromosome_rs
+│       ├── gene_index.rs              # 유전자 구간 이분 탐색 + prefix-max 끝점
+│       └── vcf_processing.rs          # gzip 스트리밍 파싱, dosage, train 기준 MAF·대체
+│
 ├── scripts/
-│   ├── evaluate_synthetic_metrics.py # DUPI + 분포 거리 CLI shim
+│   ├── evaluate_synthetic_metrics.py # DUPI + 분포 거리 CLI (원 스케일 복원 후 평가)
 │   ├── guidance_sweep.py             # CFG w 스윕 + 평가 자동화
 │   ├── plot_pca.py                   # 3-panel Real / Syn / Overlay PCA 그림
-│   └── export_chr17_csv.py           # chr17 CSV 익스포트 유틸
+│   ├── plot_pca_train_fit_test_overlay.py # train fit PCA 에 test·synthetic 투영
+│   ├── plot_train_curves.py          # 학습 로그 → loss/val 곡선
+│   ├── export_chr17_csv.py           # chr17 TSV 익스포트 유틸
+│   └── hipodit_*.py                  # chr17 고정 패널 실험 (prepare / check / multiseed / privacy)
 │
-├── tests/
-│   └── test_dupi.py                  # 29 tests (invariants + 논문 수치 재현)
+├── tests/                            # pytest tests/ → 228 tests
+│   ├── test_dupi.py                  # DUPI invariants + 논문 수치 재현
+│   ├── test_gene_annotation.py       # RefGene 좌위 분리
+│   ├── test_glm_pca_preprocessing.py # GLM-PCA 전처리 계약
+│   ├── test_normalization_contract.py · test_evaluation_io_contract.py
+│   ├── test_model_diffusion.py · test_model_modulation.py · test_inference_generator_contract.py
+│   └── test_hipodit_*.py · test_genotype_decoder.py · test_binomial_glm_pca.py  # chr17 실험
 │
 ├── data/                              # (git 추적 안 함)
 │   ├── ALL.autosomes.phase3.genotypes.vcf.gz
@@ -1101,7 +1201,7 @@ gene-synthesis-project/
 │               └── pca_coordinates.csv
 │
 ├── CITATION.cff                       # 인용 메타데이터 (GitHub 자동 인식)
-└── docs/                              # 상세 기획서 (01~10)
+└── docs/                              # reports/ (실험 보고서) · superpowers/ (계획·설계)
 ```
 
 ---
@@ -1111,8 +1211,10 @@ gene-synthesis-project/
 | Resource | Spec | Usage |
 |----------|------|-------|
 | GPU × 2 | NVIDIA RTX A6000 (48GB) | DDP 학습 (bf16) |
-| RAM | 64GB+ 권장 | 전체 데이터셋 in-memory |
-| Storage | 50GB+ | VCF(14GB) + 산출물 + 체크포인트 |
+| CPU | 코어가 많을수록 전처리가 빨라짐 | 전처리 GLM-PCA 가 `os.cpu_count()` 워커 사용 (실측 32스레드에서 염색체당 5–10분) |
+| RAM | 64GB+ 권장 | 전처리 실측 약 24 GiB (32 워커) + 학습 시 전체 데이터셋 in-memory |
+| Storage | 50GB+ | VCF(14GB) + 염색체별 VCF(선택) + 산출물 + 체크포인트 |
+| Rust toolchain | stable | `vcf_parser_rs` 빌드 (없으면 cyvcf2 fallback — chr1 파싱 약 18분 vs Rust 약 2분) |
 
 **VRAM 사용량 추정** (baseline config, 9.33 M params, batch=16, bf16):
 ```
@@ -1139,6 +1241,11 @@ Total per GPU                                          ≈ 4–6 GB
 | DDIM 100-step (η = 0.5) | 1,000-step DDPM 대비 10× 가속 + 부분 stochasticity 로 다양성 유지 |
 | AdaLN-Zero | α=0 초기화 → DiT가 identity로 시작 → 안정적 학습 |
 | K 고정 (grid search 없음) | `run_pipeline.py` 가 `optimal_k = PCA_K` 로 K=4 고정. Marginal Gain Elbow 탐색 코드와 threshold/decay_ratio 상수는 삭제됐다 |
+| split 을 PCA 전에 결정 | MAF 필터·결측 대체·GLM-PCA fit·정규화를 모두 train 행으로만 계산해 val/test 누설을 막는다 |
+| RefGene 은 겹칠 때만 병합 | 이름만 같은 먼 좌위를 합치면 최대 132 Mb 가짜 유전자가 생긴다 |
+| 염색체는 순차, 유전자는 병렬 | 메모리는 염색체 1개분으로 묶고, 서로 독립인 유전자별 GLM-PCA 만 Pool 로 나눈다 |
+| Pool 은 `spawn` | numpy/BLAS 스레드가 이미 떠 있는 프로세스를 `fork` 하면 자식이 futex 에서 영구 대기할 수 있다 |
+| 이상 데이터는 즉시 예외 | 빈 염색체·샘플 순서 불일치·유전자 이름 중복을 조용히 넘기지 않는다 ([검사 목록](#실패-시-즉시-중단하는-검사)) |
 | 패딩 → 정규화 순서 | 패딩 후 정규화하여 stats shape = (gene_size, K) 보장 |
 | 역정규화 padding 처리 | stats 크기 < gene_size일 때 자동 패딩 (mean=0, std=1) |
 | sqrt 비례 오버샘플링 | 균등(1:1)과 비례 사이의 균형 |
@@ -1149,10 +1256,11 @@ Total per GPU                                          ≈ 4–6 GB
 ## Tests
 
 ```bash
-pytest tests/test_dupi.py -v
+pytest tests/                 # 전체 228 tests (CPU 전용, 수 분)
+pytest tests/test_dupi.py -v  # DUPI 만: 29 tests · < 1 s
 ```
 
-29 tests · runs in < 1 s. Categories:
+`test_dupi.py` categories:
 
 * `TestDupiBenchmark` — Eq. (10) closed-form, [0,1] range, invalid-`k` raises
 * `TestDupiScore` — bounded range, identical-distribution convergence, far / overlap / too-few-samples extremes
@@ -1193,7 +1301,7 @@ pytest tests/test_dupi.py -v
 
 ## Citation
 
-본 저장소를 학술적으로 인용할 때는 (1) 본 SW 와 (2) DUPI 원논문을 *동시* 인용하기를 권장한다 — `CITATION.cff` 의 references 항목에 두 entry 가 정의되어 있다.
+본 저장소를 학술적으로 인용할 때는 (1) 본 SW 와 (2) DUPI 원논문을 *동시* 인용하기를 권장한다. `CITATION.cff` 의 references 항목에 두 entry 가 정의되어 있다.
 
 ```bibtex
 @article{Jeong2023DUPI,
