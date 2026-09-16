@@ -166,3 +166,34 @@ User accepts the remedy findings and re-defines the primary model as **HiPoDiT-T
 - USER DECISIONS: (1) force-add the key documents, keep .gitignore rules as they are; (2) keep the OC-FILM plan/spec deletions from c6b5f02.
 - Commit f0558c7 tracks: the plan, both reports, the two prototype scripts, and 22 gate record files (431 KB) including BOTH pre-registered failures (B3 Gate 1, centered-gauge Gate 1'). Bulk artifacts (checkpoints, .npz panels, sample tensors) stay ignored.
 - Scoped re-review of the fix wave dispatched (sonnet), package review-6d8833c..ffa47da.diff
+
+## Ponytail refactor (2026-09-16, post-final-review cleanup)
+
+Scope: ~682 lines of abandoned scaffolding deleted, two .gitignore repository-safety defects
+fixed, false claims corrected in CLAUDE.md and README.md. No Python logic, no number moved —
+this repo holds frozen, published experimental results.
+
+- R26 Ruling: the refactor SUPERSEDES half of the recorded USER DECISION (1) ("force-add the key
+  documents, keep .gitignore rules as they are"). Commit f8b6364 dropped the `/docs` ignore rule,
+  so the plan, the reports and this decision log are now tracked normally instead of by `git add -f`.
+  Why safer: CLAUDE.md mandates that every judgement call be written into a decision log under
+  `docs/reports/`, and an ignored `docs/` silently untracks exactly the artifacts the mandate
+  requires — that is what produced final-review IMPORTANT 2 (the branch carried code but not the
+  pre-registration or the verdicts). Force-add is a manual step and manual steps get forgotten;
+  a fixed ignore rule cannot be. Cost if wrong: `docs/` now shows up in `git status`, so an
+  incidental or bulky file dropped there can be committed by accident — mitigated by the standing
+  rule that staging is always explicit and never `git add -A`.
+- R26 SCOPE LIMIT (do not "fix" this later): the same USER DECISION also covers `outputs/`, and
+  that half is DELIBERATELY UNTOUCHED. `.gitignore` still ignores `outputs/`; the 22 gate record
+  files carried by f0558c7 are there by explicit force-add and stay that way. Bulk artifacts
+  (checkpoints, .npz panels, sample tensors) must not become trackable by default. Anyone who
+  later "completes" R26 by un-ignoring `outputs/` is reversing a decision, not finishing one.
+- R27 Provenance (deleted PCA information-loss analyser): the refactor deleted
+  `analyze_pca_information_loss` from `src/preprocessing/pca.py` (unreachable from the production
+  pipeline, which fixes K = PCA_CANDIDATES[0] and never grid-searches). Its output still sits on
+  disk at `data/processed/pca_information_loss_analysis.json` (131 KB, 2026-04-29), and `data/` is
+  gitignored, so the artifact is local-only while the generating code now lives only in git
+  history. Recovery command, recorded so the artifact never becomes orphaned:
+  `git show 87f0c62:src/preprocessing/pca.py` (analyser at line 354, JSON path at line 396).
+  Cost if wrong: none while the history survives; if history is ever rewritten the JSON loses its
+  provenance and must be treated as an undated observation.
