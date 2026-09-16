@@ -141,10 +141,11 @@ def main() -> None:
         )
 
     # Step 4: Tokenize
-    gene_rows = (
-        pca_stats.drop_duplicates("gene", keep="last")
-        .sort_values(["chrom", "start", "end", "gene"])
-    )
+    duplicated = pca_stats["gene"][pca_stats["gene"].duplicated()].tolist()
+    if duplicated:
+        # A repeated name would silently overwrite another locus's features.
+        raise ValueError(f"Duplicate gene names across loci: {duplicated[:10]}")
+    gene_rows = pca_stats.sort_values(["chrom", "start", "end", "gene"])
     gene_order = gene_rows["gene"].tolist()
     tokenized, n_genes = tokenize_dataset(features_df, optimal_k, gene_order=gene_order)
 
