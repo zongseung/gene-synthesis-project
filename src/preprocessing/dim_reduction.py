@@ -29,7 +29,6 @@ import logging
 from typing import Literal
 
 import numpy as np
-import pandas as pd
 
 logger = logging.getLogger(__name__)
 
@@ -57,29 +56,6 @@ def reduce_single_gene(
             gene_name=gene_name, matrix=matrix,
             n_components=n_components, train_indices=train_indices,
             **{k: v for k, v in kwargs.items() if k in ("fam", "max_iter")},
-        )
-    raise ValueError(
-        f"Unknown DIM_RED_METHOD: {method!r}. "
-        "Expected 'pca' | 'glm_pca'."
-    )
-
-
-def grid_search_optimal_k(
-    method: DimRedMethod,
-    gene_matrices: dict[str, np.ndarray],
-    train_indices: np.ndarray | None = None,
-    **kwargs,
-) -> tuple[int, pd.DataFrame]:
-    """Dispatch grid-search to the configured backend."""
-    if method == "pca":
-        from src.preprocessing.pca import grid_search_optimal_pca
-        return grid_search_optimal_pca(
-            gene_matrices=gene_matrices, train_indices=train_indices, **kwargs,
-        )
-    if method == "glm_pca":
-        from src.preprocessing.glm_pca import grid_search_optimal_glm_pca
-        return grid_search_optimal_glm_pca(
-            gene_matrices=gene_matrices, train_indices=train_indices, **kwargs,
         )
     raise ValueError(
         f"Unknown DIM_RED_METHOD: {method!r}. "

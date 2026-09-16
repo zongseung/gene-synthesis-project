@@ -28,9 +28,6 @@ PREPROCESS_SEED = 20260327
 
 # PCA grid search
 PCA_CANDIDATES = [4, 6, 8, 10, 12, 16]
-MARGINAL_GAIN_THRESHOLD = 0.03
-MARGINAL_GAIN_DECAY_RATIO = 0.5
-PCA_SAMPLE_GENES = 500
 
 # Per-gene dimensionality reduction backend.
 #   'pca'      — Gaussian PCA (sklearn). Fast (~10 ms/gene); misspecified for

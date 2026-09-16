@@ -15,23 +15,13 @@ Public API mirrors :mod:`src.preprocessing.pca` so that
 :mod:`src.preprocessing.dim_reduction` can dispatch transparently:
 
     glm_pca_single_gene(gene_name, matrix, n_components, train_indices=None)
-    evaluate_glm_pca_k_for_gene(gene_name, matrix, k, train_indices=None)
 """
 
 from __future__ import annotations
 
 import logging
-from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
-import pandas as pd
-
-from src.preprocessing.config import (
-    MARGINAL_GAIN_DECAY_RATIO,
-    MARGINAL_GAIN_THRESHOLD,
-    PCA_CANDIDATES,
-    PCA_SAMPLE_GENES,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -318,139 +308,3 @@ def _build_result(
         "backend_version": backend_version,
         "projection": projection,
     }
-
-
-def evaluate_glm_pca_k_for_gene(
-    gene_name: str,
-    matrix: np.ndarray,
-    k: int,
-    train_indices: np.ndarray | None = None,
-    fam: str = DEFAULT_GLM_FAMILY,
-    max_iter: int = DEFAULT_MAX_ITER,
-) -> tuple[str, int, float, int]:
-    """Evaluate (gene, K) — pseudo-R² analog of PCA explained variance ratio."""
-    glmpca_mod = _import_glmpca()
-
-    n_vars = matrix.shape[1]
-    n_fit = matrix.shape[0] if train_indices is None else int(len(train_indices))
-    actual_k = min(k, n_vars, n_fit)
-    if actual_k < 2:
-        return (gene_name, k, 0.0, 0)
-
-    Y_fit = matrix.T if train_indices is None else matrix[train_indices].T
-    try:
-        res = glmpca_mod.glmpca(
-            Y=Y_fit, L=actual_k, fam=fam, verbose=False,
-            ctl={"maxIter": max_iter, "eps": 1e-4},
-        )
-    except Exception as exc:
-        logger.warning(f"GLM-PCA eval failed for {gene_name} (k={k}): {exc}")
-        return (gene_name, k, 0.0, 0)
-
-    dev = np.asarray(res["dev"], dtype=np.float32)
-    explained = (
-        float(max(0.0, 1.0 - dev[-1] / dev[0]))
-        if dev.size >= 2 and dev[0] > 0 else 0.0
-    )
-    return (gene_name, k, explained, actual_k)
-
-
-def grid_search_optimal_glm_pca(
-    gene_matrices: dict[str, np.ndarray],
-    candidates: list[int] | None = None,
-    marginal_threshold: float = MARGINAL_GAIN_THRESHOLD,
-    decay_ratio: float = MARGINAL_GAIN_DECAY_RATIO,
-    n_sample_genes: int = PCA_SAMPLE_GENES,
-    train_indices: np.ndarray | None = None,
-    fam: str = DEFAULT_GLM_FAMILY,
-    max_iter: int = DEFAULT_MAX_ITER,
-) -> tuple[int, pd.DataFrame]:
-    """Grid search optimal K via deviance-based marginal-gain elbow.
-
-    Mirrors :func:`src.preprocessing.pca.grid_search_optimal_pca` but uses
-    pseudo-R² (deviance reduction) instead of explained variance ratio.
-    GLM-PCA is ~100× slower than PCA per fit, so consider running grid
-    search on a smaller chromosome subset (chr 22 alone, for example).
-    """
-    if candidates is None:
-        candidates = PCA_CANDIDATES
-
-    all_genes = list(gene_matrices.keys())
-    if len(all_genes) > n_sample_genes:
-        rng = np.random.default_rng(42)
-        sample_genes = rng.choice(all_genes, n_sample_genes, replace=False)
-    else:
-        sample_genes = all_genes
-
-    logger.info(
-        f"GLM-PCA grid search: K candidates={candidates}, "
-        f"sample genes={len(sample_genes)}/{len(all_genes)} (fam={fam}, "
-        f"~100× slower than PCA)"
-    )
-
-    tasks = [
-        (g, gene_matrices[g], k, train_indices, fam, max_iter)
-        for g in sample_genes for k in candidates
-    ]
-
-    results = []
-    # GLM-PCA is CPU-bound and threads share the GIL during numpy/statsmodels
-    # work; ProcessPoolExecutor would be faster but `gene_matrices` is large.
-    # Use modest thread parallelism — adjust via env if needed.
-    with ThreadPoolExecutor(max_workers=min(8, len(candidates))) as ex:
-        futures = [ex.submit(evaluate_glm_pca_k_for_gene, *t) for t in tasks]
-        for fut in futures:
-            results.append(fut.result())
-
-    df = pd.DataFrame(results, columns=["gene", "k", "explained_ratio", "actual_k"])
-
-    summary: dict[int, dict] = {}
-    for k in candidates:
-        valid = df[(df["k"] == k) & (df["actual_k"] > 0)]
-        if valid.empty:
-            continue
-        summary[k] = {
-            "mean_explained": float(valid["explained_ratio"].mean()),
-            "median_explained": float(valid["explained_ratio"].median()),
-            "p10_explained": float(valid["explained_ratio"].quantile(0.10)),
-            "p25_explained": float(valid["explained_ratio"].quantile(0.25)),
-            "n_valid_genes": int(len(valid)),
-        }
-        logger.info(
-            f"  K={k:2d}: mean={summary[k]['mean_explained']:.4f}, "
-            f"median={summary[k]['median_explained']:.4f}, "
-            f"p10={summary[k]['p10_explained']:.4f}"
-        )
-
-    sorted_k = sorted(k for k in candidates if k in summary)
-    gains = {}
-    for i in range(1, len(sorted_k)):
-        prev_k, curr_k = sorted_k[i - 1], sorted_k[i]
-        gains[curr_k] = (
-            summary[curr_k]["mean_explained"] - summary[prev_k]["mean_explained"]
-        )
-        logger.info(f"  K={prev_k}->{curr_k}: marginal gain = {gains[curr_k]:.4f}")
-
-    optimal_k = sorted_k[0] if sorted_k else 8
-    prev_gain: float | None = None
-    for i in range(1, len(sorted_k)):
-        curr_k = sorted_k[i]
-        gain = gains[curr_k]
-        if gain < marginal_threshold:
-            optimal_k = sorted_k[i - 1]
-            logger.info(
-                f"  Elbow (gain {gain:.4f} < threshold {marginal_threshold}): "
-                f"K={optimal_k}"
-            )
-            break
-        if prev_gain is not None and gain < prev_gain * decay_ratio:
-            optimal_k = sorted_k[i - 1]
-            logger.info(
-                f"  Elbow (gain decay {prev_gain:.4f}->{gain:.4f}): K={optimal_k}"
-            )
-            break
-        optimal_k = curr_k
-        prev_gain = gain
-
-    summary_df = pd.DataFrame(summary).T
-    return optimal_k, summary_df
