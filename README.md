@@ -1,8 +1,10 @@
 # HiPoDiT
 
+**한국어** | [English](README.en.md)
+
 **Hi**erarchical **Po**pulation-conditional **Di**ffusion **T**ransformer for synthetic genotype generation.
 
-1000 Genomes Phase 3 데이터(2,504 samples, 26 populations, 5 superpopulations)를 활용하여 인구군별 조건부 합성 유전형을 생성하는 Diffusion 모델. 평가단에는 Jeong et al. (2023, IEEE TIFS) DUPI 프레임워크를 그대로 구현해 정량적 utility/privacy 동시 검증을 제공한다.
+1000 Genomes Phase 3 데이터(2,504 samples, 26 populations, 5 superpopulations)를 활용하여 인구군별 조건부 합성 유전형을 생성하는 Diffusion 모델. 평가단에는 Jeong et al. (2023, IEEE TIFS) DUPI 프레임워크를 그대로 구현해 utility/privacy 를 동시에 정량 검증한다.
 
 | 항목 | 값 |
 | --- | --- |
