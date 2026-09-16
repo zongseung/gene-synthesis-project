@@ -77,7 +77,7 @@ GLM-PCA에서 동결되고 `u_{c,j}`는 SNP별로 중심화되어 있으므로, 
 
 ## 3. 문헌 근거 (primary sources)
 
-상세 인용·확신도는 `.superpowers/sdd/2026-09-15-hipodit-ld/research-lit-af-drift.md`에 있다.
+상세 인용·확신도는 `docs/reports/hipodit_research_af_drift.md`에 있다.
 
 | 주제 | 핵심 진술 | 출처 | 본 건에의 적용 |
 |---|---|---|---|
@@ -291,7 +291,7 @@ generation", "Fisher schedule 우수", "DP/anonymous synthetic data". `r²` MAE 
 | frozen panel | `outputs/diagnostics/hipodit_fisher_20260915_unique/` |
 | Gate 1 oracle 결과 | `outputs/diagnostics/hipodit_ld_oracle_20260915/{oracle_results.json,study_manifest.json,decoder_ablation.csv,strata.csv,decoder_B{0..3}.npz}` |
 | 5-seed 파일럿(standard/Fisher) | `outputs/diagnostics/hipodit_multiseed_20260915/`, `docs/reports/hipodit_multiseed_20260915.md` |
-| 문헌 노트 | `.superpowers/sdd/2026-09-15-hipodit-ld/research-lit-af-drift.md` |
+| 문헌 노트 | `docs/reports/hipodit_research_af_drift.md` |
 | 프로토타입 스크립트 | `docs/reports/prototypes/af_drift_prototypes.py`, `af_tilt_variants.py` |
 | decoder 구현 | `src/models/genotype_decoder.py`, `tests/test_genotype_decoder.py` |
 | oracle CLI | `scripts/hipodit_genotype_check.py` |

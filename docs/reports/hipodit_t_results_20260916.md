@@ -74,7 +74,7 @@ q_ij(g) ∝ C(2,g) p_ij^g (1−p_ij)^{2−g} exp(τ_j·1[g=1] + λ_ij·g),   Σ_
 `q = min(p, 1−p)` 쪽에서 풀고 `x(p) = 1/x(1−p)` 대칭으로 되돌려 양 꼬리에서 상쇄를 피한다. 격자
 검증에서 `max |E[G] − 2p|`는 **4.4e−16**(τ ∈ [−4, 4] 41점, p ∈ [1e−4, 1−1e−4]), τ ∈ [−30, 30]에서도
 1.1e−15이며 행 합은 2.2e−16 이내로 1이다
-(`.superpowers/sdd/2026-09-15-hipodit-ld/task-7-report.md`의 검증 기록;
+(`docs/reports/verification/tilt-decoder-verification.md`의 검증 기록;
 회귀 테스트는 `tests/test_genotype_decoder.py::test_the_tilt_keeps_expected_dosage_exact_and_is_binomial_without_a_tilt`).
 
 **(iii) SNP 독립 샘플링.** 각 SNP의 `q_ij`에서 독립 추출한다. predecessor 조건화가 없으므로
@@ -92,7 +92,7 @@ order-shuffle control은 해당 없고, sampling에 genomic order가 개입하�
 
 적합 비용은 realistic panel(train 2,002 × 361 SNPs, 26 cohorts, float64, 단일 CPU 프로세스)에서
 `offset_gauge="pooled_af"` **6.1 s**, `"centered"` 1.1 s로, 제약이 약 5.5배의 비용을 가져간다
-(`.superpowers/sdd/2026-09-15-hipodit-ld/task-12-report.md`의 계측). 전량이 목적함수 평가마다
+(`docs/reports/verification/offset-gauge-verification.md`의 계측). 전량이 목적함수 평가마다
 펼쳐지는 25회 Newton 단계에서 나온다. diffusion 파라미터와는 별개다.
 
 ### 2.3 두 제약은 같은 원리다
@@ -108,7 +108,7 @@ penalty에 맡기지 않고 매개화 자체에 구성적으로 강제한다.** 
 패널·같은 적합에서 centered gauge의 제약 잔차는 **2.25e−02**로, 위 (i)의 2.22e−16과 14자릿수 떨어져
 있다(같은 task-12 계측). `τ`는 AF를 바꾸지 않으므로 아무 제약도 두지 않는다.
 
-문헌 근거는 다음 세 건이며, `.superpowers/sdd/2026-09-15-hipodit-ld/research-*.md`에 기록된 확신도
+문헌 근거는 다음 세 건이며, `docs/reports/hipodit_research_*.md`에 기록된 확신도
 등급을 그대로 옮긴다.
 
 | 출처 | 쓰이는 진술 | 노트의 확신도 |
@@ -839,8 +839,8 @@ peak RSS는 각 실행 기록(`runs.jsonl`, 진단 보고서의 `runtime_seconds
 | `docs/superpowers/plans/2026-09-15-hipodit-ld.md` | 사전등록 원본(§1–§8)과 개정 2(§9) |
 | `docs/reports/hipodit_ld_tilt_20260915.md` | Gate 1 실패 진단, 처방 후보 비교, 프로토타입 ablation(§4.4 부록 포함) |
 | `docs/reports/hipodit_multiseed_20260915.md` | standard/Fisher 5-seed 파일럿 |
-| `.superpowers/sdd/2026-09-15-hipodit-ld/research-lit-af-drift.md` | AF drift·marginal 보존 문헌 노트(확신도 등급 포함) |
-| `.superpowers/sdd/2026-09-15-hipodit-ld/research-cohort-calibration.md` | 제약 하 ML·cohort calibration 문헌 노트 |
+| `docs/reports/hipodit_research_af_drift.md` | AF drift·marginal 보존 문헌 노트(확신도 등급 포함) |
+| `docs/reports/hipodit_research_cohort_calibration.md` | 제약 하 ML·cohort calibration 문헌 노트 |
 | `docs/reports/prototypes/` | 프로토타입 스크립트와 JSON(§9.2, §9.3의 프로토타입 전용 수치) |
 
 ---
