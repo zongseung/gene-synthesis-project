@@ -107,6 +107,15 @@ def project_glm_factors(
                 break
             scale *= 0.5
         if not accepted:
+            # No step size improves the objective. When the proposed Newton step
+            # is already smaller than the convergence tolerance, this is a
+            # numerically stationary point rather than a failure: the remaining
+            # decrease sits below floating-point noise, so no backtracked step
+            # can satisfy a strict Armijo decrease. An unacceptable step that is
+            # still large signals a genuine breakdown and keeps raising.
+            if float(np.max(np.abs(step))) < tolerance:
+                converged = True
+                break
             raise RuntimeError("Poisson factor projection line search failed")
         if float(np.max(np.abs(scale * step))) < tolerance:
             converged = True
