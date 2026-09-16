@@ -63,7 +63,7 @@ src/
 │       ├── conditioning.py  # HierarchicalPopulationEmbedding + UnifiedFiLMGenerator
 │       ├── cnn.py           # FiLMConvBlock, CNNStemEncoder, CNNDecoder
 │       └── dit.py           # DiTBlock (AdaLN-Zero = FiLM), DiTCore, PatchEmbed1D
-├── training/             # DDP trainer, EMA, losses (masked_mse, min_snr, mmd)
+├── training/             # DDP trainer, EMA (loss lives in GaussianDiffusion.p_losses)
 ├── inference/            # DDIM sampler, CFG, population-conditional generation
 ├── evaluation/           # DUPI/UI/PI, distribution distances (W2, MMD-RBF), PCA(2) compare
 └── utils/                # DDP setup, config loading, EMA, wandb ExperimentLogger

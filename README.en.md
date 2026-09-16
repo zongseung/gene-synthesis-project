@@ -1145,8 +1145,7 @@ gene-synthesis-project/
 │   │       └── dit.py              # PatchEmbed1D, DiTBlock, DiTCore
 │   │
 │   ├── training/
-│   │   ├── trainer.py              # DDP training loop (precision bf16|fp32, AdamW, cosine warmup LambdaLR)
-│   │   └── losses.py               # masked_mse, MMD, Min-SNR
+│   │   └── trainer.py              # DDP training loop (precision bf16|fp32, AdamW, cosine warmup LambdaLR)
 │   │
 │   ├── inference/
 │   │   └── generator.py            # EMA loading, DDIM generation, denormalization (handles stats padding)

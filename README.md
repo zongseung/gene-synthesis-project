@@ -1145,8 +1145,7 @@ gene-synthesis-project/
 │   │       └── dit.py              # PatchEmbed1D, DiTBlock, DiTCore
 │   │
 │   ├── training/
-│   │   ├── trainer.py              # DDP 학습 루프 (precision bf16|fp32, AdamW, cosine warmup LambdaLR)
-│   │   └── losses.py               # masked_mse, MMD, Min-SNR
+│   │   └── trainer.py              # DDP 학습 루프 (precision bf16|fp32, AdamW, cosine warmup LambdaLR)
 │   │
 │   ├── inference/
 │   │   └── generator.py            # EMA 로드, DDIM 생성, 역정규화 (stats 패딩 처리)

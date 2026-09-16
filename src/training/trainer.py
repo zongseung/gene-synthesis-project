@@ -49,7 +49,6 @@ from src.data.dataloader import create_dataloaders
 from src.models import GaussianDiffusion, HybridCNNDiTFiLM
 from src.utils.config import parse_args_with_config
 from src.utils.ddp import cleanup_ddp, get_rank, get_world_size, is_main_process, setup_ddp
-from src.training.losses import compute_training_loss
 from src.utils.ema import EMAModel
 from src.utils.logger import ExperimentLogger
 
@@ -407,14 +406,15 @@ def train(config: dict) -> None:
 
             # ── autocast (NO GradScaler) ──
             with torch.autocast(device_type="cuda", dtype=autocast_dtype, enabled=autocast_enabled):
-                loss_dict = compute_training_loss(
+                t = torch.randint(0, diffusion.timesteps, (x.shape[0],), device=device)
+                loss_dict = diffusion.p_losses(
                     model=model,
-                    diffusion=diffusion,
-                    x=x,
+                    x_start=x,
+                    t=t,
                     y=y,
-                    zero_mask=zero_mask,
-                    config=config,
-                    current_epoch=epoch,
+                    noise=torch.randn_like(x),
+                    use_min_snr=training_cfg.get("use_min_snr", True),
+                    cfg_training=diffusion_cfg.get("guidance_type", "normal") != "normal",
                 )
                 loss = loss_dict["loss"]
 
@@ -457,20 +457,6 @@ def train(config: dict) -> None:
                     "train/lr": scheduler.get_last_lr()[0],
                     "train/epoch": epoch,
                 }
-                if "mmd" in loss_dict:
-                    metrics["train/mmd"] = loss_dict["mmd"].item()
-                if "mmd_pca" in loss_dict:
-                    metrics["train/mmd_pca"] = loss_dict["mmd_pca"].item()
-                if "mmd_pop" in loss_dict:
-                    metrics["train/mmd_pop"] = loss_dict["mmd_pop"].item()
-                if "class_centroid" in loss_dict:
-                    metrics["train/class_centroid"] = loss_dict["class_centroid"].item()
-                if "mmd_sigma" in loss_dict:
-                    metrics["train/mmd_sigma"] = loss_dict["mmd_sigma"].item()
-                if "aux_warmup_scale" in loss_dict:
-                    metrics["train/aux_warmup_scale"] = (
-                        loss_dict["aux_warmup_scale"].item()
-                    )
                 wb_logger.log_metrics(global_step, metrics)
 
         # ── Validation (every epoch, using EMA weights) ──

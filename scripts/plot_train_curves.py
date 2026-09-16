@@ -105,25 +105,7 @@ def main():
         fig.savefig(os.path.join(args.out_dir, "train_vs_val.png"), dpi=130)
         plt.close(fig)
 
-    # 3. aux losses
-    aux_keys = ["train/mmd", "train/mmd_pca", "train/mmd_pop", "train/class_centroid"]
-    fig, ax = plt.subplots(figsize=(10, 5))
-    for key in aux_keys:
-        if key in series:
-            xy = downsample(series[key])
-            xs, ys = zip(*xy)
-            ax.plot(xs, ys, label=key.split("/")[-1], alpha=0.7, lw=0.8)
-    ax.set_xlabel("step")
-    ax.set_ylabel("aux loss")
-    ax.set_title("Auxiliary losses")
-    ax.set_yscale("log")
-    ax.legend()
-    ax.grid(alpha=0.3)
-    fig.tight_layout()
-    fig.savefig(os.path.join(args.out_dir, "aux_losses.png"), dpi=130)
-    plt.close(fig)
-
-    # 4. lr + grad norm
+    # 3. lr + grad norm
     fig, ax1 = plt.subplots(figsize=(10, 5))
     if "train/lr" in series:
         xy = downsample(series["train/lr"])

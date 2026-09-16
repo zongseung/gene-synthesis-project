@@ -68,22 +68,5 @@ distributed:
   backend: "nccl"
   num_gpus: 2
 
-# ── 보조 손실 ──
-aux_loss:
-  enabled: false
-  lambda_pca_dist: 0.02
-  lambda_pop_structure: 0.02
-  lambda_class_centroid: 0.05
-  type: "mmd_rbf"
-  mmd_sigma: "median"
-  feature_subsample: 4096
-  class_alignment_level: "superpop"
-  # superpopulation index order from label_hierarchy.pkl:
-  # 0=AFR, 1=AMR, 2=EAS, 3=EUR, 4=SAS.
-  # Current metrics show the largest centroid/coverage gaps in EAS, EUR, AFR.
-  class_alignment_weights: [1.5, 1.0, 2.0, 1.5, 1.0]
-  min_class_samples: 1
-  warmup_epochs: 20
-
 # ── 저장 ──
 save_dir: "outputs/20260915_glm_pca_baseline"
