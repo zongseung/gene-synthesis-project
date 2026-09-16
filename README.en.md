@@ -1076,6 +1076,15 @@ python scripts/evaluate_synthetic_metrics.py \
     --dupi-k 1 \
     --tau 5.0
 
+# Phase 5.5: Genotype-level evaluation (GLM-PCA decode → allele frequency)
+#   Runs the fitted decoder forward, exp(intercept + z @ loadings.T), to get
+#   per-variant dosage, then re-parses the same chromosome from the VCF and
+#   compares real and synthetic allele frequencies (~20 s for chr22).
+#   --save-genotypes also writes the sampled {0,1,2} calls as an npz.
+python -m src.inference.decode \
+    --syn-dir outputs/default/synthetic_samples \
+    --chrom 22
+
 # Phase 6: PCA real vs synthetic visualization
 python scripts/plot_pca.py \
     --syn-dir outputs/default/synthetic_samples
@@ -1148,7 +1157,8 @@ gene-synthesis-project/
 │   │   └── trainer.py              # DDP training loop (precision bf16|fp32, AdamW, cosine warmup LambdaLR)
 │   │
 │   ├── inference/
-│   │   └── generator.py            # EMA loading, DDIM generation, denormalization (handles stats padding)
+│   │   ├── generator.py            # EMA loading, DDIM generation, denormalization (handles stats padding)
+│   │   └── decode.py               # GLM-PCA decode → variant dosage, {0,1,2} calls, AF comparison
 │   │
 │   ├── evaluation/                 # ── Evaluation modules ──
 │   │   ├── README.md               # Documentation for the DUPI module only (citation, API, paper recon)

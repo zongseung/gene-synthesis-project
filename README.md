@@ -1076,6 +1076,14 @@ python scripts/evaluate_synthetic_metrics.py \
     --dupi-k 1 \
     --tau 5.0
 
+# Phase 5.5: 유전형 수준 평가 (GLM-PCA 디코딩 → 대립유전자 빈도 비교)
+#   합성 factor를 exp(intercept + z @ loadings.T)로 되돌려 variant별 dosage를 얻고,
+#   같은 염색체를 VCF에서 다시 파싱해 실제 AF와 비교한다 (chr22 기준 약 20초)
+#   --save-genotypes 를 주면 {0,1,2} 호출을 npz로 저장한다
+python -m src.inference.decode \
+    --syn-dir outputs/default/synthetic_samples \
+    --chrom 22
+
 # Phase 6: PCA real vs synthetic 시각화
 python scripts/plot_pca.py \
     --syn-dir outputs/default/synthetic_samples
@@ -1148,7 +1156,8 @@ gene-synthesis-project/
 │   │   └── trainer.py              # DDP 학습 루프 (precision bf16|fp32, AdamW, cosine warmup LambdaLR)
 │   │
 │   ├── inference/
-│   │   └── generator.py            # EMA 로드, DDIM 생성, 역정규화 (stats 패딩 처리)
+│   │   ├── generator.py            # EMA 로드, DDIM 생성, 역정규화 (stats 패딩 처리)
+│   │   └── decode.py               # GLM-PCA 디코딩 → variant dosage · {0,1,2} 호출 · AF 비교
 │   │
 │   ├── evaluation/                 # ── 평가 모듈 ──
 │   │   ├── README.md               # DUPI 모듈 전용 문서 (citation, API, paper recon)
