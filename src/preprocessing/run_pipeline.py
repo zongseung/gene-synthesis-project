@@ -2,7 +2,7 @@
 """Full preprocessing pipeline: VCF -> Gene PCA -> tokenized tensors.
 
 OOM-safe 2-pass approach:
-  Pass 1: Labels + stratified split → K fixed to PCA_CANDIDATES[0] (no VCF parsing)
+  Pass 1: Labels + stratified split → K fixed to PCA_K (no VCF parsing)
   Pass 2: Stream all 22 chr one-by-one → PCA immediately → free variants
 Peak RAM ≈ 1 chromosome (~3-5GB for chr1) + accumulated PCA features (~2GB)
 
@@ -30,12 +30,13 @@ import pandas as pd
 
 from src.preprocessing.config import (
     DIM_RED_METHOD,
-    GLM_PCA_FAMILY,
     PANEL_PATH,
-    PCA_CANDIDATES,
+    PCA_K,
     PREPROCESS_SEED,
     PROCESSED_DIR,
     REFGENE_PATH,
+    TEST_RATIO,
+    VAL_RATIO,
     VCF_PATH,
     VCF_TBI_PATH,
 )
@@ -97,8 +98,8 @@ def main() -> None:
     labels = create_hierarchical_labels(PANEL_PATH)
     train_idx, val_idx, test_idx = compute_split_indices(
         labels["pop_labels"],
-        val_ratio=0.1,
-        test_ratio=0.1,
+        val_ratio=VAL_RATIO,
+        test_ratio=TEST_RATIO,
         seed=PREPROCESS_SEED,
     )
     logger.info(
@@ -106,7 +107,7 @@ def main() -> None:
         f"test={len(test_idx)} (seed={PREPROCESS_SEED})"
     )
 
-    optimal_k = PCA_CANDIDATES[0]
+    optimal_k = PCA_K
     logger.info(f"Dimensionality reduction backend: {DIM_RED_METHOD}, K={optimal_k}")
 
     # Step 2 (Pass 2): Stream all 22 chr → PCA (train-only fit, full transform)
@@ -152,7 +153,7 @@ def main() -> None:
     # Step 5: Split (80/10/10) — reuse the indices the PCA was fit on.
     x_train, x_val, x_test, y_train, y_val, y_test, _ = split_dataset_stratified(
         tokenized, labels, sample_ids,
-        val_ratio=0.1, test_ratio=0.1, seed=PREPROCESS_SEED,
+        val_ratio=VAL_RATIO, test_ratio=TEST_RATIO, seed=PREPROCESS_SEED,
         precomputed_indices=(train_idx, val_idx, test_idx),
     )
     del tokenized
@@ -180,7 +181,7 @@ def main() -> None:
     metadata = {
         "version": 1,
         "dim_reduction_method": DIM_RED_METHOD,
-        "glm_family": GLM_PCA_FAMILY,
+        "glm_family": "poi",
         "glm_projection": "fixed_decoder_likelihood",
         "glm_decoder_path": "glm_pca_decoders.pkl",
         "normalization": {

@@ -879,7 +879,7 @@ flowchart TD
     subgraph PASS1["PASS 1 — setup (split 결정 + K 고정)"]
         P1A["Gene annotation (RefGene)<br/>gene_coords"]
         P1B["Pre-PCA stratified split<br/>train / val / test (seed = 20260327)"]
-        P1C["K = PCA_CANDIDATES[0] = 4 (고정)<br/>grid search 경로는 없음"]
+        P1C["K = PCA_K = 4 (고정)<br/>grid search 경로는 없음"]
         P1D["Hierarchical labels<br/>pop ↔ superpop mapping<br/>(create_hierarchical_labels)"]
     end
 
@@ -1010,8 +1010,7 @@ uv pip install glmpca-fast
 HIPODIT_DIM_RED=glm_pca python src/preprocessing/run_pipeline.py
 ```
 
-* Python fallback (`glmpca` PyPI) 는 자동 동작; Rust 빌드 시 ~13× 가속
-* `HIPODIT_GLM_FAMILY=poi`(default, Rust 가속) | `mult` | `nb` (Python fallback)
+* GLM family는 Poisson(`poi`) 고정이다. 다른 family 설정은 없다
 * 자세한 설명: `src/preprocessing/glm_pca.py` 모듈 docstring
 
 ---
@@ -1025,7 +1024,7 @@ gene-synthesis-project/
 │
 ├── src/
 │   ├── preprocessing/
-│   │   ├── config.py               # 전처리 상수 (경로, PCA_CANDIDATES[0]=K, MAF 등)
+│   │   ├── config.py               # 전처리 상수 (경로, PCA_K, VAL_RATIO/TEST_RATIO, MAF 등)
 │   │   ├── vcf_parser.py           # VCF 파싱 (Rust 바인딩 지원)
 │   │   ├── gene_annotation.py      # RefGene 유전자 어노테이션
 │   │   ├── pca.py                  # Gene PCA (train-only fit + transform)
@@ -1139,7 +1138,7 @@ Total per GPU                                          ≈ 4–6 GB
 | linear schedule · 1,000 timesteps | DiT 류 large-scale diffusion 의 표준; cosine 보다 후반부 noise 가 균형적 |
 | DDIM 100-step (η = 0.5) | 1,000-step DDPM 대비 10× 가속 + 부분 stochasticity 로 다양성 유지 |
 | AdaLN-Zero | α=0 초기화 → DiT가 identity로 시작 → 안정적 학습 |
-| K 고정 (grid search 없음) | `run_pipeline.py:109` 이 `optimal_k = PCA_CANDIDATES[0]` 로 K=4 고정. Marginal Gain Elbow 탐색 코드와 threshold/decay_ratio 상수는 삭제됐다 |
+| K 고정 (grid search 없음) | `run_pipeline.py` 가 `optimal_k = PCA_K` 로 K=4 고정. Marginal Gain Elbow 탐색 코드와 threshold/decay_ratio 상수는 삭제됐다 |
 | 패딩 → 정규화 순서 | 패딩 후 정규화하여 stats shape = (gene_size, K) 보장 |
 | 역정규화 padding 처리 | stats 크기 < gene_size일 때 자동 패딩 (mean=0, std=1) |
 | sqrt 비례 오버샘플링 | 균등(1:1)과 비례 사이의 균형 |

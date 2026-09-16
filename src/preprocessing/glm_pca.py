@@ -182,7 +182,6 @@ def glm_pca_single_gene(
     matrix: np.ndarray,
     n_components: int,
     train_indices: np.ndarray | None = None,
-    fam: str = DEFAULT_GLM_FAMILY,
     max_iter: int = DEFAULT_MAX_ITER,
 ) -> dict | None:
     """Fit a train-only Poisson GLM-PCA decoder and score every sample.
@@ -198,8 +197,6 @@ def glm_pca_single_gene(
         If provided, GLM-PCA is fit on these rows only and held-out rows are
         projected onto the fitted basis (matches the leakage-prevention flow
         of :func:`src.preprocessing.pca.pca_single_gene`).
-    fam : str, default 'poi'
-        Only the replayable Poisson fast-backend likelihood is supported.
     max_iter : int, default 100
         Maximum coordinate-descent iterations.
 
@@ -226,10 +223,6 @@ def glm_pca_single_gene(
     fit_matrix = matrix if train_indices is None else matrix[train_indices]
 
     # ── Rust fast path ─────────────────────────────────────────────────
-    if fam != "poi":
-        raise UnsupportedProjectionFamilyError(
-            f"GLM-PCA feature extraction requires 'poi', got {fam!r}"
-        )
     if _RUST_BACKEND is not None:
         result = _RUST_BACKEND.fit_poisson(
             np.ascontiguousarray(fit_matrix, dtype=np.float32),
@@ -248,7 +241,7 @@ def glm_pca_single_gene(
             train_indices=train_indices,
             loadings=loadings,
             intercept=intercept,
-            family=fam,
+            family=DEFAULT_GLM_FAMILY,
             backend=str(result["backend"]),
             backend_version=str(_RUST_BACKEND.__version__),
             projection="fixed_decoder_likelihood",

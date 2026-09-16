@@ -24,9 +24,11 @@ PER_CHROM_VCF_PATTERN = "ALL.chr{chrom}.phase3_shapeit2_mvncall_integrated_v5b.2
 
 CHROMOSOMES = list(range(1, 23))
 PREPROCESS_SEED = 20260327
+VAL_RATIO = 0.1
+TEST_RATIO = 0.1
 
-# Per-gene component counts; run_pipeline.py uses PCA_CANDIDATES[0] as K.
-PCA_CANDIDATES = [4, 6, 8, 10, 12, 16]
+# Per-gene component count used by run_pipeline.py.
+PCA_K = 4
 
 # Per-gene dimensionality reduction backend.
 #   'pca'      — Gaussian PCA (sklearn). Fast (~10 ms/gene); misspecified for
@@ -35,7 +37,6 @@ PCA_CANDIDATES = [4, 6, 8, 10, 12, 16]
 #                 approximation for bounded dosage, accelerated by glmpca-fast.
 # Override at runtime: HIPODIT_DIM_RED=glm_pca python src/preprocessing/run_pipeline.py
 DIM_RED_METHOD = os.environ.get("HIPODIT_DIM_RED", "glm_pca")
-GLM_PCA_FAMILY = os.environ.get("HIPODIT_GLM_FAMILY", "poi")  # 'poi' enables Rust path; 'mult' | 'nb' fall back to glmpca-py
 GLM_PCA_MAX_ITER = int(os.environ.get("HIPODIT_GLM_MAX_ITER", "100"))
 
 # Gene size alignment (CNN downsampling x4 + patch_size 16 -> 256)

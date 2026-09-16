@@ -55,7 +55,7 @@ def reduce_single_gene(
         return glm_pca_single_gene(
             gene_name=gene_name, matrix=matrix,
             n_components=n_components, train_indices=train_indices,
-            **{k: v for k, v in kwargs.items() if k in ("fam", "max_iter")},
+            **{k: v for k, v in kwargs.items() if k in ("max_iter",)},
         )
     raise ValueError(
         f"Unknown DIM_RED_METHOD: {method!r}. "

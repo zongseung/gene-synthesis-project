@@ -3,10 +3,7 @@ data:
   gene_size: 24576
   num_channels: 4
   num_classes: 26
-  num_superpops: 5
-  num_samples: 2504
   test_ratio: 0.1
-  split_seed: 20260327
   normalize: true
   enforce_zeros: true
   dim_reduction_method: "glm_pca"
@@ -14,7 +11,6 @@ data:
   normalization_stats_path: "data/processed/normalization_stats.pkl"
   zero_mask_path: "data/processed/zero_mask.pt"
   label_hierarchy_path: "data/processed/label_hierarchy.pkl"
-  split_manifest_path: "data/processed/split_manifest.json"
 
 # ── 모델 ──
 model:
@@ -66,7 +62,6 @@ experiment:
   run_name: "20260915_glm_pca_baseline"
   tags: ["hybrid-genodit", "glm-pca", "baseline", "adaln-zero"]
   save_top_k_checkpoints: 3
-  export_policy: "internal_only"
 
 # ── DDP ──
 distributed:
