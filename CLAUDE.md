@@ -21,7 +21,7 @@ This repo has two independent virtualenvs — never merge them:
 # Environment
 uv sync
 
-# Preprocessing (parallel VCF → Gene PCA → tokenized tensors)
+# Preprocessing (sequential: 1 chromosome at a time → Gene PCA → tokenized tensors)
 python src/preprocessing/run_pipeline.py
 
 # VCF merging (22 chromosomes parallel)
@@ -55,7 +55,7 @@ CNN-DiT hybrid diffusion model with FiLM (Feature-wise Linear Modulation) condit
 
 ```
 src/
-├── preprocessing/        # VCF→Gene PCA→tokens (22-chr parallel, joblib PCA)
+├── preprocessing/        # VCF→Gene PCA→tokens (22 chr streamed one at a time, serial per-gene PCA)
 ├── models/
 │   ├── hybrid_geno_dit.py  # Main model: CNN encoder → DiT core → CNN decoder
 │   ├── diffusion.py         # GaussianDiffusion (schedule_type default cosine; configs/default.yaml uses linear, 1000 timesteps, 100 DDIM sampling steps)
@@ -80,7 +80,7 @@ src/
 - **DDP on 2 GPUs**: Always `torchrun --nproc_per_node=2`. Logging/saving on rank 0 only. `DistributedSampler` with `set_epoch()`.
 - **No early stopping**: Run full epochs, track best by `val_reconstruction_error`, save `best_model.pth`.
 - **Optimizer**: AdamW with cosine warmup scheduler.
-- **Time-intensive preprocessing parallelized**: VCF parsing (22 workers), gene PCA (joblib). Evaluation (`scripts/evaluate_synthetic_metrics.py`) is single-process; it caches loaded tensors and PCA coordinates instead.
+- **Preprocessing is sequential by design, for memory**: `stream_vcf_and_pca` walks the 22 chromosomes one at a time (`src/preprocessing/pca.py:107` logs `Streaming VCF→PCA: sequential ... (OOM-safe: 1 chr at a time)`) so peak RAM stays at roughly one chromosome, and gene reduction is a plain serial `for` loop over genes (`src/preprocessing/pca.py:133`). No `joblib` anywhere in the repo. The only parallel component is the separate merge utility `src/preprocessing/merge_data.py` (`multiprocessing.Pool`, `N_WORKERS = min(22, cpu_count())`), which is not part of the pipeline. Evaluation (`scripts/evaluate_synthetic_metrics.py`) is single-process; it caches loaded tensors and PCA coordinates instead.
 - **Domain-driven**: CNN captures local LD, DiT captures long-range gene interactions, FiLM modulates per population. 생물학적 제약(항상 0인 위치)은 모델이 아니라 `GaussianDiffusion._apply_zero_mask`가 강제한다 — `enforce_zeros` 플래그 + `zero_mask` 버퍼로 q_sample·p_sample·DDIM 각 스텝과 손실에 적용된다. 모델 `forward`에는 zero-mask 경로가 없다.
 - **Model saves as .pth**: `torch.save({'model_state_dict': model.module.state_dict(), 'config': config, ...}, 'best_model.pth')`.
 

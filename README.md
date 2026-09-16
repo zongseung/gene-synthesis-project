@@ -890,18 +890,20 @@ flowchart TD
 
     subgraph FIN["FINALIZATION"]
         F1["Hierarchical labels<br/>pop ↔ superpop mapping"]
-        F2["Tokenize + alignment pad<br/>multiple of 128"]
-        F3["Normalize (post-pad)<br/>stats shape = (gene_size, K)"]
-        F4["zero_mask generation"]
-        F5["Stratified split (train / test)<br/>seed = 20260327"]
+        F2["Tokenize (gene_order 정렬)"]
+        F3["Stratified split (train / val / test)<br/>PASS 1 인덱스 재사용<br/>(precomputed_indices)"]
+        F4["Alignment pad → zero_mask 생성<br/>gene_size = GENE_SIZE_ALIGNMENT(256)의 배수"]
+        F5["Normalize (post-pad, fit_split=train)<br/>stats shape = (gene_size, K)"]
     end
 
     OUT["data/processed/<br/>gene_pca_features.pkl<br/>train_data.pkl · test_data.pkl<br/>normalization_stats.pkl<br/>label_hierarchy.pkl<br/>zero_mask.pt<br/>split_manifest.json<br/>preprocessing_metadata.json"]
 
-    P1A --> P1C
-    PANEL --> P1B --> P1C
-    P1C --> P2A --> P2B --> P2C
-    VCF --> P2A
+    PANEL --> P1B
+    VCF --> P2A --> P2B --> P2C
+    P1A -. gene_coords .-> P2A
+    P1B -. train_idx = PCA fit rows .-> P2B
+    P1C -. K = 4 .-> P2B
+    P1B -. train/val/test 인덱스 .-> F3
     P2C --> F1 --> F2 --> F3 --> F4 --> F5 --> OUT
 
     classDef p1 fill:#bfdbfe,stroke:#1e40af,color:#000
@@ -1136,7 +1138,7 @@ Total per GPU                                          ≈ 4–6 GB
 | linear schedule · 1,000 timesteps | DiT 류 large-scale diffusion 의 표준; cosine 보다 후반부 noise 가 균형적 |
 | DDIM 100-step (η = 0.5) | 1,000-step DDPM 대비 10× 가속 + 부분 stochasticity 로 다양성 유지 |
 | AdaLN-Zero | α=0 초기화 → DiT가 identity로 시작 → 안정적 학습 |
-| Marginal Gain Elbow (K 선택) | threshold=0.03, decay_ratio=0.5로 데이터 적응적 |
+| K 고정 (grid search 없음) | `run_pipeline.py:109` 이 `optimal_k = PCA_CANDIDATES[0]` 로 K=4 고정. Marginal Gain Elbow 탐색 코드와 threshold/decay_ratio 상수는 삭제됐다 |
 | 패딩 → 정규화 순서 | 패딩 후 정규화하여 stats shape = (gene_size, K) 보장 |
 | 역정규화 padding 처리 | stats 크기 < gene_size일 때 자동 패딩 (mean=0, std=1) |
 | sqrt 비례 오버샘플링 | 균등(1:1)과 비례 사이의 균형 |
