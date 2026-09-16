@@ -1,4 +1,10 @@
-"""Per-gene PCA."""
+"""Per-gene dimensionality reduction over streamed VCF chromosomes.
+
+`stream_vcf_and_pca` (the module's main export) dispatches each gene through
+`src.preprocessing.dim_reduction.reduce_single_gene`, whose backend is chosen by
+`config.DIM_RED_METHOD` — Poisson GLM-PCA by default, Gaussian sklearn PCA when
+`HIPODIT_DIM_RED=pca`. `pca_single_gene` here is the sklearn-PCA path.
+"""
 
 from __future__ import annotations
 

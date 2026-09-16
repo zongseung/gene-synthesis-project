@@ -151,7 +151,7 @@ Preprocessing produces: `gene_pca_features.pkl`, `train_data.pkl`, `test_data.pk
 - **Hierarchical labels**: 26 populations map to 5 superpopulations (AFR/EUR/EAS/SAS/AMR). The `pop_to_superpop` mapping in `label_hierarchy.pkl` is loaded by `HierarchicalPopulationEmbedding` to enable information sharing from superpop (e.g., AFR 661 samples) to minority pop (e.g., ASW 61 samples).
 - **AdaLN-Zero in DiT = FiLM**: DiT blocks use `γ·LayerNorm(x) + β` with α (gate) initialized to zero. This means DiT starts as identity function and gradually learns long-range corrections on top of CNN features.
 - **차원 축소**: 기본값은 `glm_pca` (`src/preprocessing/config.py`의 `DIM_RED_METHOD`, `HIPODIT_DIM_RED` 환경변수로 변경). `configs/default.yaml`은 `num_channels: 4`, `gene_size: 24576`을 쓴다. 성분 수 그리드 서치는 linear PCA 경로의 동작이며 glm_pca 기본 경로에는 적용되지 않는다. 모델 입력은 `(num_channels, gene_size)`.
-- **EMA** (Exponential Moving Average) with decay 0.9999 is applied during training; EMA weights are used for inference.
+- **EMA** (Exponential Moving Average) with decay 0.999 (`configs/default.yaml: training.ema_decay`) is applied during training; EMA weights are used for inference. The 0.9999 seen in `src/utils/ema.py` is the `EMAModel` class's own default, used only when a config omits `ema_decay` — the shipped config does not.
 - **Population-balanced sampling**: sqrt-proportional oversampling for minority populations.
 - **wandb** logging is restricted to rank 0 in DDP. Config key: `WANDB_MODE=offline` for no-internet runs.
 - 연구 기록은 `docs/reports/`와 `docs/superpowers/plans/`에 있다 (`docs/01_overview/`~`09_*` 디렉터리는 더 이상 없다).

@@ -36,6 +36,7 @@ from src.preprocessing.config import (  # noqa: E402
     PER_CHROM_VCF_DIR as VCF_DIR,
     PER_CHROM_VCF_PATTERN as VCF_PATTERN,
 )
+
 CHROMOSOMES = list(range(1, 23))
 N_WORKERS = min(22, cpu_count())
 OUTPUT_DIR = os.path.join(PROJECT_ROOT, "data")

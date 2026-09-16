@@ -880,6 +880,7 @@ flowchart TD
         P1A["Gene annotation (RefGene)<br/>gene_coords"]
         P1B["Pre-PCA stratified split<br/>train / val / test (seed = 20260327)"]
         P1C["K = PCA_CANDIDATES[0] = 4 (고정)<br/>grid search 경로는 없음"]
+        P1D["Hierarchical labels<br/>pop ↔ superpop mapping<br/>(create_hierarchical_labels)"]
     end
 
     subgraph PASS2["PASS 2 — full streaming transform"]
@@ -889,7 +890,6 @@ flowchart TD
     end
 
     subgraph FIN["FINALIZATION"]
-        F1["Hierarchical labels<br/>pop ↔ superpop mapping"]
         F2["Tokenize (gene_order 정렬)"]
         F3["Stratified split (train / val / test)<br/>PASS 1 인덱스 재사용<br/>(precomputed_indices)"]
         F4["Alignment pad → zero_mask 생성<br/>gene_size = GENE_SIZE_ALIGNMENT(256)의 배수"]
@@ -898,20 +898,21 @@ flowchart TD
 
     OUT["data/processed/<br/>gene_pca_features.pkl<br/>train_data.pkl · test_data.pkl<br/>normalization_stats.pkl<br/>label_hierarchy.pkl<br/>zero_mask.pt<br/>split_manifest.json<br/>preprocessing_metadata.json"]
 
-    PANEL --> P1B
+    PANEL --> P1D --> P1B
     VCF --> P2A --> P2B --> P2C
     P1A -. gene_coords .-> P2A
     P1B -. train_idx = PCA fit rows .-> P2B
     P1C -. K = 4 .-> P2B
     P1B -. train/val/test 인덱스 .-> F3
-    P2C --> F1 --> F2 --> F3 --> F4 --> F5 --> OUT
+    P1D -. 라벨 (label_hierarchy.pkl 저장은 save_all) .-> F3
+    P2C --> F2 --> F3 --> F4 --> F5 --> OUT
 
     classDef p1 fill:#bfdbfe,stroke:#1e40af,color:#000
     classDef p2 fill:#bbf7d0,stroke:#166534,color:#000
     classDef fin fill:#fde68a,stroke:#b45309,color:#000
-    class P1A,P1B,P1C p1
+    class P1A,P1B,P1C,P1D p1
     class P2A,P2B,P2C p2
-    class F1,F2,F3,F4,F5 fin
+    class F2,F3,F4,F5 fin
 ```
 
 > **Peak RAM 추정** ≈ 1 chromosome (~3–5 GB for chr1) + 누적 PCA features (~2 GB).
