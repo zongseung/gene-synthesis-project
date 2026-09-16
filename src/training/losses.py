@@ -262,14 +262,10 @@ def compute_training_loss(
 
         if lambda_class > 0:
             level = aux_cfg.get("class_alignment_level", "superpop")
-            if level == "superpop":
-                class_labels = map_to_superpop_labels(y, config)
-                weights = aux_cfg.get("class_alignment_weights", None)
-            elif level == "pop":
-                class_labels = y
-                weights = aux_cfg.get("pop_alignment_weights", None)
-            else:
+            if level != "superpop":
                 raise ValueError(f"Unsupported aux_loss.class_alignment_level: {level}")
+            class_labels = map_to_superpop_labels(y, config)
+            weights = aux_cfg.get("class_alignment_weights", None)
 
             class_centroid = class_centroid_alignment_loss(
                 real_flat,

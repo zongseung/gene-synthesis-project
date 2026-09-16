@@ -12,23 +12,6 @@ import torch
 from src.inference import generator
 
 
-def test_checkpoint_config_is_authoritative_for_generation() -> None:
-    passed = {"data": {"gene_size": 99}, "diffusion": {"max_timesteps": 99}}
-    trained = {"data": {"gene_size": 8}, "diffusion": {"max_timesteps": 10}}
-
-    resolved = generator.resolve_generation_config({"config": trained}, passed)
-
-    assert resolved is trained
-
-
-def test_passed_config_is_used_for_legacy_checkpoint_without_config() -> None:
-    passed = {"data": {"gene_size": 8}, "diffusion": {"max_timesteps": 10}}
-
-    resolved = generator.resolve_generation_config({}, passed)
-
-    assert resolved is passed
-
-
 def test_diffusion_uses_checkpoint_prediction_contract() -> None:
     data = {"num_classes": 3, "enforce_zeros": False}
     diffusion = {

@@ -94,10 +94,6 @@ def postprocess_samples(
     return samples
 
 
-def resolve_generation_config(checkpoint: dict, passed_config: dict) -> dict:
-    return checkpoint.get("config", passed_config)
-
-
 def build_generation_diffusion(
     data_config: dict,
     diffusion_config: dict,
@@ -183,7 +179,7 @@ def generate_samples(
 
     checkpoint = torch.load(model_path, map_location=device, weights_only=False)
 
-    generation_config = resolve_generation_config(checkpoint, config)
+    generation_config = checkpoint.get("config", config)
     model = HybridCNNDiTFiLM(generation_config).to(device)
     model.load_state_dict(checkpoint["model_state_dict"])
 
