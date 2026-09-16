@@ -1,9 +1,7 @@
 """Per-gene dimensionality reduction over streamed VCF chromosomes.
 
-`stream_vcf_and_pca` (the module's main export) dispatches each gene through
-`src.preprocessing.dim_reduction.reduce_single_gene`, whose backend is chosen by
-`config.DIM_RED_METHOD` — Poisson GLM-PCA by default, Gaussian sklearn PCA when
-`HIPODIT_DIM_RED=pca`. `pca_single_gene` here is the sklearn-PCA path.
+`stream_vcf_and_pca` (the module's main export) runs Poisson GLM-PCA on every
+gene of one chromosome at a time.
 """
 
 from __future__ import annotations
@@ -16,68 +14,18 @@ import pickle
 
 import numpy as np
 import pandas as pd
-from sklearn.decomposition import PCA
 
 from src.preprocessing.config import (
     CHROMOSOMES,
-    DIM_RED_METHOD,
     GLM_PCA_MAX_ITER,
     MAF_THRESHOLD,
     MAX_VARIANTS_PER_GENE,
     PROCESSED_DIR,
 )
-from src.preprocessing.dim_reduction import reduce_single_gene
-from src.preprocessing.vcf_parser import process_one_chromosome
+from src.preprocessing.glm_pca import glm_pca_single_gene
+from src.preprocessing.vcf_parser import process_one_chromosome, resolve_vcf_path
 
 logger = logging.getLogger(__name__)
-
-
-def pca_single_gene(
-    gene_name: str,
-    matrix: np.ndarray,
-    n_components: int,
-    train_indices: np.ndarray | None = None,
-) -> dict | None:
-    """Apply PCA to a single gene's variant matrix.
-
-    If `train_indices` is provided, the PCA basis is fit on train rows only
-    and then used to transform the full matrix (preventing val/test leakage
-    into per-gene loadings). Otherwise falls back to fit_transform on the
-    whole matrix (legacy behavior; leaks val/test).
-    """
-    n_vars = matrix.shape[1]
-    n_fit_samples = (
-        matrix.shape[0] if train_indices is None else int(len(train_indices))
-    )
-    n_comp = min(n_components, n_vars, n_fit_samples)
-
-    if n_comp < 2:
-        return None
-
-    try:
-        pca = PCA(n_components=n_comp)
-        if train_indices is None:
-            transformed = pca.fit_transform(matrix)
-        else:
-            pca.fit(matrix[train_indices])
-            transformed = pca.transform(matrix)
-        explained = float(np.sum(pca.explained_variance_ratio_))
-        per_component = pca.explained_variance_ratio_.tolist()
-
-        features = {}
-        for k in range(n_comp):
-            features[f"{gene_name}:{k}"] = transformed[:, k]
-
-        return {
-            "features": features,
-            "explained_total": explained,
-            "explained_per_component": per_component,
-            "n_variants": n_vars,
-            "actual_k": n_comp,
-        }
-    except Exception as e:
-        logger.warning(f"PCA failed for {gene_name}: {e}")
-        return None
 
 
 def _pool_init_no_blas_threads() -> None:
@@ -88,12 +36,11 @@ def _pool_init_no_blas_threads() -> None:
 
 
 def _reduce_one(
-    task: tuple[str, np.ndarray, str, int, np.ndarray | None, int],
+    task: tuple[str, np.ndarray, int, np.ndarray | None, int],
 ) -> tuple[str, dict | None]:
-    """Picklable top-level worker: unpack one gene's task and dispatch it."""
-    gene_name, matrix, method, n_components, train_indices, max_iter = task
-    result = reduce_single_gene(
-        method=method,
+    """Picklable top-level worker: reduce one gene's variant matrix."""
+    gene_name, matrix, n_components, train_indices, max_iter = task
+    result = glm_pca_single_gene(
         gene_name=gene_name,
         matrix=matrix,
         n_components=n_components,
@@ -153,15 +100,14 @@ def stream_vcf_and_pca(
                 logger.warning(f"[chr{chrom_num}] No gene annotations found, skipping")
                 continue
 
-            args = (
+            _, gene_matrices, sids = process_one_chromosome(
                 chrom_num,
-                vcf_path,
+                resolve_vcf_path(chrom_num, vcf_path),
                 MAF_THRESHOLD,
                 MAX_VARIANTS_PER_GENE,
                 chrom_genes,
                 train_indices,
             )
-            _, gene_matrices, sids = process_one_chromosome(args)
 
             # Fail loudly: a parser that silently returned nothing for chr2-22
             # once produced a "complete" chr1-only dataset.
@@ -183,7 +129,6 @@ def stream_vcf_and_pca(
                 (
                     gene_name,
                     gene_matrices[gene_name],
-                    DIM_RED_METHOD,
                     optimal_k,
                     train_indices,
                     GLM_PCA_MAX_ITER,

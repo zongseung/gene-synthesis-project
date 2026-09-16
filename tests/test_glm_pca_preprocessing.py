@@ -1,12 +1,9 @@
 """Unit tests for the GLM-PCA preprocessing backend.
 
 Verifies:
-1. Output schema matches PCA so downstream pipeline does not branch.
+1. Output schema carries the fields downstream code reads.
 2. Train-only fit + held-out projection produces consistent shapes.
 3. Pseudo-R² (deviance reduction) is bounded in [0, 1].
-4. Dispatcher in :mod:`src.preprocessing.dim_reduction` routes correctly.
-5. On simulated Binomial(2, p) data, GLM-PCA's variance-alignment quality
-   is at least as good as PCA's.
 """
 
 from __future__ import annotations
@@ -29,15 +26,17 @@ def binomial_dosage_matrix():
 
 # ── Schema parity ───────────────────────────────────────────────────────
 class TestSchemaParity:
-    def test_glm_pca_returns_same_schema_as_pca(self, binomial_dosage_matrix):
+    def test_glm_pca_result_carries_decoder_fields(self, binomial_dosage_matrix):
         from src.preprocessing.glm_pca import glm_pca_single_gene
-        from src.preprocessing.pca import pca_single_gene
 
-        res_p = pca_single_gene("BRCA1", binomial_dosage_matrix, n_components=K)
         res_g = glm_pca_single_gene("BRCA1", binomial_dosage_matrix, n_components=K)
-        assert res_p is not None and res_g is not None
-        assert set(res_p).issubset(res_g)
+        assert res_g is not None
         assert {
+            "features",
+            "explained_total",
+            "explained_per_component",
+            "n_variants",
+            "actual_k",
             "loadings",
             "intercept",
             "family",
@@ -50,11 +49,7 @@ class TestSchemaParity:
         assert res_g["family"] == "poi"
         assert res_g["link"] == "log"
         assert res_g["penalty"] == 1.0
-
-        # Feature dict has the same keys (one per latent component)
-        assert sorted(res_p["features"].keys()) == sorted(res_g["features"].keys())
-        for key in res_p["features"]:
-            assert res_p["features"][key].shape == res_g["features"][key].shape
+        assert sorted(res_g["features"]) == [f"BRCA1:{k}" for k in range(K)]
 
         # Pseudo-R² and explained_variance both in [0, 1]
         assert 0.0 <= res_g["explained_total"] <= 1.0
@@ -170,31 +165,6 @@ class TestTrainOnlyProjection:
             arr = res["features"][f"GENE_Y:{k}"][train_idx]
             assert np.isfinite(arr).all()
             assert arr.std() > 0  # non-degenerate
-
-
-# ── Dispatcher ──────────────────────────────────────────────────────────
-class TestDispatcher:
-    def test_dispatcher_routes_to_pca(self, binomial_dosage_matrix):
-        from src.preprocessing.dim_reduction import reduce_single_gene
-        out = reduce_single_gene(
-            method="pca", gene_name="G", matrix=binomial_dosage_matrix, n_components=K,
-        )
-        assert out is not None and out["actual_k"] == K
-
-    def test_dispatcher_routes_to_glm_pca(self, binomial_dosage_matrix):
-        from src.preprocessing.dim_reduction import reduce_single_gene
-        out = reduce_single_gene(
-            method="glm_pca", gene_name="G", matrix=binomial_dosage_matrix, n_components=K,
-        )
-        assert out is not None and out["actual_k"] == K
-
-    def test_dispatcher_rejects_unknown_method(self, binomial_dosage_matrix):
-        from src.preprocessing.dim_reduction import reduce_single_gene
-        with pytest.raises(ValueError, match="Unknown DIM_RED_METHOD"):
-            reduce_single_gene(
-                method="tsne", gene_name="G",
-                matrix=binomial_dosage_matrix, n_components=K,
-            )
 
 
 # ── Statistical sanity ─────────────────────────────────────────────────

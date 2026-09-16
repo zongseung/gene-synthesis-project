@@ -853,7 +853,7 @@ FiLM 기반 계층적 임베딩의 핵심 가설을 검증하는 지표다.
 | DUPI abs error | 0.379 | smaller = closer to balance |
 | **Privacy Index** (τ=5) | **0.943** | ≈ 0.867 = optimal |
 | Utility Index (τ=5) | 0.706 | ≈ 0.867 = optimal |
-| U × P | 0.666 | ≤ 0.751 (Theorem 5 bound) |
+| U × P | 0.666 | ≤ 0.7511 (Theorem 5 bound, p. 725) |
 | Centroid distance | 1.351 | smaller = better |
 | Gaussian W2 | 10.93 | smaller = better |
 | MMD-RBF (biased) | 0.00136 | smaller = better |
@@ -1026,8 +1026,7 @@ data.gene_size: <유전자 수를 256 배수로 올림한 값>
 uv sync
 
 # Phase 0.5: VCF 병합 (22 염색체 병렬)
-python src/preprocessing/merge_data.py --format vcf
-python src/preprocessing/merge_data.py --format pkl --maf 0.01
+python src/preprocessing/merge_data.py
 
 # Phase 1: 전처리 (VCF → Gene GLM-PCA → 토큰화)
 #   Rust VCF 파서 설치 (한 번, Rust 툴체인 필요. 소스 수정 후에도 다시 실행)
@@ -1078,8 +1077,8 @@ python scripts/evaluate_synthetic_metrics.py \
     --tau 5.0
 
 # Phase 6: PCA real vs synthetic 시각화
-python src/evaluation/pca_compare.py \
-    --syn_dir outputs/default/synthetic_samples
+python scripts/plot_pca.py \
+    --syn-dir outputs/default/synthetic_samples
 
 # Phase 7: Guidance weight 스윕 (CFG w 탐색)
 python scripts/guidance_sweep.py \
@@ -1158,8 +1157,7 @@ gene-synthesis-project/
 │   │   ├── dupi.py                 # DUPI · UI · PI (Eqs. 8/10-13, citable core)
 │   │   ├── distribution_metrics.py # Gaussian W2, MMD-RBF, coverage, centroid
 │   │   ├── synthetic_pipeline.py   # evaluate() + EvaluationReport dataclass
-│   │   ├── _io.py                  # 프로젝트-특화 IO + 캐싱 (project-coupled)
-│   │   └── pca_compare.py          # Real vs Syn PCA scatter plot 생성
+│   │   └── _io.py                  # 프로젝트-특화 IO + 캐싱 (project-coupled)
 │   │
 │   ├── data/
 │   │   ├── dataset.py              # GenotypeDataset (pkl → tensor)
@@ -1274,7 +1272,7 @@ Total per GPU                                          ≈ 4–6 GB
 ## Tests
 
 ```bash
-pytest tests/                 # 전체 228 tests (CPU 전용, 수 분)
+pytest tests/                 # 전체 228 tests (CPU 전용, 약 30초)
 pytest tests/test_dupi.py -v  # DUPI 만: 29 tests · 수 초
 ```
 

@@ -853,7 +853,7 @@ Evaluation of 2,504 synthetic samples from the model trained with guidance weigh
 | DUPI abs error | 0.379 | smaller = closer to balance |
 | **Privacy Index** (τ=5) | **0.943** | ≈ 0.867 = optimal |
 | Utility Index (τ=5) | 0.706 | ≈ 0.867 = optimal |
-| U × P | 0.666 | ≤ 0.751 (Theorem 5 bound) |
+| U × P | 0.666 | ≤ 0.7511 (Theorem 5 bound, p. 725) |
 | Centroid distance | 1.351 | smaller = better |
 | Gaussian W2 | 10.93 | smaller = better |
 | MMD-RBF (biased) | 0.00136 | smaller = better |
@@ -1026,8 +1026,7 @@ data.gene_size: <number of genes rounded up to a multiple of 256>
 uv sync
 
 # Phase 0.5: VCF merge (22 chromosomes in parallel)
-python src/preprocessing/merge_data.py --format vcf
-python src/preprocessing/merge_data.py --format pkl --maf 0.01
+python src/preprocessing/merge_data.py
 
 # Phase 1: preprocessing (VCF → Gene GLM-PCA → tokenization)
 #   Install the Rust VCF parser (once; requires the Rust toolchain. Run again after editing the source)
@@ -1078,8 +1077,8 @@ python scripts/evaluate_synthetic_metrics.py \
     --tau 5.0
 
 # Phase 6: PCA real vs synthetic visualization
-python src/evaluation/pca_compare.py \
-    --syn_dir outputs/default/synthetic_samples
+python scripts/plot_pca.py \
+    --syn-dir outputs/default/synthetic_samples
 
 # Phase 7: guidance weight sweep (CFG w search)
 python scripts/guidance_sweep.py \
@@ -1158,8 +1157,7 @@ gene-synthesis-project/
 │   │   ├── dupi.py                 # DUPI · UI · PI (Eqs. 8/10-13, citable core)
 │   │   ├── distribution_metrics.py # Gaussian W2, MMD-RBF, coverage, centroid
 │   │   ├── synthetic_pipeline.py   # evaluate() + EvaluationReport dataclass
-│   │   ├── _io.py                  # Project-specific IO + caching (project-coupled)
-│   │   └── pca_compare.py          # Generates Real vs Syn PCA scatter plots
+│   │   └── _io.py                  # Project-specific IO + caching (project-coupled)
 │   │
 │   ├── data/
 │   │   ├── dataset.py              # GenotypeDataset (pkl → tensor)
@@ -1274,7 +1272,7 @@ Total per GPU                                          ≈ 4–6 GB
 ## Tests
 
 ```bash
-pytest tests/                 # All 228 tests (CPU only, a few minutes)
+pytest tests/                 # All 228 tests (CPU only, about 30 s)
 pytest tests/test_dupi.py -v  # DUPI only: 29 tests · a few seconds
 ```
 

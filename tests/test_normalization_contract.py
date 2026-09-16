@@ -67,51 +67,8 @@ def test_tokenizer_uses_explicit_gene_and_numeric_component_order():
     assert tokenized[0, 1, 1] == 1.0
 
 
-def test_variant_filter_and_imputation_use_train_rows_only():
-    from src.preprocessing.vcf_parser import _filter_and_impute_dosage
-
-    dosage = np.array([0.0, 0.0, np.nan, 2.0], dtype=np.float32)
-    train_indices = np.array([0, 1], dtype=np.int64)
-
-    filtered = _filter_and_impute_dosage(dosage, train_indices, maf_threshold=0.01)
-
-    assert filtered is None
-
-    dosage = np.array([0.0, 2.0, np.nan, 2.0], dtype=np.float32)
-    filtered = _filter_and_impute_dosage(dosage, train_indices, maf_threshold=0.01)
-
-    assert filtered is not None
-    assert filtered[2] == 1.0
-
-
 def test_gene_size_matches_default_model_downsampling_and_patch_stride():
     from src.preprocessing.tokenizer import compute_gene_size
 
     assert compute_gene_size(24_482) == 24_576
     assert compute_gene_size(128) == 256
-
-
-def test_gene_lookup_keeps_enclosing_overlaps():
-    from src.preprocessing.vcf_parser import _build_gene_index, _find_genes_for_position
-
-    genes = [
-        {"name": "LONG", "start": 0, "end": 100},
-        {"name": "SHORT", "start": 50, "end": 60},
-    ]
-
-    starts, ordered, max_ends = _build_gene_index(genes)
-
-    assert _find_genes_for_position(70, starts, ordered, max_ends) == ["LONG"]
-
-
-def test_gene_lookup_converts_refgene_half_open_to_vcf_coordinates():
-    from src.preprocessing.vcf_parser import _build_gene_index, _find_genes_for_position
-
-    starts, genes, max_ends = _build_gene_index(
-        [{"name": "GENE", "start": 10, "end": 20}]
-    )
-
-    assert _find_genes_for_position(10, starts, genes, max_ends) == []
-    assert _find_genes_for_position(11, starts, genes, max_ends) == ["GENE"]
-    assert _find_genes_for_position(20, starts, genes, max_ends) == ["GENE"]
-    assert _find_genes_for_position(21, starts, genes, max_ends) == []

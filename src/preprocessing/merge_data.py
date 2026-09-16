@@ -15,12 +15,8 @@ import os
 import sys
 import time
 import argparse
-import numpy as np
-import pandas as pd
-import pickle
 import pysam
 from multiprocessing import Pool, cpu_count
-from functools import partial
 
 # ──────────────────────────────────────────────
 # Configuration
@@ -214,180 +210,23 @@ def merge_vcf_concat(vcf_files, output_path):
     print(f"\n결과: {output_path} ({size_gb:.1f} GB)")
 
 
-# ──────────────────────────────────────────────
-# 방법 2: Haplotype 행렬 추출 (TSV / PKL 출력)
-# ──────────────────────────────────────────────
-def extract_haplotypes_one(chrom, biallelic_only=True, maf_threshold=0.0):
-    """
-    단일 염색체에서 haplotype 행렬 추출
-    Returns: (chrom, positions_df, hap_matrix)
-      - positions_df: DataFrame with CHROM, POS, REF, ALT
-      - hap_matrix: numpy array (n_snps, n_haplotypes) of 0/1
-    """
-    from cyvcf2 import VCF
-
-    vcf_path = os.path.join(VCF_DIR, VCF_PATTERN.format(chrom=chrom))
-    if not os.path.exists(vcf_path):
-        print(f"  [chr{chrom}] 파일 없음, 건너뜀", flush=True)
-        return chrom, None, None
-
-    t0 = time.time()
-    print(f"  [chr{chrom}] 읽는 중...", flush=True)
-
-    vcf = VCF(vcf_path)
-    sample_names = vcf.samples
-    n_samples = len(sample_names)
-
-    positions = []   # (chrom, pos, ref, alt)
-    hap_rows = []    # each row: 0/1 array of length 2*n_samples
-
-    for variant in vcf:
-        # biallelic SNP만
-        if biallelic_only:
-            if len(variant.ALT) != 1 or len(variant.REF) != 1 or len(variant.ALT[0]) != 1:
-                continue
-
-        # phased genotype 추출: gt_phases_array는 없으므로 직접 파싱
-        gt_array = variant.genotype.array()  # shape: (n_samples, 3) → allele1, allele2, phased
-        allele1 = gt_array[:, 0]  # 0 or 1
-        allele2 = gt_array[:, 1]  # 0 or 1
-
-        # missing (-1) 처리
-        valid = (allele1 >= 0) & (allele2 >= 0)
-        if valid.sum() == 0:
-            continue
-
-        # MAF 필터
-        if maf_threshold > 0:
-            af = (allele1[valid].sum() + allele2[valid].sum()) / (2.0 * valid.sum())
-            maf = min(af, 1 - af)
-            if maf < maf_threshold:
-                continue
-
-        # missing → 0으로 대체
-        allele1[~valid] = 0
-        allele2[~valid] = 0
-
-        # 2개의 haplotype을 interleave: [a1_s1, a2_s1, a1_s2, a2_s2, ...]
-        hap = np.empty(2 * n_samples, dtype=np.int8)
-        hap[0::2] = allele1
-        hap[1::2] = allele2
-        hap_rows.append(hap)
-
-        positions.append((f"chr{chrom}", variant.POS, variant.REF, variant.ALT[0]))
-
-    elapsed = time.time() - t0
-
-    if len(hap_rows) == 0:
-        print(f"  [chr{chrom}] SNP 없음 ({elapsed:.0f}s)", flush=True)
-        return chrom, None, None
-
-    hap_matrix = np.stack(hap_rows)  # (n_snps, 2*n_samples)
-    pos_df = pd.DataFrame(positions, columns=["CHROM", "POS", "REF", "ALT"])
-
-    print(f"  [chr{chrom}] 완료: {len(hap_rows):,} SNPs × {2*n_samples} haplotypes ({elapsed:.0f}s)",
-          flush=True)
-    return chrom, pos_df, hap_matrix
-
-
-def merge_haplotype_matrix(output_path, fmt="pkl", maf_threshold=0.0):
-    """전체 염색체 haplotype 행렬 병합"""
-    print(f"\n=== Haplotype 행렬 추출 ({N_WORKERS} workers) ===")
-
-    extract_fn = partial(extract_haplotypes_one, maf_threshold=maf_threshold)
-    t0 = time.time()
-
-    with Pool(N_WORKERS) as pool:
-        results = pool.map(extract_fn, CHROMOSOMES)
-
-    # 염색체 순서대로 합치기
-    results.sort(key=lambda x: x[0])
-
-    all_pos = []
-    all_hap = []
-    sample_names = None
-
-    for chrom, pos_df, hap_matrix in results:
-        if pos_df is not None:
-            all_pos.append(pos_df)
-            all_hap.append(hap_matrix)
-            # 샘플 이름은 한번만 추출
-            if sample_names is None:
-                from cyvcf2 import VCF as _VCF
-                vcf_path = os.path.join(VCF_DIR, VCF_PATTERN.format(chrom=chrom))
-                sample_names = list(_VCF(vcf_path).samples)
-
-    if not all_hap:
-        print("ERROR: 추출된 데이터 없음")
-        return
-
-    positions_df = pd.concat(all_pos, ignore_index=True)
-    hap_matrix = np.concatenate(all_hap, axis=0)  # (total_snps, 2*n_samples)
-
-    elapsed = time.time() - t0
-    print(f"\n병합 완료: {hap_matrix.shape[0]:,} SNPs × {hap_matrix.shape[1]:,} haplotypes ({elapsed:.0f}s)")
-
-    # 저장
-    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
-
-    if fmt == "tsv":
-        print(f"TSV 저장 중: {output_path}")
-        # 헤더: CHROM POS REF ALT sample1_h1 sample1_h2 sample2_h1 ...
-        hap_cols = []
-        for s in sample_names:
-            hap_cols.extend([f"{s}_h1", f"{s}_h2"])
-        hap_df = pd.DataFrame(hap_matrix, columns=hap_cols, dtype=np.int8)
-        out_df = pd.concat([positions_df.reset_index(drop=True), hap_df], axis=1)
-        out_df.to_csv(output_path, sep="\t", index=False)
-
-    elif fmt == "pkl":
-        print(f"Pickle 저장 중: {output_path}")
-        data = {
-            "positions": positions_df,
-            "haplotypes": hap_matrix,        # np.int8, (n_snps, 2*n_samples)
-            "sample_names": sample_names,
-            "shape_info": f"{hap_matrix.shape[0]} SNPs × {hap_matrix.shape[1]} haplotypes"
-        }
-        with open(output_path, "wb") as f:
-            pickle.dump(data, f, protocol=4)
-
-    size_gb = os.path.getsize(output_path) / (1024**3)
-    print(f"저장 완료: {output_path} ({size_gb:.2f} GB)")
-    print(f"  SNPs: {hap_matrix.shape[0]:,}")
-    print(f"  Haplotypes: {hap_matrix.shape[1]:,} ({len(sample_names)} samples × 2)")
-
-
-# ──────────────────────────────────────────────
-# Main
-# ──────────────────────────────────────────────
 def main():
     global N_WORKERS
 
     parser = argparse.ArgumentParser(description="22개 염색체 VCF 병합 (병렬)")
-    parser.add_argument("--format", choices=["vcf", "tsv", "pkl"], default="vcf",
-                        help="출력 형식: vcf (bcftools concat), tsv (텍스트 행렬), pkl (pickle)")
     parser.add_argument("--output", type=str, default=None,
                         help="출력 파일 경로")
-    parser.add_argument("--maf", type=float, default=0.0,
-                        help="MAF 필터 (tsv/pkl만, 기본 0=필터 없음)")
     parser.add_argument("--workers", type=int, default=N_WORKERS,
                         help=f"병렬 워커 수 (기본 {N_WORKERS})")
     args = parser.parse_args()
 
     N_WORKERS = args.workers
 
-    # 기본 출력 경로
     if args.output is None:
-        ext_map = {"vcf": os.path.join(OUTPUT_DIR, "ALL.autosomes.phase3.genotypes.vcf.gz"),
-                   "tsv": os.path.join(OUTPUT_DIR, "all_chromosomes_haplotypes.tsv"),
-                   "pkl": os.path.join(OUTPUT_DIR, "all_chromosomes_haplotypes.pkl")}
-        args.output = ext_map[args.format]
+        args.output = os.path.join(OUTPUT_DIR, "ALL.autosomes.phase3.genotypes.vcf.gz")
 
-    print(f"형식: {args.format}")
     print(f"출력: {args.output}")
     print(f"워커: {N_WORKERS}")
-    if args.maf > 0:
-        print(f"MAF 필터: ≥ {args.maf}")
     print()
 
     vcf_files = check_files()
@@ -397,10 +236,7 @@ def main():
 
     t_start = time.time()
 
-    if args.format == "vcf":
-        merge_vcf_concat(vcf_files, args.output)
-    else:
-        merge_haplotype_matrix(args.output, fmt=args.format, maf_threshold=args.maf)
+    merge_vcf_concat(vcf_files, args.output)
 
     total = time.time() - t_start
     print(f"\n=== 전체 완료 ({total:.0f}s / {total/60:.1f}min) ===")

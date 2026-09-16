@@ -12,7 +12,7 @@ a multinomial model". *Genome Biology*, 20:295.
 doi:10.1186/s13059-019-1861-6
 
 Public API mirrors :mod:`src.preprocessing.pca` so that
-:mod:`src.preprocessing.dim_reduction` can dispatch transparently:
+is called directly by :mod:`src.preprocessing.pca`:
 
     glm_pca_single_gene(gene_name, matrix, n_components, train_indices=None)
 """
@@ -196,14 +196,14 @@ def glm_pca_single_gene(
     train_indices : np.ndarray | None
         If provided, GLM-PCA is fit on these rows only and held-out rows are
         projected onto the fitted basis (matches the leakage-prevention flow
-        of :func:`src.preprocessing.pca.pca_single_gene`).
+        of the streaming pipeline).
     max_iter : int, default 100
         Maximum coordinate-descent iterations.
 
     Returns
     -------
     dict | None
-        Same shape as :func:`pca_single_gene` so downstream pipeline code
+        Shape that downstream pipeline code
         does not branch:
             ``features``: {f"{gene}:0": (n_samples,), ...}
             ``explained_total``: optimizer deviance reduction (≥ 0)

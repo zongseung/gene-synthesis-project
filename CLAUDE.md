@@ -25,8 +25,7 @@ uv sync
 python src/preprocessing/run_pipeline.py
 
 # VCF merging (22 chromosomes parallel)
-python src/preprocessing/merge_data.py --format vcf
-python src/preprocessing/merge_data.py --format pkl --maf 0.01
+python src/preprocessing/merge_data.py
 
 # Training (DDP 2-GPU, bf16)
 torchrun --nproc_per_node=2 src/training/trainer.py --config configs/default.yaml

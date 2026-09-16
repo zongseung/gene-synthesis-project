@@ -147,14 +147,3 @@ def test_evaluation_cli_help_and_legacy_error_are_user_facing(tmp_path: Path) ->
 
     assert result.returncode != 0
     assert "legacy synthetic sample space" in result.stderr.lower()
-
-
-def test_pca_compare_standalone_help_loads_shared_evaluation_api() -> None:
-    script = Path(__file__).parents[1] / "src" / "evaluation" / "pca_compare.py"
-
-    result = subprocess.run(
-        [sys.executable, str(script), "--help"], capture_output=True, text=True, check=False,
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert "--legacy_synthetic_space" in result.stdout
