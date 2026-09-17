@@ -82,6 +82,50 @@ def test_denormalization_rejects_nonpositive_or_nonfinite_stats(tmp_path: Path) 
         generator.denormalize_samples(torch.zeros((1, 1, 2)), str(stats_path))
 
 
+def _parse(*extra: str):
+    return generator.parse_args(
+        ["--config", "configs/default.yaml", "--model_path", "best_model.pth", *extra]
+    )
+
+
+def test_guidance_variants_default_to_the_unguided_sampler_settings() -> None:
+    args = _parse()
+
+    meta = generator.guidance_meta(
+        args.guidance_interval, args.guidance_alpha, args.guide_model_path
+    )
+
+    assert meta == {
+        "guidance_interval": None,
+        "guidance_alpha": 0.0,
+        "guide_model_path": None,
+    }
+
+
+def test_guidance_interval_flag_parses_into_a_pair() -> None:
+    args = _parse("--guidance-interval", "0.2", "0.8")
+
+    assert args.guidance_interval == (0.2, 0.8)
+
+
+def test_generation_meta_records_the_requested_guidance_variant() -> None:
+    args = _parse(
+        "--guidance-interval", "0.2", "0.8",
+        "--guidance-alpha", "0.5",
+        "--guide-model-path", "outputs/weak/best_model.pth",
+    )
+
+    meta = generator.guidance_meta(
+        args.guidance_interval, args.guidance_alpha, args.guide_model_path
+    )
+
+    assert meta == {
+        "guidance_interval": [0.2, 0.8],
+        "guidance_alpha": 0.5,
+        "guide_model_path": "outputs/weak/best_model.pth",
+    }
+
+
 def test_masking_precedes_inverse_so_constant_mean_is_preserved(tmp_path: Path) -> None:
     stats_path = tmp_path / "stats.pkl"
     with stats_path.open("wb") as handle:

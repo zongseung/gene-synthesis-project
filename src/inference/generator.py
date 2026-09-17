@@ -111,6 +111,42 @@ def build_generation_diffusion(
     )
 
 
+def load_generator_model(
+    checkpoint: dict,
+    fallback_config: dict,
+    device: torch.device,
+) -> tuple[HybridCNNDiTFiLM, bool]:
+    """Build a model from a checkpoint, preferring EMA weights, in eval mode.
+
+    Returns the model and whether EMA weights were found.
+    """
+    model = HybridCNNDiTFiLM(checkpoint.get("config", fallback_config)).to(device)
+    model.load_state_dict(checkpoint["model_state_dict"])
+
+    ema_state = checkpoint.get("ema_state_dict")
+    if ema_state is not None:
+        shadow = ema_state.get("shadow", ema_state)
+        for name, param in model.named_parameters():
+            if name in shadow:
+                param.data.copy_(shadow[name].to(param.data.dtype))
+
+    model.eval()
+    return model, ema_state is not None
+
+
+def guidance_meta(
+    guidance_interval: tuple[float, float] | None,
+    guidance_alpha: float,
+    guide_model_path: str | None,
+) -> dict:
+    """Guidance-variant settings recorded in generation_meta.json."""
+    return {
+        "guidance_interval": list(guidance_interval) if guidance_interval else None,
+        "guidance_alpha": float(guidance_alpha),
+        "guide_model_path": str(guide_model_path) if guide_model_path else None,
+    }
+
+
 def resolve_normalization_stats_path(data_config: dict) -> Path | None:
     if not data_config.get("normalize", False):
         return None
@@ -148,6 +184,9 @@ def generate_samples(
     ddim_eta: float | None = None,
     batch_gen_size: int = 32,
     seed: int = 20260327,
+    guidance_interval: tuple[float, float] | None = None,
+    guidance_alpha: float = 0.0,
+    guide_model_path: str | None = None,
 ) -> None:
     """Generate population-conditional synthetic genotype samples.
 
@@ -165,6 +204,9 @@ def generate_samples(
         ddim_eta: Optional DDIM eta override.
         batch_gen_size: Batch size used for generation.
         seed: Random seed for generation (default 20260327).
+        guidance_interval: Optional (low, high) band of t/T where guidance applies.
+        guidance_alpha: Power-law exponent on the per-sample score rms (0 disables).
+        guide_model_path: Optional checkpoint of a guiding model for autoguidance.
     """
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     t_start = time.time()
@@ -180,25 +222,30 @@ def generate_samples(
     checkpoint = torch.load(model_path, map_location=device, weights_only=False)
 
     generation_config = checkpoint.get("config", config)
-    model = HybridCNNDiTFiLM(generation_config).to(device)
-    model.load_state_dict(checkpoint["model_state_dict"])
-
-    # Load EMA parameters (preferred for inference)
-    used_ema = False
-    if "ema_state_dict" in checkpoint:
-        ema_state = checkpoint["ema_state_dict"]
-        shadow = ema_state.get("shadow", ema_state)
-        for name, param in model.named_parameters():
-            if name in shadow:
-                param.data.copy_(shadow[name].to(param.data.dtype))
-        used_ema = True
+    # EMA parameters are preferred for inference.
+    model, used_ema = load_generator_model(checkpoint, config, device)
+    if used_ema:
         logger.info(f"EMA parameters loaded from {model_path}")
     else:
         logger.warning("EMA not found in checkpoint, using raw model weights")
 
-    model.eval()
     logger.info(
         f"Model loaded from {model_path} (epoch {checkpoint.get('epoch', '?')})"
+    )
+
+    # ── Guiding model for autoguidance (loaded exactly like the main model) ──
+    guide_model = None
+    if guide_model_path is not None:
+        if not Path(guide_model_path).exists():
+            raise FileNotFoundError(f"Guide model not found: {guide_model_path}")
+        guide_checkpoint = torch.load(
+            guide_model_path, map_location=device, weights_only=False
+        )
+        guide_model, _ = load_generator_model(guide_checkpoint, config, device)
+        logger.info(f"Guide model loaded from {guide_model_path}")
+
+    guidance_interval = (
+        tuple(guidance_interval) if guidance_interval is not None else None
     )
 
     # ── Diffusion process ──
@@ -296,6 +343,9 @@ def generate_samples(
                 ddim_steps=ddim_steps,
                 eta=ddim_eta,
                 guidance_scale=cfg_scale,
+                guidance_interval=guidance_interval,
+                guidance_alpha=guidance_alpha,
+                guide_model=guide_model,
             )
 
             # Convert to fp32 for post-processing and saving
@@ -347,6 +397,7 @@ def generate_samples(
             "num_channels": num_channels,
             "gene_size": gene_size,
             "normalize": data_cfg.get("normalize", False),
+            **guidance_meta(guidance_interval, guidance_alpha, guide_model_path),
         },
         "timestamp": datetime.now().isoformat(),
         "generation_time_sec": round(generation_time, 2),
@@ -365,7 +416,7 @@ def generate_samples(
 # CLI
 # ───────────────────────────────────────────────────────────────────
 
-def main() -> None:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Generate synthetic genotype samples with HiPoDiT"
     )
@@ -420,7 +471,35 @@ def main() -> None:
     parser.add_argument(
         "--seed", type=int, default=20260327, help="Generation seed"
     )
-    args = parser.parse_args()
+    parser.add_argument(
+        "--guidance-interval",
+        type=float,
+        nargs=2,
+        metavar=("LOW", "HIGH"),
+        default=None,
+        help="Guide only where t/T falls inside this band, e.g. 0.2 0.8",
+    )
+    parser.add_argument(
+        "--guidance-alpha",
+        type=float,
+        default=0.0,
+        help="Power-law exponent on the per-sample score rms (0 disables)",
+    )
+    parser.add_argument(
+        "--guide-model-path",
+        type=str,
+        default=None,
+        help="Checkpoint of a guiding model used instead of the null-class branch",
+    )
+    args = parser.parse_args(argv)
+
+    if args.guidance_interval is not None:
+        args.guidance_interval = tuple(args.guidance_interval)
+    return args
+
+
+def main() -> None:
+    args = parse_args()
 
     config = load_config(args.config)
 
@@ -439,6 +518,9 @@ def main() -> None:
         ddim_eta=args.ddim_eta,
         batch_gen_size=args.batch_gen_size,
         seed=args.seed,
+        guidance_interval=args.guidance_interval,
+        guidance_alpha=args.guidance_alpha,
+        guide_model_path=args.guide_model_path,
     )
 
 
