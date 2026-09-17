@@ -233,25 +233,6 @@ def generate_samples(
         f"Model loaded from {model_path} (epoch {checkpoint.get('epoch', '?')})"
     )
 
-    # ── Guiding model for autoguidance (loaded exactly like the main model) ──
-    guide_model = None
-    if guide_model_path is not None:
-        if not Path(guide_model_path).exists():
-            raise FileNotFoundError(f"Guide model not found: {guide_model_path}")
-        guide_checkpoint = torch.load(
-            guide_model_path, map_location=device, weights_only=False
-        )
-        guide_model, guide_ema = load_generator_model(guide_checkpoint, config, device)
-        if not guide_ema:
-            logger.warning(
-                "EMA not found in guide checkpoint, using raw guide model weights"
-            )
-        logger.info(f"Guide model loaded from {guide_model_path}")
-
-    guidance_interval = (
-        tuple(guidance_interval) if guidance_interval is not None else None
-    )
-
     # ── Diffusion process ──
     data_cfg = generation_config["data"]
     diffusion_cfg = generation_config["diffusion"]
@@ -325,6 +306,31 @@ def generate_samples(
             "Guidance variants ignored: guidance_weight is 0 or "
             "guidance_type is not classifier_free"
         )
+
+    # ── Guiding model for autoguidance (loaded exactly like the main model) ──
+    # Loaded only when it is actually used, so an unguided run keeps one model in memory.
+    guide_model = None
+    if guide_model_path is not None and cfg_scale > 0:
+        if not Path(guide_model_path).exists():
+            raise FileNotFoundError(f"Guide model not found: {guide_model_path}")
+        guide_checkpoint = torch.load(
+            guide_model_path, map_location=device, weights_only=False
+        )
+        # A guide trained on another schedule/target predicts epsilon on another scale.
+        guide_diffusion_cfg = guide_checkpoint.get("config", {}).get("diffusion", {})
+        for key, default in (("noise_schedule", "cosine"), ("prediction_target", "epsilon")):
+            guide_value = guide_diffusion_cfg.get(key, default)
+            if guide_value != diffusion_cfg.get(key, default):
+                raise ValueError(
+                    f"Guide model {key} ({guide_value}) does not match the main "
+                    f"checkpoint ({diffusion_cfg.get(key, default)})"
+                )
+        guide_model, guide_ema = load_generator_model(guide_checkpoint, config, device)
+        if not guide_ema:
+            logger.warning(
+                "EMA not found in guide checkpoint, using raw guide model weights"
+            )
+        logger.info(f"Guide model loaded from {guide_model_path}")
 
     total_generated = 0
     stats_path = resolve_normalization_stats_path(data_cfg)

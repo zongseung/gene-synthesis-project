@@ -140,6 +140,8 @@ class GaussianDiffusion(nn.Module):
     ) -> torch.Tensor:
         if guidance <= 0:
             return model(x, t, y)
+        if guidance_alpha < 0:
+            raise ValueError("guidance_alpha must be non-negative")
         active = torch.ones_like(t, dtype=torch.bool)
         if guidance_interval is not None:
             low, high = guidance_interval
@@ -188,6 +190,8 @@ class GaussianDiffusion(nn.Module):
         guide_model: nn.Module | None = None,
     ) -> torch.Tensor:
         model.eval()
+        if guide_model is not None:
+            guide_model.eval()
         x = self._apply_zero_mask(torch.randn(shape, device=device))
         for t in reversed(range(self.timesteps)):
             x = self.p_sample(model, x, t, y, guidance_scale,
@@ -205,6 +209,8 @@ class GaussianDiffusion(nn.Module):
         if not 1 <= ddim_steps <= self.timesteps or not 0 <= eta <= 1:
             raise ValueError("DDIM needs 1 <= steps <= timesteps and 0 <= eta <= 1")
         model.eval()
+        if guide_model is not None:
+            guide_model.eval()
         x = self._apply_zero_mask(torch.randn(shape, device=device))
         timesteps = torch.linspace(self.timesteps - 1, 0, ddim_steps).long().tolist()
         for index, t in enumerate(timesteps):

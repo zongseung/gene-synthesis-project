@@ -131,9 +131,13 @@ def _run_generation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     guidance_type: str = "classifier_free",
+    guide_diffusion: dict | None = None,
     **options,
 ) -> tuple[dict, dict]:
     """Run generate_samples against stub weights and a stub sampler.
+
+    ``guide_diffusion`` overrides the guide checkpoint's diffusion config, which
+    otherwise matches the main checkpoint.
 
     Returns the kwargs the sampler received and the written generation_meta.json.
     """
@@ -165,7 +169,15 @@ def _run_generation(
             },
         },
     }
-    monkeypatch.setattr(generator.torch, "load", lambda *a, **k: checkpoint)
+    guide_checkpoint = checkpoint
+    if guide_diffusion is not None:
+        guide_config = {
+            **checkpoint["config"],
+            "diffusion": {**checkpoint["config"]["diffusion"], **guide_diffusion},
+        }
+        guide_checkpoint = {**checkpoint, "config": guide_config}
+    loads = iter((checkpoint, guide_checkpoint))
+    monkeypatch.setattr(generator.torch, "load", lambda *a, **k: next(loads, guide_checkpoint))
     monkeypatch.setattr(
         generator, "load_generator_model", lambda *a: (torch.nn.Identity(), True)
     )
@@ -206,6 +218,39 @@ def test_generation_threads_the_guidance_variant_into_the_sampler_and_the_meta(
     assert meta["config"]["guidance_interval"] == [0.2, 0.8]
     assert meta["config"]["guidance_alpha"] == 0.5
     assert meta["config"]["guide_model_path"] == str(guide_path)
+
+
+@pytest.mark.parametrize(
+    "key, value", [("noise_schedule", "linear"), ("prediction_target", "x0")]
+)
+def test_guide_trained_on_another_diffusion_setting_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, key: str, value: str,
+) -> None:
+    guide_path = tmp_path / "weak_model.pth"
+    guide_path.touch()
+
+    with pytest.raises(ValueError, match=key):
+        _run_generation(
+            tmp_path,
+            monkeypatch,
+            guide_diffusion={key: value},
+            guide_model_path=str(guide_path),
+        )
+
+
+def test_unguided_run_does_not_load_the_guide_at_all(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A guide whose checkpoint would be rejected proves it is never loaded.
+    recorded, _ = _run_generation(
+        tmp_path,
+        monkeypatch,
+        guidance_type="normal",
+        guide_diffusion={"noise_schedule": "linear"},
+        guide_model_path=str(tmp_path / "never_read.pth"),
+    )
+
+    assert recorded["guide_model"] is None
 
 
 def test_unguided_run_warns_that_the_recorded_variant_did_nothing(

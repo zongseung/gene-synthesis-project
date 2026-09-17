@@ -22,6 +22,19 @@ class StubModel(nn.Module):
         return self.weight * (x * (1 + y.float().view(-1, 1, 1)) + t.float().view(-1, 1, 1))
 
 
+class DropoutGuide(StubModel):
+    """A guide whose train mode randomizes its prediction, like the real model's dropout."""
+
+    def __init__(self):
+        super().__init__(weight=0.5)
+        self.dropout = nn.Dropout(0.5)
+
+    def forward(
+        self, x: torch.Tensor, t: torch.Tensor, y: torch.Tensor
+    ) -> torch.Tensor:
+        return self.dropout(super().forward(x, t, y))
+
+
 def make_diffusion(timesteps: int = 11) -> GaussianDiffusion:
     return GaussianDiffusion(timesteps=timesteps, null_class=NULL_CLASS, enforce_zeros=False)
 
@@ -121,6 +134,41 @@ def test_guide_model_replaces_the_unconditional_branch_with_real_labels():
     # Then the guide saw the real labels, and neither forward was batched.
     assert torch.equal(guide.calls[0][2], y)
     assert len(model.calls) == 1 and len(model.calls[0][0]) == 2
+
+
+def test_negative_guidance_alpha_is_rejected():
+    # Given a guided step asked for a negative power-law exponent.
+    diffusion, model = make_diffusion(), StubModel()
+
+    # Then it is refused rather than silently behaving as alpha = 0.
+    with pytest.raises(ValueError, match="guidance_alpha"):
+        diffusion._predict_noise(
+            model, torch.randn(2, 1, 4), torch.tensor([3, 7]), torch.tensor([0, 5]),
+            2.0, guidance_alpha=-0.5,
+        )
+
+
+@pytest.mark.parametrize("sampler", ["sample_ddpm", "sample_ddim"])
+def test_samplers_put_a_train_mode_guide_into_eval(sampler):
+    # Given a guide left in train mode, where its dropout randomizes every prediction.
+    diffusion, model, guide = make_diffusion(), StubModel(), DropoutGuide()
+    y = torch.tensor([0, 5])
+
+    def run() -> torch.Tensor:
+        torch.manual_seed(20260327)
+        if sampler == "sample_ddpm":
+            return diffusion.sample_ddpm(
+                model, (2, 1, 4), y, torch.device("cpu"), 2.0, guide_model=guide)
+        return diffusion.sample_ddim(
+            model, (2, 1, 4), y, torch.device("cpu"), ddim_steps=3,
+            guidance_scale=2.0, guide_model=guide)
+
+    guide.train()
+    from_train_mode = run()
+
+    # Then the sampler switched it off and the draw matches the same guide in eval.
+    assert not guide.training
+    assert torch.allclose(from_train_mode, run())
 
 
 @pytest.mark.parametrize("sampler", ["p_sample", "sample_ddpm", "sample_ddim"])
