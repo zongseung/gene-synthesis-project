@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import pickle
 from pathlib import Path
@@ -124,6 +125,108 @@ def test_generation_meta_records_the_requested_guidance_variant() -> None:
         "guidance_alpha": 0.5,
         "guide_model_path": "outputs/weak/best_model.pth",
     }
+
+
+def _run_generation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    guidance_type: str = "classifier_free",
+    **options,
+) -> tuple[dict, dict]:
+    """Run generate_samples against stub weights and a stub sampler.
+
+    Returns the kwargs the sampler received and the written generation_meta.json.
+    """
+    recorded: dict = {}
+
+    class StubDiffusion:
+        def to(self, device):
+            return self
+
+        def sample_ddim(self, **kwargs):
+            recorded.update(kwargs)
+            return torch.zeros(kwargs["shape"])
+
+    checkpoint = {
+        "model_state_dict": {},
+        "config": {
+            "data": {
+                "num_channels": 2,
+                "gene_size": 4,
+                "num_classes": 3,
+                "normalize": False,
+                "zero_mask_path": str(tmp_path / "no_zero_mask.pt"),
+            },
+            "diffusion": {
+                "max_timesteps": 4,
+                "guidance_type": guidance_type,
+                "guidance_weight": 1.5,
+                "sampling_timesteps": 2,
+            },
+        },
+    }
+    monkeypatch.setattr(generator.torch, "load", lambda *a, **k: checkpoint)
+    monkeypatch.setattr(
+        generator, "load_generator_model", lambda *a: (torch.nn.Identity(), True)
+    )
+    monkeypatch.setattr(generator, "build_generation_diffusion", lambda *a: StubDiffusion())
+    model_path = tmp_path / "best_model.pth"
+    model_path.touch()
+    output_dir = tmp_path / "samples"
+
+    generator.generate_samples(
+        config={},
+        model_path=str(model_path),
+        output_dir=str(output_dir),
+        n_samples_per_pop={0: 1},
+        **options,
+    )
+
+    meta = json.loads((output_dir / "generation_meta.json").read_text())
+    return recorded, meta
+
+
+def test_generation_threads_the_guidance_variant_into_the_sampler_and_the_meta(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    guide_path = tmp_path / "weak_model.pth"
+    guide_path.touch()
+
+    recorded, meta = _run_generation(
+        tmp_path,
+        monkeypatch,
+        guidance_interval=(0.2, 0.8),
+        guidance_alpha=0.5,
+        guide_model_path=str(guide_path),
+    )
+
+    assert recorded["guidance_interval"] == (0.2, 0.8)
+    assert recorded["guidance_alpha"] == 0.5
+    assert isinstance(recorded["guide_model"], torch.nn.Identity)
+    assert meta["config"]["guidance_interval"] == [0.2, 0.8]
+    assert meta["config"]["guidance_alpha"] == 0.5
+    assert meta["config"]["guide_model_path"] == str(guide_path)
+
+
+def test_unguided_run_warns_that_the_recorded_variant_did_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(logging.WARNING, logger=generator.__name__):
+        _, meta = _run_generation(
+            tmp_path, monkeypatch, guidance_type="normal", guidance_alpha=0.5,
+        )
+
+    assert meta["config"]["guidance_alpha"] == 0.5
+    assert any("Guidance variants ignored" in record.message for record in caplog.records)
+
+
+def test_guided_run_does_not_warn_about_ignored_variants(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(logging.WARNING, logger=generator.__name__):
+        _run_generation(tmp_path, monkeypatch, guidance_alpha=0.5)
+
+    assert not any("Guidance variants ignored" in r.message for r in caplog.records)
 
 
 def test_masking_precedes_inverse_so_constant_mean_is_preserved(tmp_path: Path) -> None:

@@ -241,7 +241,11 @@ def generate_samples(
         guide_checkpoint = torch.load(
             guide_model_path, map_location=device, weights_only=False
         )
-        guide_model, _ = load_generator_model(guide_checkpoint, config, device)
+        guide_model, guide_ema = load_generator_model(guide_checkpoint, config, device)
+        if not guide_ema:
+            logger.warning(
+                "EMA not found in guide checkpoint, using raw guide model weights"
+            )
         logger.info(f"Guide model loaded from {guide_model_path}")
 
     guidance_interval = (
@@ -315,6 +319,13 @@ def generate_samples(
         else diffusion_cfg.get("ddim_eta", 0.0)
     )
 
+    cfg_scale = guidance_weight if guidance_type == "classifier_free" else 0.0
+    if cfg_scale <= 0 and (guide_model_path or guidance_alpha or guidance_interval):
+        logger.warning(
+            "Guidance variants ignored: guidance_weight is 0 or "
+            "guidance_type is not classifier_free"
+        )
+
     total_generated = 0
     stats_path = resolve_normalization_stats_path(data_cfg)
     stats_fingerprint = (
@@ -334,7 +345,6 @@ def generate_samples(
             y = torch.full((current_batch,), pop_idx, device=device, dtype=torch.long)
 
             # fp32 inference — bf16 accumulation over 100 DDIM steps causes error
-            cfg_scale = guidance_weight if guidance_type == "classifier_free" else 0.0
             samples = diffusion.sample_ddim(
                 model=model,
                 shape=shape,
