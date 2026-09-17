@@ -1,3 +1,4 @@
+import pytest
 import torch
 import torch.nn as nn
 
@@ -122,15 +123,24 @@ def test_guide_model_replaces_the_unconditional_branch_with_real_labels():
     assert len(model.calls) == 1 and len(model.calls[0][0]) == 2
 
 
-def test_samplers_accept_and_forward_the_guidance_options():
-    # Given the public DDIM entry point with every variant enabled.
+@pytest.mark.parametrize("sampler", ["p_sample", "sample_ddpm", "sample_ddim"])
+def test_samplers_forward_every_guidance_option_unchanged(sampler):
+    # Given a sampler entry point spied on at the guidance boundary.
     diffusion, model, guide = make_diffusion(), StubModel(), StubModel(weight=0.5)
+    y = torch.tensor([0, 5])
+    options = {"guidance_interval": (0.0, 0.5), "guidance_alpha": 0.3, "guide_model": guide}
+    captured: list[dict] = []
+    real = diffusion._predict_noise
+    diffusion._predict_noise = lambda *a, **k: captured.append(k) or real(*a, **k)
 
-    result = diffusion.sample_ddim(
-        model, (2, 1, 4), torch.tensor([0, 5]), torch.device("cpu"), ddim_steps=2,
-        guidance_scale=1.0, guidance_interval=(0.0, 0.5), guidance_alpha=0.3,
-        guide_model=guide,
-    )
+    # When the sampler runs with every variant enabled.
+    if sampler == "p_sample":
+        diffusion.p_sample(model, torch.randn(2, 1, 4), 3, y, 1.0, **options)
+    elif sampler == "sample_ddpm":
+        diffusion.sample_ddpm(model, (2, 1, 4), y, torch.device("cpu"), 1.0, **options)
+    else:
+        diffusion.sample_ddim(model, (2, 1, 4), y, torch.device("cpu"), ddim_steps=2,
+                              guidance_scale=1.0, **options)
 
-    assert result.shape == (2, 1, 4) and torch.isfinite(result).all()
-    assert guide.calls
+    # Then all three arrive at _predict_noise untouched on every step.
+    assert captured and all(step == options for step in captured)
