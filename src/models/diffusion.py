@@ -135,19 +135,44 @@ class GaussianDiffusion(nn.Module):
 
     def _predict_noise(
         self, model: nn.Module, x: torch.Tensor, t: torch.Tensor, y: torch.Tensor, guidance: float,
+        *, guidance_interval: tuple[float, float] | None = None, guidance_alpha: float = 0.0,
+        guide_model: nn.Module | None = None,
     ) -> torch.Tensor:
-        conditional = model(x, t, y)
-        if guidance > 0:
-            unconditional = model(x, t, torch.full_like(y, self.null_class))
-            return (1 + guidance) * conditional - guidance * unconditional
-        return conditional
+        if guidance <= 0:
+            return model(x, t, y)
+        active = torch.ones_like(t, dtype=torch.bool)
+        if guidance_interval is not None:
+            low, high = guidance_interval
+            if not 0 <= low < high <= 1:
+                raise ValueError("guidance_interval must satisfy 0 <= low < high <= 1")
+            fraction = t.float() / max(self.timesteps - 1, 1)
+            active = (fraction >= low) & (fraction <= high)
+        if not active.any():
+            return model(x, t, y)
+        if guide_model is None:
+            # One batched forward: the conditional half and the null-class half.
+            both = model(torch.cat((x, x)), torch.cat((t, t)),
+                         torch.cat((y, torch.full_like(y, self.null_class))))
+            conditional, guide = both.chunk(2)
+        else:
+            conditional, guide = model(x, t, y), guide_model(x, t, y)
+        difference = conditional - guide
+        if guidance_alpha > 0:
+            rms = difference.flatten(1).norm(dim=1) / math.sqrt(difference[0].numel())
+            difference = difference * rms.reshape(-1, *((1,) * (difference.ndim - 1))) ** guidance_alpha
+        guided = conditional + guidance * difference
+        return torch.where(active.reshape(-1, *((1,) * (x.ndim - 1))), guided, conditional)
 
     @torch.no_grad()
     def p_sample(
         self, model: nn.Module, x_t: torch.Tensor, t: int, y: torch.Tensor, guidance_scale: float = 0.,
+        *, guidance_interval: tuple[float, float] | None = None, guidance_alpha: float = 0.0,
+        guide_model: nn.Module | None = None,
     ) -> torch.Tensor:
         times = torch.full((len(x_t),), t, device=x_t.device, dtype=torch.long)
-        eps = self._predict_noise(model, x_t, times, y, guidance_scale)
+        eps = self._predict_noise(model, x_t, times, y, guidance_scale,
+                                  guidance_interval=guidance_interval,
+                                  guidance_alpha=guidance_alpha, guide_model=guide_model)
         clean = self._apply_zero_mask(self._clip_x0(self._predict_x0_from_eps(x_t, times, eps)))
         mean = (self._extract(self.posterior_mean_coef1, times, x_t.shape) * clean
                 + self._extract(self.posterior_mean_coef2, times, x_t.shape) * x_t)
@@ -159,17 +184,23 @@ class GaussianDiffusion(nn.Module):
     def sample_ddpm(
         self, model: nn.Module, shape: tuple, y: torch.Tensor, device: torch.device,
         guidance_scale: float = 0.,
+        *, guidance_interval: tuple[float, float] | None = None, guidance_alpha: float = 0.0,
+        guide_model: nn.Module | None = None,
     ) -> torch.Tensor:
         model.eval()
         x = self._apply_zero_mask(torch.randn(shape, device=device))
         for t in reversed(range(self.timesteps)):
-            x = self.p_sample(model, x, t, y, guidance_scale)
+            x = self.p_sample(model, x, t, y, guidance_scale,
+                              guidance_interval=guidance_interval,
+                              guidance_alpha=guidance_alpha, guide_model=guide_model)
         return x
 
     @torch.no_grad()
     def sample_ddim(
         self, model: nn.Module, shape: tuple, y: torch.Tensor, device: torch.device,
         ddim_steps: int = 50, eta: float = 0., guidance_scale: float = 0.,
+        *, guidance_interval: tuple[float, float] | None = None, guidance_alpha: float = 0.0,
+        guide_model: nn.Module | None = None,
     ) -> torch.Tensor:
         if not 1 <= ddim_steps <= self.timesteps or not 0 <= eta <= 1:
             raise ValueError("DDIM needs 1 <= steps <= timesteps and 0 <= eta <= 1")
@@ -178,7 +209,9 @@ class GaussianDiffusion(nn.Module):
         timesteps = torch.linspace(self.timesteps - 1, 0, ddim_steps).long().tolist()
         for index, t in enumerate(timesteps):
             times = torch.full((shape[0],), t, device=device, dtype=torch.long)
-            eps = self._predict_noise(model, x, times, y, guidance_scale)
+            eps = self._predict_noise(model, x, times, y, guidance_scale,
+                                      guidance_interval=guidance_interval,
+                                      guidance_alpha=guidance_alpha, guide_model=guide_model)
             alpha = self._extract(self.alphas_cumprod, times, shape)
             if index + 1 < len(timesteps):
                 earlier = torch.full_like(times, timesteps[index + 1])
