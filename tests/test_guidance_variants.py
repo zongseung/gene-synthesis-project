@@ -148,17 +148,13 @@ def test_negative_guidance_alpha_is_rejected():
         )
 
 
-@pytest.mark.parametrize("sampler", ["sample_ddpm", "sample_ddim"])
-def test_samplers_put_a_train_mode_guide_into_eval(sampler):
+def test_sampler_puts_a_train_mode_guide_into_eval():
     # Given a guide left in train mode, where its dropout randomizes every prediction.
     diffusion, model, guide = make_diffusion(), StubModel(), DropoutGuide()
     y = torch.tensor([0, 5])
 
     def run() -> torch.Tensor:
         torch.manual_seed(20260327)
-        if sampler == "sample_ddpm":
-            return diffusion.sample_ddpm(
-                model, (2, 1, 4), y, torch.device("cpu"), 2.0, guide_model=guide)
         return diffusion.sample_ddim(
             model, (2, 1, 4), y, torch.device("cpu"), ddim_steps=3,
             guidance_scale=2.0, guide_model=guide)
@@ -171,9 +167,8 @@ def test_samplers_put_a_train_mode_guide_into_eval(sampler):
     assert torch.allclose(from_train_mode, run())
 
 
-@pytest.mark.parametrize("sampler", ["p_sample", "sample_ddpm", "sample_ddim"])
-def test_samplers_forward_every_guidance_option_unchanged(sampler):
-    # Given a sampler entry point spied on at the guidance boundary.
+def test_sampler_forwards_every_guidance_option_unchanged():
+    # Given the sampler entry point spied on at the guidance boundary.
     diffusion, model, guide = make_diffusion(), StubModel(), StubModel(weight=0.5)
     y = torch.tensor([0, 5])
     options = {"guidance_interval": (0.0, 0.5), "guidance_alpha": 0.3, "guide_model": guide}
@@ -182,13 +177,8 @@ def test_samplers_forward_every_guidance_option_unchanged(sampler):
     diffusion._predict_noise = lambda *a, **k: captured.append(k) or real(*a, **k)
 
     # When the sampler runs with every variant enabled.
-    if sampler == "p_sample":
-        diffusion.p_sample(model, torch.randn(2, 1, 4), 3, y, 1.0, **options)
-    elif sampler == "sample_ddpm":
-        diffusion.sample_ddpm(model, (2, 1, 4), y, torch.device("cpu"), 1.0, **options)
-    else:
-        diffusion.sample_ddim(model, (2, 1, 4), y, torch.device("cpu"), ddim_steps=2,
-                              guidance_scale=1.0, **options)
+    diffusion.sample_ddim(model, (2, 1, 4), y, torch.device("cpu"), ddim_steps=2,
+                          guidance_scale=1.0, **options)
 
     # Then all three arrive at _predict_noise untouched on every step.
     assert captured and all(step == options for step in captured)

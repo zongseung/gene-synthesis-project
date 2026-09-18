@@ -35,17 +35,6 @@ def test_diffusion_rejects_invalid_model_space_clip(sample_clip):
         GaussianDiffusion(timesteps=1, sample_clip=sample_clip)
 
 
-def test_ddpm_sampling_honors_model_space_clip():
-    diffusion = GaussianDiffusion(timesteps=1, sample_clip=2.0)
-    x_t = torch.full((1, 1, 2), 10.0)
-
-    result = diffusion.p_sample(
-        ZeroNoiseModel(), x_t, 0, torch.zeros(1, dtype=torch.long)
-    )
-
-    assert result.abs().max() <= 2.0
-
-
 def test_ddim_sampling_honors_model_space_clip():
     diffusion = GaussianDiffusion(timesteps=1, sample_clip=0.01)
 
@@ -58,24 +47,6 @@ def test_ddim_sampling_honors_model_space_clip():
     )
 
     assert result.abs().max() <= 0.01
-
-
-def test_ddpm_keeps_masked_coordinates_zero_at_every_reverse_call():
-    model = RecordingZeroNoiseModel()
-    diffusion = GaussianDiffusion(
-        timesteps=3,
-        zero_mask=torch.tensor([[True, False]]),
-    )
-
-    result = diffusion.sample_ddpm(
-        model,
-        shape=(1, 1, 2),
-        y=torch.zeros(1, dtype=torch.long),
-        device=torch.device("cpu"),
-    )
-
-    assert all(torch.count_nonzero(x[..., 0]) == 0 for x in model.inputs)
-    assert torch.count_nonzero(result[..., 0]) == 0
 
 
 def test_ddim_keeps_masked_coordinates_zero_at_every_reverse_call():

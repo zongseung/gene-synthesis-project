@@ -61,18 +61,11 @@ class GaussianDiffusion(nn.Module):
                 raise ValueError(f"Unknown schedule_type: {schedule_type}")
         if groups is not None:
             betas = three_band_betas(betas)
-        alphas = 1 - betas
-        cumulative = torch.cumprod(alphas, dim=0)
-        previous = torch.cat((torch.ones_like(cumulative[:1]), cumulative[:-1]))
+        cumulative = torch.cumprod(1 - betas, dim=0)
         self.register_buffer("betas", betas)
-        self.register_buffer("alphas", alphas)
         self.register_buffer("alphas_cumprod", cumulative)
-        self.register_buffer("alphas_cumprod_prev", previous)
         self.register_buffer("sqrt_alphas_cumprod", cumulative.sqrt())
         self.register_buffer("sqrt_one_minus_alphas_cumprod", (1 - cumulative).sqrt())
-        self.register_buffer("posterior_variance", betas * (1 - previous) / (1 - cumulative))
-        self.register_buffer("posterior_mean_coef1", betas * previous.sqrt() / (1 - cumulative))
-        self.register_buffer("posterior_mean_coef2", (1 - previous) * alphas.sqrt() / (1 - cumulative))
         snr = cumulative / (1 - cumulative)
         self.register_buffer("min_snr_weights", (min_snr_gamma / snr).clamp(max=1))
 
@@ -164,40 +157,6 @@ class GaussianDiffusion(nn.Module):
             difference = difference * rms.reshape(-1, *((1,) * (difference.ndim - 1))) ** guidance_alpha
         guided = conditional + guidance * difference
         return torch.where(active.reshape(-1, *((1,) * (x.ndim - 1))), guided, conditional)
-
-    @torch.no_grad()
-    def p_sample(
-        self, model: nn.Module, x_t: torch.Tensor, t: int, y: torch.Tensor, guidance_scale: float = 0.,
-        *, guidance_interval: tuple[float, float] | None = None, guidance_alpha: float = 0.0,
-        guide_model: nn.Module | None = None,
-    ) -> torch.Tensor:
-        times = torch.full((len(x_t),), t, device=x_t.device, dtype=torch.long)
-        eps = self._predict_noise(model, x_t, times, y, guidance_scale,
-                                  guidance_interval=guidance_interval,
-                                  guidance_alpha=guidance_alpha, guide_model=guide_model)
-        clean = self._apply_zero_mask(self._clip_x0(self._predict_x0_from_eps(x_t, times, eps)))
-        mean = (self._extract(self.posterior_mean_coef1, times, x_t.shape) * clean
-                + self._extract(self.posterior_mean_coef2, times, x_t.shape) * x_t)
-        if t > 0:
-            mean = mean + self._extract(self.posterior_variance, times, x_t.shape).sqrt() * torch.randn_like(x_t)
-        return self._apply_zero_mask(mean)
-
-    @torch.no_grad()
-    def sample_ddpm(
-        self, model: nn.Module, shape: tuple, y: torch.Tensor, device: torch.device,
-        guidance_scale: float = 0.,
-        *, guidance_interval: tuple[float, float] | None = None, guidance_alpha: float = 0.0,
-        guide_model: nn.Module | None = None,
-    ) -> torch.Tensor:
-        model.eval()
-        if guide_model is not None:
-            guide_model.eval()
-        x = self._apply_zero_mask(torch.randn(shape, device=device))
-        for t in reversed(range(self.timesteps)):
-            x = self.p_sample(model, x, t, y, guidance_scale,
-                              guidance_interval=guidance_interval,
-                              guidance_alpha=guidance_alpha, guide_model=guide_model)
-        return x
 
     @torch.no_grad()
     def sample_ddim(
