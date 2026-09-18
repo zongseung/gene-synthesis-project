@@ -197,17 +197,16 @@ def validate(
 def save_checkpoint(
     model: nn.Module,
     ema: EMAModel,
-    optimizer: torch.optim.Optimizer,
-    scheduler: torch.optim.lr_scheduler.LambdaLR,
     epoch: int,
     val_loss: float,
     config: dict,
     path: str,
 ) -> None:
-    """Save a full training checkpoint (rank 0 only).
+    """Save the best model (rank 0 only).
 
-    Includes model weights, EMA shadow, optimizer/scheduler state,
-    and training metadata for full resumption.
+    Inference reads ``model_state_dict`` and ``ema_state_dict``
+    (src/inference/generator.py). Optimizer and scheduler state are not saved
+    because no resume path exists.
     """
     if not is_main_process():
         return
@@ -215,12 +214,9 @@ def save_checkpoint(
     model_state = (
         model.module.state_dict() if hasattr(model, "module") else model.state_dict()
     )
-
     checkpoint = {
         "model_state_dict": model_state,
         "ema_state_dict": ema.state_dict(),
-        "optimizer_state_dict": optimizer.state_dict(),
-        "scheduler_state_dict": scheduler.state_dict(),
         "epoch": epoch,
         "best_val_loss": val_loss,
         "config": config,
@@ -231,26 +227,6 @@ def save_checkpoint(
     os.makedirs(os.path.dirname(path), exist_ok=True)
     torch.save(checkpoint, path)
     logger.info(f"Checkpoint saved: {path}")
-
-
-def manage_top_k_checkpoints(save_dir: str, top_k: int = 3) -> None:
-    """Keep only the top_k most recent periodic checkpoints.
-
-    Removes older checkpoint_epoch*.pth files, but never removes
-    best_model.pth.
-    """
-    if not is_main_process():
-        return
-
-    save_path = Path(save_dir)
-    ckpts = sorted(
-        save_path.glob("checkpoint_epoch*.pth"),
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
-    )
-    for ckpt in ckpts[top_k:]:
-        ckpt.unlink()
-        logger.info(f"Removed old checkpoint: {ckpt}")
 
 
 # ───────────────────────────────────────────────────────────────────
@@ -383,7 +359,6 @@ def train(config: dict) -> None:
     # ── Save dir ──
     save_dir = config.get("save_dir", "outputs/default")
     os.makedirs(save_dir, exist_ok=True)
-    top_k = exp_cfg.get("save_top_k_checkpoints", 3)
 
     # ── Training loop (no early stopping) ──
     best_val_loss = float("inf")
@@ -490,29 +465,13 @@ def train(config: dict) -> None:
             if val_rec_error < best_val_loss:
                 best_val_loss = val_rec_error
                 save_checkpoint(
-                    model, ema, optimizer, scheduler,
-                    epoch, best_val_loss, config,
+                    model, ema, epoch, best_val_loss, config,
                     path=os.path.join(save_dir, "best_model.pth"),
                 )
                 logger.info(f"  New best: val_rec={val_rec_error:.6f}")
 
-            # Periodic checkpoint
-            save_every = training_cfg.get("save_every", 20)
-            if epoch % save_every == 0:
-                save_checkpoint(
-                    model, ema, optimizer, scheduler,
-                    epoch, val_rec_error, config,
-                    path=os.path.join(save_dir, f"checkpoint_epoch{epoch}.pth"),
-                )
-                manage_top_k_checkpoints(save_dir, top_k=top_k)
-
-    # ── Final checkpoint ──
+    # ── Done ──
     if is_main_process():
-        save_checkpoint(
-            model, ema, optimizer, scheduler,
-            training_cfg["epochs"] - 1, best_val_loss, config,
-            path=os.path.join(save_dir, f"checkpoint_final.pth"),
-        )
         logger.info(f"Training complete. Best val_rec={best_val_loss:.6f}")
 
     if log_to_wandb:
