@@ -28,6 +28,7 @@ import hashlib
 import logging
 import math
 import os
+import pickle
 import sys
 from functools import partial
 from pathlib import Path
@@ -252,7 +253,6 @@ def train(config: dict) -> None:
         )
 
     # ── Load label hierarchy (pop_to_superpop mapping for model) ──
-    import pickle
     label_hier_path = config["data"].get(
         "label_hierarchy_path", "data/processed/label_hierarchy.pkl"
     )

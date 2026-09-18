@@ -1,7 +1,3 @@
-# /// script
-# requires-python = ">=3.10"
-# dependencies = []
-# ///
 # ─── How to run ───
 # Imported by hipodit_rebuild_check.py; use that file's train command.
 

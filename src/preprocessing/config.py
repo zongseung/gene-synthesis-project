@@ -34,13 +34,11 @@ TEST_RATIO = 0.1
 # Per-gene component count used by run_pipeline.py.
 PCA_K = 4
 
-# Per-gene dimensionality reduction backend.
-#   'pca'      — Gaussian PCA (sklearn). Fast (~10 ms/gene); misspecified for
-#                 Binomial(2, p) genotype dosage data.
-#   'glm_pca'  — Poisson GLM-PCA (Townes et al. 2019); an explicit count-model
-#                 approximation for bounded dosage, accelerated by glmpca-fast.
-# Override at runtime: HIPODIT_DIM_RED=glm_pca python src/preprocessing/run_pipeline.py
-DIM_RED_METHOD = os.environ.get("HIPODIT_DIM_RED", "glm_pca")
+# Per-gene dimensionality reduction backend: Poisson GLM-PCA (Townes et al.
+# 2019), an explicit count-model approximation for bounded dosage, accelerated
+# by glmpca-fast. Recorded in preprocessing_metadata.json and checked against
+# configs/default.yaml's data.dim_reduction_method before training.
+DIM_RED_METHOD = "glm_pca"
 
 # Population-conditional prior arm folded into the normalization step
 # (PriorGrad ICLR 2022 / ShiftDDPMs AAAI 2023 "Data-Normalization"). See

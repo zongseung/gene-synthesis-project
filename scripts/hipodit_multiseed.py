@@ -1,8 +1,4 @@
 #!/usr/bin/env python3
-# /// script
-# requires-python = ">=3.10"
-# dependencies = []
-# ///
 # ─── How to run ───
 # Use the existing CUDA training interpreter: python scripts/hipodit_multiseed.py
 # --prepared-dir outputs/diagnostics/hipodit_fisher_20260915_unique --output-dir NEW_DIR

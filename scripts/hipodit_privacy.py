@@ -1,8 +1,4 @@
 #!/usr/bin/env python3
-# /// script
-# requires-python = ">=3.10"
-# dependencies = []
-# ///
 # ─── How to run ───
 #   python scripts/hipodit_privacy.py --prepared-dir P --multiseed-dir M --output-dir O
 # Plan §5 Phase 4 and Gate 4 (rev.2 §9.4): privacy, duplication and strata for the frozen B0 and T

@@ -1,7 +1,3 @@
-# /// script
-# requires-python = ">=3.10"
-# dependencies = []
-# ///
 # ─── How to run ───
 # Imported by hipodit_multiseed.py using the existing training environment.
 from __future__ import annotations

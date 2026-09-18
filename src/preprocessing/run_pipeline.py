@@ -81,8 +81,6 @@ def main() -> None:
     t_start = time.time()
     logger.info("=" * 60)
 
-    if DIM_RED_METHOD != "glm_pca":
-        raise ValueError("The production preprocessing pipeline requires glm_pca")
     logger.info("HiPoDiT Preprocessing Pipeline (OOM-safe)")
     logger.info(f"  VCF: {VCF_PATH}")
     logger.info("=" * 60)

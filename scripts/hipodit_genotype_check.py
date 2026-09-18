@@ -1,8 +1,4 @@
 #!/usr/bin/env python3
-# /// script
-# requires-python = ">=3.10"
-# dependencies = []
-# ///
 # ─── How to run ───
 # Imported by hipodit_rebuild_train.py for `evaluate_genotypes`; the Phase 1 Gate 1' oracle is:
 #   python scripts/hipodit_genotype_check.py oracle --prepared-dir P --output-dir O [--arms t]

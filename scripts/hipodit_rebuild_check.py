@@ -1,8 +1,4 @@
 #!/usr/bin/env python3
-# /// script
-# requires-python = ">=3.10"
-# dependencies = []
-# ///
 # ─── How to run ───
 # Prepare with the project environment, then train with a CUDA-12-compatible
 # torch environment. See --help; both stages write only below --output-dir.
