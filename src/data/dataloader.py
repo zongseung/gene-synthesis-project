@@ -15,10 +15,6 @@ from src.data.dataset import GenotypeDataset
 from src.data.sampler import PopulationBalancedSampler
 
 
-class PreprocessingProvenanceError(ValueError):
-    pass
-
-
 def create_dataloaders(
     config: dict,
     rank: int = 0,
@@ -39,7 +35,7 @@ def create_dataloaders(
     # Resolve data paths (relative to project root)
     processed_dir = Path(data_cfg.get("processed_dir", "data/processed"))
     expected_method = data_cfg.get("dim_reduction_method")
-    if expected_method and not data_cfg.get("allow_unverified_preprocessing", False):
+    if expected_method:
         metadata_path = Path(
             data_cfg.get(
                 "preprocessing_metadata_path",
@@ -47,14 +43,14 @@ def create_dataloaders(
             )
         )
         if not metadata_path.exists():
-            raise PreprocessingProvenanceError(
+            raise ValueError(
                 f"Missing preprocessing metadata for {expected_method!r}: {metadata_path}"
             )
         actual_method = json.loads(metadata_path.read_text()).get(
             "dim_reduction_method"
         )
         if actual_method != expected_method:
-            raise PreprocessingProvenanceError(
+            raise ValueError(
                 f"Preprocessing method mismatch: expected {expected_method!r}, "
                 f"artifact records {actual_method!r}"
             )

@@ -57,17 +57,10 @@ class PopulationBalancedSampler(Sampler[int]):
         self.seed = seed
         self.epoch = 0
 
-        # Compute per-sample weights: 1/sqrt(pop_count), normalized
-        unique_pops, counts = np.unique(self.labels, return_counts=True)
-        pop_count_map = dict(zip(unique_pops, counts))
-
-        weights = np.zeros(self.num_total, dtype=np.float64)
-        for i, label in enumerate(self.labels):
-            weights[i] = 1.0 / math.sqrt(pop_count_map[label])
-
-        # Normalize to sum to 1
-        weights /= weights.sum()
-        self.weights = weights
+        # Per-sample weight 1/sqrt(pop_count), normalized to sum to one.
+        _, inverse, counts = np.unique(self.labels, return_inverse=True, return_counts=True)
+        weights = 1.0 / np.sqrt(counts[inverse])
+        self.weights = weights / weights.sum()
 
     def set_epoch(self, epoch: int) -> None:
         """Set the epoch for deterministic shuffling (required for DDP).
