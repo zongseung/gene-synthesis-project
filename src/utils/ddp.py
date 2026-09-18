@@ -41,20 +41,15 @@ def cleanup_ddp() -> None:
         dist.destroy_process_group()
 
 
-def is_main_process() -> bool:
-    """Return True if the current process is rank 0 (or DDP is not active)."""
-    return not dist.is_initialized() or dist.get_rank() == 0
-
-
 def get_rank() -> int:
-    """Return the global rank of the current process (0 if not distributed)."""
-    if dist.is_initialized():
-        return dist.get_rank()
-    return 0
+    """Global rank, or 0 when no process group is initialized."""
+    return dist.get_rank() if dist.is_initialized() else 0
 
 
 def get_world_size() -> int:
-    """Return the total number of processes (1 if not distributed)."""
-    if dist.is_initialized():
-        return dist.get_world_size()
-    return 1
+    """Process count, or 1 when no process group is initialized."""
+    return dist.get_world_size() if dist.is_initialized() else 1
+
+
+def is_main_process() -> bool:
+    return get_rank() == 0

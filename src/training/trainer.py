@@ -70,31 +70,15 @@ def _bind_normalization_stats(config: dict) -> None:
 
 
 # ───────────────────────────────────────────────────────────────────
-# Cosine warmup scheduler (LambdaLR + module-level multiplier fn)
+# Cosine warmup LR multiplier (used through LambdaLR)
 # ───────────────────────────────────────────────────────────────────
 
 def cosine_warmup_lr_lambda(step: int, warmup: int, max_iters: int) -> float:
-    """LR multiplier: linear warmup then cosine decay to 0.
-
-    Reproduces the old hand-rolled ``CosineWarmupScheduler(_LRScheduler)``
-    exactly (verified in scratchpad: identical LR sequence, rel_tol=1e-12).
-    """
+    """LR multiplier: linear warmup then cosine decay to 0."""
     if step < warmup:
         return step / max(1, warmup)
     progress = (step - warmup) / max(1, max_iters - warmup)
     return 0.5 * (1.0 + math.cos(math.pi * progress))
-
-
-def make_cosine_warmup_scheduler(
-    optimizer: torch.optim.Optimizer,
-    warmup: int,
-    max_iters: int,
-) -> torch.optim.lr_scheduler.LambdaLR:
-    """Build a LambdaLR with the cosine-warmup multiplier."""
-    return torch.optim.lr_scheduler.LambdaLR(
-        optimizer,
-        lr_lambda=partial(cosine_warmup_lr_lambda, warmup=warmup, max_iters=max_iters),
-    )
 
 
 # ───────────────────────────────────────────────────────────────────
@@ -294,10 +278,10 @@ def train(config: dict) -> None:
 
     # ── Scheduler ──
     total_steps = training_cfg["epochs"] * len(train_loader)
-    scheduler = make_cosine_warmup_scheduler(
+    scheduler = torch.optim.lr_scheduler.LambdaLR(
         optimizer,
-        warmup=training_cfg.get("warmup_steps", 100),
-        max_iters=total_steps,
+        partial(cosine_warmup_lr_lambda,
+                warmup=training_cfg.get("warmup_steps", 100), max_iters=total_steps),
     )
 
     # ── EMA ──
