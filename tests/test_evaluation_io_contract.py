@@ -124,3 +124,14 @@ def test_evaluation_cli_help_and_legacy_error_are_user_facing(tmp_path: Path) ->
 
     assert result.returncode != 0
     assert "legacy synthetic sample space" in result.stderr.lower()
+
+
+def test_synthetic_loader_rejects_a_shape_that_matches_neither_orientation(tmp_path: Path) -> None:
+    stats_path = tmp_path / "stats.pkl"
+    _write_stats(stats_path, np.zeros((3, 2), dtype=np.float32), np.ones((3, 2), dtype=np.float32))
+    syn_dir = tmp_path / "synthetic"
+    _write_sample(syn_dir, np.ones((4, 4), dtype=np.float32))
+    (syn_dir / "generation_meta.json").write_text(json.dumps({"sample_space": "original"}))
+
+    with pytest.raises(ValueError, match="normalization shape"):
+        _io.load_synthetic(syn_dir, stats_path=stats_path)

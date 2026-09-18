@@ -97,14 +97,16 @@ def load_synthetic(
         arr = genome.detach().cpu().numpy().astype(np.float32)
         if arr.ndim != 2:
             raise ValueError(f"{file_path} has unexpected genome shape {arr.shape}")
-        if expected_shape is not None and arr.shape == expected_shape:
-            pass
-        elif expected_shape is not None and arr.T.shape != expected_shape:
-            raise ValueError(
-                f"{file_path} shape {arr.shape} does not match normalization shape {expected_shape}"
-            )
-        elif expected_shape is not None or arr.shape[0] < arr.shape[1]:
-            arr = arr.T
+        if expected_shape is None:
+            if arr.shape[0] < arr.shape[1]:
+                arr = arr.T  # (K, gene_size) as the generator writes it
+        else:
+            if arr.shape != expected_shape:
+                arr = arr.T
+            if arr.shape != expected_shape:
+                raise ValueError(
+                    f"{file_path} shape {arr.T.shape} does not match normalization shape {expected_shape}"
+                )
         xs.append(arr)
         ys.append(int(label.item() if hasattr(label, "item") else label))
         names.append(file_path.name)
