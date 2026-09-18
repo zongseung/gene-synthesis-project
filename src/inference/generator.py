@@ -135,6 +135,75 @@ def resolve_normalization_stats_path(data_config: dict) -> Path | None:
     return path
 
 
+def load_checkpoint_model(
+    model_path: str, fallback_config: dict, device: torch.device,
+) -> tuple[dict, HybridCNNDiTFiLM, bool]:
+    """Load a checkpoint and its model, preferring EMA weights. Returns (checkpoint, model, used_ema)."""
+    if not Path(model_path).exists():
+        raise FileNotFoundError(f"Model not found: {model_path}")
+    checkpoint = torch.load(model_path, map_location=device, weights_only=False)
+    model, used_ema = load_generator_model(checkpoint, fallback_config, device)
+    if used_ema:
+        logger.info(f"EMA parameters loaded from {model_path}")
+    else:
+        logger.warning("EMA not found in checkpoint, using raw model weights")
+    logger.info(f"Model loaded from {model_path} (epoch {checkpoint.get('epoch', '?')})")
+    return checkpoint, model, used_ema
+
+
+def load_zero_mask(zero_mask_path: str, device: torch.device) -> torch.Tensor | None:
+    """The (K, gene_size) always-zero mask, or None with a warning when the file is absent."""
+    if not Path(zero_mask_path).exists():
+        logger.warning(f"Zero mask not found at {zero_mask_path}")
+        return None
+    zero_mask = torch.load(zero_mask_path, map_location=device, weights_only=True)
+    # Saved as (gene_size, K); the model expects (K, gene_size).
+    if zero_mask.ndim == 2 and zero_mask.shape[1] < zero_mask.shape[0]:
+        zero_mask = zero_mask.T
+    return zero_mask
+
+
+def load_guide_model(
+    guide_model_path: str, diffusion_cfg: dict, fallback_config: dict, device: torch.device,
+) -> HybridCNNDiTFiLM:
+    """Load the autoguidance model, refusing one trained on another noise schedule."""
+    if not Path(guide_model_path).exists():
+        raise FileNotFoundError(f"Guide model not found: {guide_model_path}")
+    checkpoint = torch.load(guide_model_path, map_location=device, weights_only=False)
+    guide_schedule = checkpoint.get("config", {}).get("diffusion", {}).get("noise_schedule", "cosine")
+    if guide_schedule != diffusion_cfg.get("noise_schedule", "cosine"):
+        raise ValueError(
+            f"Guide model noise_schedule ({guide_schedule}) does not match the main "
+            f"checkpoint ({diffusion_cfg.get('noise_schedule', 'cosine')})"
+        )
+    model, used_ema = load_generator_model(checkpoint, fallback_config, device)
+    if not used_ema:
+        logger.warning("EMA not found in guide checkpoint, using raw guide model weights")
+    logger.info(f"Guide model loaded from {guide_model_path}")
+    return model
+
+
+def real_population_sizes(label_hierarchy_path: str) -> dict[int, int]:
+    """{pop_idx: count} from label_hierarchy.pkl, the real data's composition."""
+    with open(label_hierarchy_path, "rb") as f:
+        info = pickle.load(f)
+    return {info["pop_to_idx"][name]: n for name, n in info["pop_sizes"].items()
+            if name in info["pop_to_idx"]}
+
+
+def samples_per_population(
+    counts: dict[int, int], oversample_minority: int | None, max_per_pop: int | None,
+) -> dict[int, int]:
+    """Apply the minority floor, then the per-population cap."""
+    if oversample_minority is not None:
+        counts = {k: max(v, oversample_minority) for k, v in counts.items()}
+    if max_per_pop is not None:
+        if max_per_pop < 1:
+            raise ValueError(f"max_per_pop must be positive, got {max_per_pop}")
+        counts = {k: min(v, max_per_pop) for k, v in counts.items()}
+    return counts
+
+
 # ───────────────────────────────────────────────────────────────────
 # Generation
 # ───────────────────────────────────────────────────────────────────
@@ -183,70 +252,26 @@ def generate_samples(
     torch.cuda.manual_seed_all(seed)
     np.random.seed(seed)
 
-    # ── Step 1: Load model with EMA parameters ──
-    if not Path(model_path).exists():
-        raise FileNotFoundError(f"Model not found: {model_path}")
-
-    checkpoint = torch.load(model_path, map_location=device, weights_only=False)
-
+    # ── Step 1: Load model (EMA weights), zero mask and diffusion ──
+    checkpoint, model, used_ema = load_checkpoint_model(model_path, config, device)
     generation_config = checkpoint.get("config", config)
-    # EMA parameters are preferred for inference.
-    model, used_ema = load_generator_model(checkpoint, config, device)
-    if used_ema:
-        logger.info(f"EMA parameters loaded from {model_path}")
-    else:
-        logger.warning("EMA not found in checkpoint, using raw model weights")
-
-    logger.info(
-        f"Model loaded from {model_path} (epoch {checkpoint.get('epoch', '?')})"
-    )
-
-    # ── Diffusion process ──
     data_cfg = generation_config["data"]
     diffusion_cfg = generation_config["diffusion"]
-
-    zero_mask_path = data_cfg.get("zero_mask_path", "data/processed/zero_mask.pt")
-    if Path(zero_mask_path).exists():
-        zero_mask = torch.load(zero_mask_path, map_location=device, weights_only=True)
-        # zero_mask saved as (gene_size, K), model expects (K, gene_size)
-        if zero_mask.ndim == 2 and zero_mask.shape[1] < zero_mask.shape[0]:
-            zero_mask = zero_mask.T
-    else:
-        zero_mask = None
-        logger.warning(f"Zero mask not found at {zero_mask_path}")
-
+    zero_mask = load_zero_mask(
+        data_cfg.get("zero_mask_path", "data/processed/zero_mask.pt"), device
+    )
     diffusion = build_generation_diffusion(data_cfg, diffusion_cfg, zero_mask).to(device)
 
     # ── Determine samples per population ──
     os.makedirs(output_dir, exist_ok=True)
 
     if n_samples_per_pop is None:
-        label_hierarchy_path = data_cfg.get(
-            "label_hierarchy_path", "data/processed/label_hierarchy.pkl"
+        n_samples_per_pop = real_population_sizes(
+            data_cfg.get("label_hierarchy_path", "data/processed/label_hierarchy.pkl")
         )
-        with open(label_hierarchy_path, "rb") as f:
-            label_info = pickle.load(f)
-
-        pop_to_idx = label_info["pop_to_idx"]
-        pop_sizes = label_info["pop_sizes"]
-        # Map population names to indices and use their counts
-        n_samples_per_pop = {}
-        for pop_name, count in pop_sizes.items():
-            if pop_name in pop_to_idx:
-                n_samples_per_pop[pop_to_idx[pop_name]] = count
-
-    # Apply oversampling for minority populations
-    if oversample_minority is not None:
-        n_samples_per_pop = {
-            k: max(v, oversample_minority) for k, v in n_samples_per_pop.items()
-        }
-
-    if max_per_pop is not None:
-        if max_per_pop < 1:
-            raise ValueError(f"max_per_pop must be positive, got {max_per_pop}")
-        n_samples_per_pop = {
-            k: min(v, max_per_pop) for k, v in n_samples_per_pop.items()
-        }
+    n_samples_per_pop = samples_per_population(
+        n_samples_per_pop, oversample_minority, max_per_pop
+    )
 
     # ── Step 2: Generate samples per population ──
     num_channels = data_cfg["num_channels"]
@@ -279,25 +304,7 @@ def generate_samples(
     # Loaded only when it is actually used, so an unguided run keeps one model in memory.
     guide_model = None
     if guide_model_path is not None and cfg_scale > 0:
-        if not Path(guide_model_path).exists():
-            raise FileNotFoundError(f"Guide model not found: {guide_model_path}")
-        guide_checkpoint = torch.load(
-            guide_model_path, map_location=device, weights_only=False
-        )
-        # A guide trained on another schedule predicts epsilon on another scale.
-        guide_diffusion_cfg = guide_checkpoint.get("config", {}).get("diffusion", {})
-        guide_value = guide_diffusion_cfg.get("noise_schedule", "cosine")
-        if guide_value != diffusion_cfg.get("noise_schedule", "cosine"):
-            raise ValueError(
-                f"Guide model noise_schedule ({guide_value}) does not match the main "
-                f"checkpoint ({diffusion_cfg.get('noise_schedule', 'cosine')})"
-            )
-        guide_model, guide_ema = load_generator_model(guide_checkpoint, config, device)
-        if not guide_ema:
-            logger.warning(
-                "EMA not found in guide checkpoint, using raw guide model weights"
-            )
-        logger.info(f"Guide model loaded from {guide_model_path}")
+        guide_model = load_guide_model(guide_model_path, diffusion_cfg, config, device)
 
     total_generated = 0
     stats_path = resolve_normalization_stats_path(data_cfg)

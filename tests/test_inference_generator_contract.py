@@ -248,3 +248,16 @@ def test_masking_precedes_inverse_so_constant_mean_is_preserved(tmp_path: Path) 
     result = generator.postprocess_samples(samples, zero_mask, stats_path)
 
     torch.testing.assert_close(result, torch.tensor([[[7.0, 0.0]]]))
+
+
+def test_samples_per_population_applies_floor_then_cap() -> None:
+    counts = generator.samples_per_population(
+        {0: 5, 1: 300}, oversample_minority=50, max_per_pop=100,
+    )
+
+    assert counts == {0: 50, 1: 100}
+
+
+def test_samples_per_population_rejects_a_nonpositive_cap() -> None:
+    with pytest.raises(ValueError, match="max_per_pop"):
+        generator.samples_per_population({0: 5}, oversample_minority=None, max_per_pop=0)
