@@ -94,17 +94,17 @@ def split_dataset_stratified(
     tokenized: np.ndarray,
     labels: dict,
     sample_ids: list[str],
+    indices: tuple[np.ndarray, np.ndarray, np.ndarray],
     val_ratio: float = 0.1,
     test_ratio: float = 0.1,
     seed: int = PREPROCESS_SEED,
-    precomputed_indices: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, dict]:
-    """Population-stratified train/val/test split (80/10/10).
+    """Split the tokenized tensor on indices the per-gene PCA was already fit with.
 
-    If `precomputed_indices=(train_idx, val_idx, test_idx)` is provided (e.g.
-    the indices used to fit per-gene PCA on train-only), reuse them instead
-    of resplitting — guarantees tokenized rows are consistent with the PCA
-    train/val/test partition.
+    ``indices`` must be the ``(train, val, test)`` triple from
+    :func:`compute_split_indices`, so tokenized rows stay consistent with the
+    PCA train/val/test partition. ``val_ratio``, ``test_ratio`` and ``seed``
+    are recorded in the split manifest.
     """
     pop_labels = labels["pop_labels"]
 
@@ -114,12 +114,7 @@ def split_dataset_stratified(
             f"labels={len(pop_labels)}"
         )
 
-    if precomputed_indices is not None:
-        train_idx, val_idx, test_idx = precomputed_indices
-    else:
-        train_idx, val_idx, test_idx = compute_split_indices(
-            pop_labels, val_ratio=val_ratio, test_ratio=test_ratio, seed=seed,
-        )
+    train_idx, val_idx, test_idx = indices
 
     x_train = tokenized[train_idx]
     x_val = tokenized[val_idx]
@@ -171,9 +166,6 @@ def split_dataset_stratified(
 def pad_to_gene_size(data: np.ndarray, gene_size: int) -> np.ndarray:
     """Pad (N, n_genes, K) to (N, gene_size, K) with zeros."""
     n_samples, n_genes, n_k = data.shape
-    if n_genes >= gene_size:
-        return data[:, :gene_size, :]
-
     padded = np.zeros((n_samples, gene_size, n_k), dtype=data.dtype)
     padded[:, :n_genes, :] = data
     return padded
@@ -187,19 +179,18 @@ def save_all(
     y_val: np.ndarray,
     y_test: np.ndarray,
     features_df: pd.DataFrame,
-    gene_size: int,
 ) -> None:
-    """Save all preprocessed artifacts to data/processed/."""
+    """Save all preprocessed artifacts to data/processed/.
+
+    The tensors arrive already padded to the aligned gene size, because the
+    normalization statistics had to be fit at that shape.
+    """
     os.makedirs(PROCESSED_DIR, exist_ok=True)
 
-    x_train_padded = pad_to_gene_size(x_train, gene_size)
-    x_val_padded = pad_to_gene_size(x_val, gene_size)
-    x_test_padded = pad_to_gene_size(x_test, gene_size)
-
     for name, x, y in [
-        ("train", x_train_padded, y_train),
-        ("val", x_val_padded, y_val),
-        ("test", x_test_padded, y_test),
+        ("train", x_train, y_train),
+        ("val", x_val, y_val),
+        ("test", x_test, y_test),
     ]:
         path = os.path.join(PROCESSED_DIR, f"{name}_data.pkl")
         with open(path, "wb") as f:

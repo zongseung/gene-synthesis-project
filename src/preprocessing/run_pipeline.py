@@ -159,7 +159,7 @@ def main() -> None:
     x_train, x_val, x_test, y_train, y_val, y_test, _ = split_dataset_stratified(
         tokenized, labels, sample_ids,
         val_ratio=VAL_RATIO, test_ratio=TEST_RATIO, seed=PREPROCESS_SEED,
-        precomputed_indices=(train_idx, val_idx, test_idx),
+        indices=(train_idx, val_idx, test_idx),
     )
     del tokenized
     gc.collect()
@@ -183,7 +183,7 @@ def main() -> None:
     # Step 9: Save (already padded, save_all will skip re-padding)
     save_all(
         x_train_norm, x_val_norm, x_test_norm,
-        y_train, y_val, y_test, features_df, gene_size,
+        y_train, y_val, y_test, features_df,
     )
     metadata = {
         "version": 1,
