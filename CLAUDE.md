@@ -24,9 +24,6 @@ uv sync
 # Preprocessing (sequential: 1 chromosome at a time → Gene PCA → tokenized tensors)
 python src/preprocessing/run_pipeline.py
 
-# VCF merging (22 chromosomes parallel)
-python src/preprocessing/merge_data.py
-
 # Training (DDP 2-GPU, bf16). 루트 .venv의 torch는 cu130이라 이 머신 드라이버(535 / CUDA 12.2)에서
 # CUDA를 못 잡는다. 학습·생성은 csdi 환경으로 돌린다 (2026-09-17 확인).
 PYTHONHASHSEED=0 /home/user/Envs/csdi/bin/torchrun --nproc_per_node=2 \
@@ -95,7 +92,7 @@ src/
 - **DDP on 2 GPUs**: Always `torchrun --nproc_per_node=2`. Logging/saving on rank 0 only. `DistributedSampler` with `set_epoch()`.
 - **No early stopping**: Run full epochs, track best by `val_reconstruction_error`, save `best_model.pth`.
 - **Optimizer**: AdamW with cosine warmup scheduler.
-- **Preprocessing is sequential by design, for memory**: `stream_vcf_and_pca` walks the 22 chromosomes one at a time (`src/preprocessing/pca.py:107` logs `Streaming VCF→PCA: sequential ... (OOM-safe: 1 chr at a time)`) so peak RAM stays at roughly one chromosome, while per-gene reduction within each chromosome runs across genes in a stdlib `multiprocessing.Pool` (`src/preprocessing/pca.py`, `os.cpu_count()` workers, no `joblib`). The other parallel component is the separate merge utility `src/preprocessing/merge_data.py` (`multiprocessing.Pool`, `N_WORKERS = min(22, cpu_count())`), which is not part of the pipeline. Evaluation (`scripts/evaluate_synthetic_metrics.py`) is single-process; it caches loaded tensors and PCA coordinates instead.
+- **Preprocessing is sequential by design, for memory**: `stream_vcf_and_pca` walks the 22 chromosomes one at a time (`src/preprocessing/pca.py:107` logs `Streaming VCF→PCA: sequential ... (OOM-safe: 1 chr at a time)`) so peak RAM stays at roughly one chromosome, while per-gene reduction within each chromosome runs across genes in a stdlib `multiprocessing.Pool` (`src/preprocessing/pca.py`, `os.cpu_count()` workers, no `joblib`). Evaluation (`scripts/evaluate_synthetic_metrics.py`) is single-process.
 - **Domain-driven**: CNN captures local LD, DiT captures long-range gene interactions, FiLM modulates per population. 생물학적 제약(항상 0인 위치)은 모델이 아니라 `GaussianDiffusion._apply_zero_mask`가 강제한다 — `enforce_zeros` 플래그 + `zero_mask` 버퍼로 q_sample·p_sample·DDIM 각 스텝과 손실에 적용된다. 모델 `forward`에는 zero-mask 경로가 없다.
 - **Model saves as .pth**: `torch.save({'model_state_dict': model.module.state_dict(), 'config': config, ...}, 'best_model.pth')`.
 

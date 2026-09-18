@@ -1023,12 +1023,11 @@ data.gene_size: <유전자 수를 256 배수로 올림한 값>
 # 환경 설치
 uv sync
 
-# Phase 0.5: VCF 병합 (22 염색체 병렬)
-python src/preprocessing/merge_data.py
-
 # Phase 1: 전처리 (VCF → Gene GLM-PCA → 토큰화)
 #   Rust VCF 파서 설치 (한 번, Rust 툴체인 필요. 소스 수정 후에도 다시 실행)
 uv pip install -e ./vcf_parser_rs
+#   Binomial(2,p) 백엔드 (HIPODIT_GLM_FAMILY=binom2 일 때 우선 사용, 없으면 scipy fallback)
+uv pip install -e ./binom_glmpca_rs
 #   전 CPU 코어 사용 · 수십 분 이상 → 백그라운드 + 로그
 nohup .venv/bin/python src/preprocessing/run_pipeline.py > outputs/preprocess.log 2>&1 &
 #   끝나면 로그 마지막의 data.num_channels / data.gene_size 를 configs/default.yaml 에 반영
@@ -1133,7 +1132,6 @@ gene-synthesis-project/
 │   │   ├── binomial_glm_pca.py     # 이항 GLM-PCA (chr17 고정 패널 실험 전용)
 │   │   ├── tokenizer.py            # 토큰화, alignment 패딩, zero_mask, 정규화
 │   │   ├── labels.py               # 계층적 레이블, split, 저장
-│   │   ├── merge_data.py           # VCF 병합 (22 chr 병렬)
 │   │   └── run_pipeline.py         # 전처리 오케스트레이터 (OOM-safe 2-pass)
 │   │
 │   ├── models/
@@ -1180,13 +1178,16 @@ gene-synthesis-project/
 │       ├── gene_index.rs              # 유전자 구간 이분 탐색 + prefix-max 끝점
 │       └── vcf_processing.rs          # gzip 스트리밍 파싱, dosage, train 기준 MAF·대체
 │
+├── binom_glmpca_rs/                   # Rust(PyO3) Binomial(2,p) GLM-PCA — HIPODIT_GLM_FAMILY=binom2
+│   ├── Cargo.toml · pyproject.toml    # maturin 빌드: uv pip install -e ./binom_glmpca_rs
+│   └── src/fit.rs · lib.rs            # alternating IRLS, scipy 참조 구현(binomial_glm_pca.py)과 동치
+│
 ├── scripts/
 │   ├── evaluate_synthetic_metrics.py # DUPI + 분포 거리 CLI (원 스케일 복원 후 평가)
 │   ├── guidance_sweep.py             # CFG w 스윕 + 평가 자동화
 │   ├── plot_pca.py                   # 3-panel Real / Syn / Overlay PCA 그림
 │   ├── plot_pca_train_fit_test_overlay.py # train fit PCA 에 test·synthetic 투영
 │   ├── plot_train_curves.py          # 학습 로그 → loss/val 곡선
-│   ├── export_chr17_csv.py           # chr17 TSV 익스포트 유틸
 │   └── hipodit_*.py                  # chr17 고정 패널 실험 (prepare / check / multiseed / privacy)
 │
 ├── tests/                            # pytest tests/ → 260 tests
