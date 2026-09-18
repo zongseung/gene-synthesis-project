@@ -20,7 +20,6 @@ def timestep_embedding(
     Returns:
         (B, dim) embedding vectors.
     """
-    assert timesteps.dim() == 1, f"Expected 1D timesteps, got {timesteps.dim()}D"
     half = dim // 2
     freqs = torch.exp(
         -math.log(max_period)

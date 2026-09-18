@@ -64,7 +64,6 @@ class HierarchicalPopulationEmbedding(nn.Module):
         Returns:
             (B, d_model) hierarchical population embedding.
         """
-        assert pop_label.dim() == 1, f"Expected 1D labels, got {pop_label.shape}"
         p_emb = self.pop_emb(pop_label)
         sp_label = self.pop_to_superpop_map[pop_label]
         sp_emb = self.superpop_emb(sp_label)

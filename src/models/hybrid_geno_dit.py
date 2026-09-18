@@ -72,10 +72,11 @@ class HybridCNNDiTFiLM(nn.Module):
         # Encoder has len(channel_mult)-1 stride-2 downsamples.
         n_downsamples = len(channel_mult) - 1
         self.latent_size = self.gene_size // (2 ** n_downsamples)
-        assert self.latent_size * (2 ** n_downsamples) == self.gene_size, (
-            f"gene_size {self.gene_size} not evenly divisible by "
-            f"2^{n_downsamples}={2 ** n_downsamples}"
-        )
+        if self.latent_size * (2 ** n_downsamples) != self.gene_size:
+            raise ValueError(
+                f"gene_size {self.gene_size} not evenly divisible by "
+                f"2^{n_downsamples}={2 ** n_downsamples}"
+            )
 
         # --- Build submodules ---
 
@@ -159,13 +160,11 @@ class HybridCNNDiTFiLM(nn.Module):
         Returns:
             (B, K, gene_size) predicted noise (or v-prediction target).
         """
-        assert x.dim() == 3, f"Expected 3D input, got {x.dim()}D: {x.shape}"
-        assert x.shape[1] == self.in_channels, (
-            f"Channel mismatch: expected {self.in_channels}, got {x.shape[1]}"
-        )
-        assert x.shape[2] == self.gene_size, (
-            f"Gene size mismatch: expected {self.gene_size}, got {x.shape[2]}"
-        )
+        if x.dim() != 3 or x.shape[1] != self.in_channels or x.shape[2] != self.gene_size:
+            raise ValueError(
+                f"Expected (B, {self.in_channels} channels, {self.gene_size} gene_size), "
+                f"got {tuple(x.shape)}"
+            )
 
         # --- Conditioning ---
         pop_emb = self.pop_embedding(y)

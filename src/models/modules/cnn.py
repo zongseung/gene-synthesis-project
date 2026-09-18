@@ -184,9 +184,6 @@ class CNNStemEncoder(nn.Module):
             x: (B, 4C, L_down) latent representation.
             skips: list of skip connection tensors (one per block).
         """
-        assert len(cnn_film_params) == len(self.blocks), (
-            f"FiLM params count {len(cnn_film_params)} != blocks {len(self.blocks)}"
-        )
         skips = []
         for block, (gamma, beta) in zip(self.blocks, cnn_film_params):
             x, skip = block(x, gamma, beta)
@@ -247,9 +244,6 @@ class CNNDecoder(nn.Module):
         Returns:
             (B, K, gene_size) reconstructed output.
         """
-        assert len(cnn_film_params) == len(self.blocks), (
-            f"FiLM params count {len(cnn_film_params)} != blocks {len(self.blocks)}"
-        )
         # Skips are in encoder order; decoder processes in reverse
         reversed_skips = list(reversed(skips))
 

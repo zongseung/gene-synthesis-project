@@ -29,9 +29,8 @@ class PatchEmbed1D(nn.Module):
         d_model: int = 256,
     ):
         super().__init__()
-        assert seq_len % patch_size == 0, (
-            f"seq_len {seq_len} not divisible by patch_size {patch_size}"
-        )
+        if seq_len % patch_size:
+            raise ValueError(f"seq_len {seq_len} not divisible by patch_size {patch_size}")
         self.patch_size = patch_size
         self.n_tokens = seq_len // patch_size
         self.proj = nn.Linear(in_channels * patch_size, d_model)
@@ -137,11 +136,6 @@ class DiTBlock(nn.Module):
         Returns:
             (B, N, d_model) processed token sequence.
         """
-        d = x.shape[-1]
-        assert film_params.shape[-1] == d * 6, (
-            f"FiLM params dim {film_params.shape[-1]} != expected {d * 6}"
-        )
-
         # Split into 6 modulation vectors, each (B, 1, d)
         g1, b1, a1, g2, b2, a2 = [
             p.unsqueeze(1) for p in film_params.chunk(6, dim=-1)
@@ -196,9 +190,6 @@ class DiTCore(nn.Module):
         Returns:
             (B, N_tokens, d_model) processed tokens.
         """
-        assert len(dit_params) == len(self.blocks), (
-            f"DiT params count {len(dit_params)} != blocks {len(self.blocks)}"
-        )
         for block, params in zip(self.blocks, dit_params):
             x = block(x, params)
         return self.final_norm(x)
