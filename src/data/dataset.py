@@ -26,8 +26,8 @@ class GenotypeDataset(Dataset):
 
     Raises:
         FileNotFoundError: If data_path does not exist.
-        ValueError: If the pickle does not contain a 2-element tuple
-            or arrays have unexpected dimensions.
+        ValueError: If the arrays are not (N,G,K) features and (N,) labels
+            of equal length.
     """
 
     def __init__(self, data_path: str | Path) -> None:
@@ -36,46 +36,16 @@ class GenotypeDataset(Dataset):
             raise FileNotFoundError(f"Data file not found: {data_path}")
 
         with open(data_path, "rb") as f:
-            data = pickle.load(f)
+            x_data, y_labels = pickle.load(f)
 
-        if not isinstance(data, tuple) or len(data) != 2:
+        # (N, gene_size, K); transposed to (K, gene_size) in __getitem__.
+        self.x_data = torch.from_numpy(np.asarray(x_data, dtype=np.float32))
+        self.y_labels = torch.from_numpy(np.asarray(y_labels, dtype=np.int64))
+        if self.x_data.ndim != 3 or len(self.x_data) != len(self.y_labels):
             raise ValueError(
-                f"Expected (x_data, y_labels) tuple, got "
-                f"{type(data).__name__} with {len(data) if hasattr(data, '__len__') else '?'} elements"
+                f"{data_path}: expected (N,G,K) features and (N,) labels, got "
+                f"{tuple(self.x_data.shape)} and {tuple(self.y_labels.shape)}"
             )
-
-        x_data, y_labels = data
-
-        # Convert to numpy arrays if needed
-        if isinstance(x_data, torch.Tensor):
-            x_data = x_data.numpy()
-        if isinstance(y_labels, torch.Tensor):
-            y_labels = y_labels.numpy()
-
-        x_data = np.asarray(x_data, dtype=np.float32)
-        y_labels = np.asarray(y_labels, dtype=np.int64)
-
-        if x_data.ndim != 3:
-            raise ValueError(
-                f"Expected x_data with 3 dimensions (N, gene_size, K), "
-                f"got {x_data.ndim}D with shape {x_data.shape}"
-            )
-
-        if y_labels.ndim != 1:
-            raise ValueError(
-                f"Expected y_labels with 1 dimension (N,), "
-                f"got {y_labels.ndim}D with shape {y_labels.shape}"
-            )
-
-        if x_data.shape[0] != y_labels.shape[0]:
-            raise ValueError(
-                f"Sample count mismatch: x_data has {x_data.shape[0]}, "
-                f"y_labels has {y_labels.shape[0]}"
-            )
-
-        # Store as tensors; transpose happens in __getitem__
-        self.x_data = torch.from_numpy(x_data)       # (N, gene_size, K)
-        self.y_labels = torch.from_numpy(y_labels)    # (N,)
 
     def __len__(self) -> int:
         return self.x_data.shape[0]
