@@ -103,28 +103,6 @@ def make_cosine_warmup_scheduler(
 
 
 # ───────────────────────────────────────────────────────────────────
-# Precision (autocast) resolution
-# ───────────────────────────────────────────────────────────────────
-
-PRECISION_DTYPES: dict[str, torch.dtype] = {"bf16": torch.bfloat16, "fp32": torch.float32}
-
-
-def resolve_precision(training_cfg: dict) -> tuple[torch.dtype, bool]:
-    """Map training.precision to (autocast_dtype, autocast_enabled).
-
-    fp32 runs without autocast (single code path via ``enabled=False``,
-    rather than a separate branch). Default (key absent): bf16.
-    """
-    precision = training_cfg.get("precision", "bf16")
-    if precision not in PRECISION_DTYPES:
-        raise ValueError(
-            f"Unsupported training.precision: {precision!r}. "
-            f"Allowed values: {sorted(PRECISION_DTYPES)}"
-        )
-    return PRECISION_DTYPES[precision], precision != "fp32"
-
-
-# ───────────────────────────────────────────────────────────────────
 # Validation
 # ───────────────────────────────────────────────────────────────────
 
@@ -134,9 +112,6 @@ def validate(
     diffusion: GaussianDiffusion,
     val_loader: DataLoader,
     device: torch.device,
-    config: dict,
-    autocast_dtype: torch.dtype = torch.bfloat16,
-    autocast_enabled: bool = True,
 ) -> float:
     """Compute validation reconstruction error.
 
@@ -164,7 +139,7 @@ def validate(
         # Assign fixed timesteps deterministically (round-robin)
         t = fixed_timesteps[torch.arange(batch_size, device=device) % len(fixed_timesteps)]
 
-        with torch.autocast(device_type="cuda", dtype=autocast_dtype, enabled=autocast_enabled):
+        with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
             loss_dict = diffusion.p_losses(
                 model=model,
                 x_start=x,
@@ -316,15 +291,7 @@ def train(config: dict) -> None:
         feature_schedule=diffusion_cfg.get("feature_schedule"),
     ).to(device)
 
-    # ── Precision (resolved once, used for train + validate autocast) ──
-    autocast_dtype, autocast_enabled = resolve_precision(training_cfg)
-
-    # ── Optimizer (NO GradScaler for bf16) ──
-    optimizer_name = training_cfg.get("optimizer", "adamw")
-    if optimizer_name != "adamw":
-        raise ValueError(
-            f"Unsupported training.optimizer: {optimizer_name!r}. Only 'adamw' is implemented."
-        )
+    # ── Optimizer: AdamW, NO GradScaler (bf16 has fp32 dynamic range) ──
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=training_cfg["lr"],
@@ -383,7 +350,7 @@ def train(config: dict) -> None:
             optimizer.zero_grad(set_to_none=True)
 
             # ── autocast (NO GradScaler) ──
-            with torch.autocast(device_type="cuda", dtype=autocast_dtype, enabled=autocast_enabled):
+            with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                 t = torch.randint(0, diffusion.timesteps, (x.shape[0],), device=device)
                 loss_dict = diffusion.p_losses(
                     model=model,
@@ -439,10 +406,7 @@ def train(config: dict) -> None:
 
         # ── Validation (every epoch, using EMA weights) ──
         ema.apply_shadow(base_model)
-        val_rec_error = validate(
-            model, diffusion, val_loader, device, config,
-            autocast_dtype=autocast_dtype, autocast_enabled=autocast_enabled,
-        )
+        val_rec_error = validate(model, diffusion, val_loader, device)
         ema.restore(base_model)
 
         if is_main_process():

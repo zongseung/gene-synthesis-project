@@ -54,11 +54,9 @@ training:
   lr: 0.0002
   seed: 20260327
   weight_decay: 0.0001
-  optimizer: "adamw"
   gradient_clipping: 1.0
   warmup_steps: 100
   ema_decay: 0.999
-  precision: "bf16"              # bf16 부동소수점
 
 # ── 실험 운영 ──
 experiment:
