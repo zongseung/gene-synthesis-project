@@ -27,7 +27,6 @@ import json
 import logging
 import os
 import pickle
-import sys
 import time
 from datetime import datetime
 from pathlib import Path
@@ -35,10 +34,6 @@ from pathlib import Path
 import numpy as np
 import torch
 
-_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-_PROJECT_ROOT = os.path.abspath(os.path.join(_SCRIPT_DIR, "..", ".."))
-if _PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, _PROJECT_ROOT)
 
 from src.models import GaussianDiffusion, HybridCNNDiTFiLM
 from src.preprocessing.tokenizer import invert_normalization, load_normalization_stats

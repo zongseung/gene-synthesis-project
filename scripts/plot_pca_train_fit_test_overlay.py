@@ -17,11 +17,8 @@ import numpy as np
 import torch
 from sklearn.decomposition import PCA
 
-import sys
-sys.path.insert(0, str(Path(__file__).parent))
-from plot_pca import apply_nonzero_mask, pop_idx_to_superpop_name  # type: ignore
+from scripts.plot_pca import apply_nonzero_mask, pop_idx_to_superpop_name
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src.evaluation._io import load_real, load_synthetic  # noqa: E402
 
 

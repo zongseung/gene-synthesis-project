@@ -29,7 +29,6 @@ import logging
 import math
 import os
 import pickle
-import sys
 from functools import partial
 from pathlib import Path
 
@@ -40,11 +39,6 @@ import torch.nn as nn
 import wandb
 from torch.utils.data import DataLoader
 
-# Allow direct execution: torchrun src/training/trainer.py
-_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-_PROJECT_ROOT = os.path.abspath(os.path.join(_SCRIPT_DIR, "..", ".."))
-if _PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, _PROJECT_ROOT)
 
 # Project imports
 from src.data.dataloader import create_dataloaders

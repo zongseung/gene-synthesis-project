@@ -22,9 +22,7 @@ Usage::
 from __future__ import annotations
 
 import argparse
-import os
 import pickle
-import sys
 from pathlib import Path
 
 import matplotlib
@@ -36,8 +34,6 @@ from sklearn.decomposition import PCA
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
-_PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-sys.path.insert(0, _PROJECT_ROOT)
 
 from src.evaluation._io import load_real, load_synthetic  # noqa: E402
 

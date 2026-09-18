@@ -18,8 +18,10 @@ This repo has two independent virtualenvs — never merge them:
 ## Commands
 
 ```bash
-# Environment
+# Environment. uv sync installs the project itself (editable), so src/ and scripts/
+# import from anywhere. The csdi env is outside uv and needs the same once:
 uv sync
+/home/user/Envs/csdi/bin/pip install -e . --no-deps --ignore-requires-python
 
 # Preprocessing (sequential: 1 chromosome at a time → Gene PCA → tokenized tensors)
 python src/preprocessing/run_pipeline.py

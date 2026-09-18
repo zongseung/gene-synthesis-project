@@ -19,15 +19,11 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
-import sys
 from pathlib import Path
 
 import numpy as np
 from sklearn.decomposition import PCA
 
-_PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-sys.path.insert(0, _PROJECT_ROOT)
 
 from src.evaluation import evaluate  # noqa: E402
 from src.evaluation._io import (  # noqa: E402

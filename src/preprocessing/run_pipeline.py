@@ -15,16 +15,10 @@ from __future__ import annotations
 import gc
 import json
 import logging
-import os
 import sys
 import time
 from pathlib import Path
 
-# Allow direct execution: python src/preprocessing/run_pipeline.py
-_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-_PROJECT_ROOT = os.path.abspath(os.path.join(_SCRIPT_DIR, "..", ".."))
-if _PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, _PROJECT_ROOT)
 
 import pandas as pd
 

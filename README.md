@@ -1020,8 +1020,10 @@ data.gene_size: <유전자 수를 256 배수로 올림한 값>
 ## Quick Start
 
 ```bash
-# 환경 설치
+# 환경 설치 (프로젝트 자체도 editable 로 설치되어 src/·scripts/ 가 어디서든 import 된다)
 uv sync
+#   GPU 환경(csdi)은 uv 밖이라 한 번만 직접:
+#   /home/user/Envs/csdi/bin/pip install -e . --no-deps --ignore-requires-python
 
 # Phase 1: 전처리 (VCF → Gene GLM-PCA → 토큰화)
 #   Rust VCF 파서 설치 (한 번, Rust 툴체인 필요. 소스 수정 후에도 다시 실행)

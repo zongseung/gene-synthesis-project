@@ -15,8 +15,6 @@ from pathlib import Path
 from typing import Final
 
 PROJECT_ROOT: Final = Path(__file__).resolve().parents[1]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
 
 from scripts.hipodit_multiseed_summary import (
     DECODER_SEEDS_REQUIRED, ExperimentError, SCHEDULES, summarize, summarize_decoder,
