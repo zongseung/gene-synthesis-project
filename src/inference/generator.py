@@ -55,46 +55,30 @@ logger = logging.getLogger(__name__)
 # Denormalization
 # ───────────────────────────────────────────────────────────────────
 
-def denormalize_samples(
-    samples: torch.Tensor,
-    stats_path: str,
-    labels: np.ndarray | None = None,
-) -> torch.Tensor:
-    """Restore generated samples to original scale.
-
-    Args:
-        samples: (B, K, gene_size) float32 model output (normalized).
-        stats_path: Path to normalization_stats.pkl.
-        labels: (B,) population labels, required when the statistics carry a
-            per-population conditional prior. This is the de-normalization step
-            that adds each population's mean back (PriorGrad / ShiftDDPMs).
-
-    Returns:
-        (B, K, gene_size) float32 denormalized tensor.
-
-    Statistics must exactly match the model's ``(gene_size, K)`` shape.
-    """
-    expected_shape = (samples.shape[2], samples.shape[1])
-    stats = load_normalization_stats(stats_path, expected_shape=expected_shape)
-    # invert_normalization already owns the moment selection for every
-    # conditional arm, so this path keeps no second copy of that logic.
-    restored = invert_normalization(
-        samples.detach().float().cpu().permute(0, 2, 1).numpy(), stats, labels
-    )
-    return torch.from_numpy(restored).permute(0, 2, 1).contiguous()
-
-
 def postprocess_samples(
     samples: torch.Tensor,
     zero_mask: torch.Tensor | None,
     stats_path: str | Path | None,
     labels: np.ndarray | None = None,
 ) -> torch.Tensor:
+    """Mask padding, then restore the original feature scale.
+
+    Masking precedes the inverse so a constant per-population mean survives on
+    always-zero coordinates. ``labels`` is required when the statistics carry a
+    per-population conditional prior; ``invert_normalization`` owns that choice
+    (PriorGrad / ShiftDDPMs de-normalization).
+    """
     if zero_mask is not None:
         samples = samples * (~zero_mask.cpu()).unsqueeze(0).to(samples.dtype)
-    if stats_path is not None:
-        samples = denormalize_samples(samples, str(stats_path), labels)
-    return samples
+    if stats_path is None:
+        return samples
+    stats = load_normalization_stats(
+        str(stats_path), expected_shape=(samples.shape[2], samples.shape[1])
+    )
+    restored = invert_normalization(
+        samples.detach().float().cpu().permute(0, 2, 1).numpy(), stats, labels
+    )
+    return torch.from_numpy(restored).permute(0, 2, 1).contiguous()
 
 
 def build_generation_diffusion(
@@ -134,19 +118,6 @@ def load_generator_model(
 
     model.eval()
     return model, ema_state is not None
-
-
-def guidance_meta(
-    guidance_interval: tuple[float, float] | None,
-    guidance_alpha: float,
-    guide_model_path: str | None,
-) -> dict:
-    """Guidance-variant settings recorded in generation_meta.json."""
-    return {
-        "guidance_interval": list(guidance_interval) if guidance_interval else None,
-        "guidance_alpha": float(guidance_alpha),
-        "guide_model_path": str(guide_model_path) if guide_model_path else None,
-    }
 
 
 def resolve_normalization_stats_path(data_config: dict) -> Path | None:
@@ -420,7 +391,9 @@ def generate_samples(
             "num_channels": num_channels,
             "gene_size": gene_size,
             "normalize": data_cfg.get("normalize", False),
-            **guidance_meta(guidance_interval, guidance_alpha, guide_model_path),
+            "guidance_interval": list(guidance_interval) if guidance_interval else None,
+            "guidance_alpha": float(guidance_alpha),
+            "guide_model_path": str(guide_model_path) if guide_model_path else None,
         },
         "timestamp": datetime.now().isoformat(),
         "generation_time_sec": round(generation_time, 2),
