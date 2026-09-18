@@ -9,11 +9,14 @@ from pathlib import Path
 
 import numpy as np
 
+from scripts.hipodit_rebuild_prepare import _gene_matrix
+from src.data.dataloader import create_dataloaders
+from src.training.trainer import _bind_normalization_stats
+
 SCRIPT = Path(__file__).parents[1] / "scripts" / "hipodit_rebuild_check.py"
 
 
 def test_overlapping_genes_do_not_duplicate_owned_variant_columns() -> None:
-    from scripts.hipodit_rebuild_prepare import _gene_matrix
 
     variants = [SimpleNamespace(ALT=["C"], REF="A", ID=f"v{position}", POS=position,
                                 gt_types=np.array([0, 1, 3, 0])) for position in (10, 20)]
@@ -81,7 +84,6 @@ def test_cli_rejects_gene_count_incompatible_with_model_shape() -> None:
 
 
 def test_dataloader_uses_validated_processed_directory(tmp_path: Path) -> None:
-    from src.data.dataloader import create_dataloaders
 
     for split in ("train", "val"):
         with (tmp_path / f"{split}_data.pkl").open("wb") as handle:
@@ -114,7 +116,6 @@ def test_dataloader_uses_validated_processed_directory(tmp_path: Path) -> None:
 
 
 def test_dataloader_rejects_unproven_preprocessing_method(tmp_path: Path) -> None:
-    from src.data.dataloader import create_dataloaders
 
     config = {
         "data": {"processed_dir": str(tmp_path), "dim_reduction_method": "glm_pca"},
@@ -130,7 +131,6 @@ def test_dataloader_rejects_unproven_preprocessing_method(tmp_path: Path) -> Non
 
 
 def test_training_config_binds_normalization_file(tmp_path: Path) -> None:
-    from src.training.trainer import _bind_normalization_stats
 
     stats_path = tmp_path / "normalization_stats.pkl"
     stats_path.write_bytes(b"stable training statistics")

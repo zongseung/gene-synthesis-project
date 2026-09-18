@@ -11,6 +11,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from src.preprocessing.glm_pca import glm_pca_single_gene, project_glm_factors
+
 
 SAMPLES, VARIANTS, K = 200, 60, 4
 
@@ -27,8 +29,6 @@ def binomial_dosage_matrix():
 # ── Schema parity ───────────────────────────────────────────────────────
 class TestSchemaParity:
     def test_glm_pca_result_carries_decoder_fields(self, binomial_dosage_matrix):
-        from src.preprocessing.glm_pca import glm_pca_single_gene
-
         res_g = glm_pca_single_gene("BRCA1", binomial_dosage_matrix, n_components=K)
         assert res_g is not None
         assert {
@@ -56,7 +56,6 @@ class TestSchemaParity:
         assert res_g["n_variants"] == VARIANTS
 
     def test_glm_pca_returns_none_when_k_too_small(self, binomial_dosage_matrix):
-        from src.preprocessing.glm_pca import glm_pca_single_gene
         # K=1 (< 2) should return None per the same convention as PCA.
         res = glm_pca_single_gene("X", binomial_dosage_matrix[:, :1], n_components=1)
         assert res is None
@@ -65,8 +64,6 @@ class TestSchemaParity:
 # ── Train-only fit + held-out projection ────────────────────────────────
 class TestTrainOnlyProjection:
     def test_poisson_projection_optimizes_fixed_decoder_likelihood(self):
-        from src.preprocessing.glm_pca import project_glm_factors
-
         rng = np.random.default_rng(11)
         loadings = rng.normal(scale=0.4, size=(20, 3)).astype(np.float32)
         intercept = rng.normal(loc=-0.2, scale=0.2, size=20).astype(np.float32)
@@ -94,8 +91,6 @@ class TestTrainOnlyProjection:
         assert np.max(np.abs(score)) < 1e-3
 
     def test_poisson_projection_backtracks_large_newton_steps(self):
-        from src.preprocessing.glm_pca import project_glm_factors
-
         rng = np.random.default_rng(0)
         loadings = rng.normal(scale=2.0, size=(12, 3)).astype(np.float32)
         intercept = rng.normal(loc=-2.0, scale=2.0, size=12).astype(np.float32)
@@ -117,8 +112,6 @@ class TestTrainOnlyProjection:
         assert projected_objective < zero_objective
 
     def test_poisson_projection_rejects_negative_observations(self):
-        from src.preprocessing.glm_pca import project_glm_factors
-
         with pytest.raises(ValueError, match="non-negative"):
             project_glm_factors(
                 np.array([[-1.0]], dtype=np.float32),
@@ -128,7 +121,6 @@ class TestTrainOnlyProjection:
             )
 
     def test_held_out_rows_get_projected(self, binomial_dosage_matrix):
-        from src.preprocessing.glm_pca import glm_pca_single_gene
         rng = np.random.default_rng(1)
         train_idx = rng.choice(SAMPLES, size=int(0.8 * SAMPLES), replace=False)
 
@@ -151,7 +143,6 @@ class TestTrainOnlyProjection:
         initialization (different latent rotation each call). Instead we verify
         that train rows are well-formed and have non-trivial spread.
         """
-        from src.preprocessing.glm_pca import glm_pca_single_gene
         rng = np.random.default_rng(2)
         train_idx = np.sort(rng.choice(SAMPLES, size=int(0.7 * SAMPLES), replace=False))
 
@@ -179,8 +170,6 @@ class TestStatisticalSanity:
         simulation in the research report — not by black-box latent-score
         comparisons.
         """
-        from src.preprocessing.glm_pca import glm_pca_single_gene
-
         rng = np.random.default_rng(7)
         p = rng.uniform(0.05, 0.5, VARIANTS)
         X = rng.binomial(2, p, size=(SAMPLES, VARIANTS)).astype(np.float32)
@@ -194,8 +183,6 @@ class TestStatisticalSanity:
 
     def test_pseudo_r2_increases_with_more_components(self):
         """Pseudo-R² (deviance reduction) should be monotonic in K."""
-        from src.preprocessing.glm_pca import glm_pca_single_gene
-
         rng = np.random.default_rng(8)
         p = rng.uniform(0.05, 0.5, VARIANTS)
         X = rng.binomial(2, p, size=(SAMPLES, VARIANTS)).astype(np.float32)

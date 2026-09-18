@@ -4,9 +4,13 @@ import numpy as np
 import pytest
 from scipy.special import expit
 
+from src.inference.decode import decode_gene
+from src.preprocessing.binomial_glm_pca import BinomialGLMPCA, fit_binomial_glm_pca
+from src.preprocessing.glm_pca import glm_pca_single_gene
+import src.preprocessing.binomial_glm_pca as module
+
 
 def test_binomial_fit_is_train_only_and_improves_observed_likelihood():
-    from src.preprocessing.binomial_glm_pca import fit_binomial_glm_pca
 
     # Given structured diploid calls, including missing observations.
     rng = np.random.default_rng(81)
@@ -32,7 +36,6 @@ def test_binomial_fit_is_train_only_and_improves_observed_likelihood():
 
 @pytest.mark.parametrize("bad", [-1.0, 0.5, 3.0, np.inf])
 def test_binomial_fit_rejects_values_that_are_not_diploid_calls(bad):
-    from src.preprocessing.binomial_glm_pca import fit_binomial_glm_pca
 
     # Given an invalid observed call; NaN alone denotes missingness.
     y = np.ones((8, 4))
@@ -43,7 +46,6 @@ def test_binomial_fit_rejects_values_that_are_not_diploid_calls(bad):
 
 
 def test_fisher_sensitivity_includes_normalization_chain_rule():
-    from src.preprocessing.binomial_glm_pca import BinomialGLMPCA
 
     # Given p=1/2, each SNP contributes 2p(1-p)=1/2 information.
     fit = BinomialGLMPCA(np.zeros((3, 2)), np.eye(2), np.zeros(2), 1., 0.5, True)
@@ -55,9 +57,6 @@ def test_fisher_sensitivity_includes_normalization_chain_rule():
 
 def test_pipeline_routes_binom2_to_the_bounded_likelihood_and_decodes_with_its_link():
     """The per-gene entry point and the genotype decoder must agree on the family."""
-    from src.inference.decode import decode_gene
-    from src.preprocessing.glm_pca import glm_pca_single_gene
-
     rng = np.random.default_rng(5)
     z = rng.normal(size=(60, 2))
     v = rng.normal(size=(20, 2))
@@ -90,8 +89,6 @@ def test_pipeline_routes_binom2_to_the_bounded_likelihood_and_decodes_with_its_l
 
 def test_spectral_start_survives_a_driver_failure_instead_of_aborting():
     """One unlucky gene must not take down a 24k-gene preprocessing run."""
-    import src.preprocessing.binomial_glm_pca as module
-
     calls = np.zeros((6, 4))
     calls[:, 0] = 1.0
     failures = []

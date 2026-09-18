@@ -6,6 +6,8 @@ import numpy as np
 import pytest
 from scipy.special import expit
 
+from src.preprocessing.binomial_glm_pca import fit_binomial_glm_pca
+
 binom_glmpca_rs = pytest.importorskip("binom_glmpca_rs")
 
 
@@ -29,8 +31,6 @@ def _procrustes(target, source):
 
 
 def test_matches_python_reference_on_seeded_case():
-    from src.preprocessing.binomial_glm_pca import fit_binomial_glm_pca
-
     y = _simulate(300, 40, 3, seed=11)
     train = np.arange(240)
     ref = fit_binomial_glm_pca(y, train, 3, max_iter=150)
@@ -80,8 +80,6 @@ def test_fit_is_train_only():
 
 
 def test_rust_is_several_times_faster_on_a_realistic_gene():
-    from src.preprocessing.binomial_glm_pca import fit_binomial_glm_pca
-
     y = _simulate(2504, 300, 4, seed=2026, missing=0.01)
     train = np.random.default_rng(2026).permutation(2504)[:2003].astype(np.int64)
 

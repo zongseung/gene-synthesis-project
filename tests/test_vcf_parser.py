@@ -11,6 +11,8 @@ import gzip
 
 import numpy as np
 
+from src.preprocessing.vcf_parser import process_one_chromosome
+
 SAMPLES = ["S0", "S1", "S2", "S3"]
 HEADER = (
     "##fileformat=VCFv4.1\n"
@@ -30,7 +32,6 @@ def _write_vcf(path, rows):
 
 
 def _parse(path, genes, train_indices=None, maf_threshold=0.01, max_variants=500):
-    from src.preprocessing.vcf_parser import process_one_chromosome
 
     return process_one_chromosome(17, path, maf_threshold, max_variants, genes, train_indices)
 

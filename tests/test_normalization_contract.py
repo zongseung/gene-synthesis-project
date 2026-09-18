@@ -3,10 +3,19 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 import pytest
+import pickle
+
+from src.preprocessing.tokenizer import (
+    apply_normalization,
+    compute_gene_size,
+    fit_normalization_stats,
+    invert_normalization,
+    load_normalization_stats,
+    tokenize_dataset,
+)
 
 
 def test_normalization_fits_train_only_without_default_clipping():
-    from src.preprocessing.tokenizer import apply_normalization, fit_normalization_stats
 
     train = np.array([[[0.0]], [[2.0]]], dtype=np.float32)
     validation = np.array([[[20.0]]], dtype=np.float32)
@@ -20,12 +29,6 @@ def test_normalization_fits_train_only_without_default_clipping():
 
 
 def test_normalization_inverse_round_trip():
-    from src.preprocessing.tokenizer import (
-        apply_normalization,
-        fit_normalization_stats,
-        invert_normalization,
-    )
-
     rng = np.random.default_rng(3)
     train = rng.normal(size=(12, 5, 2)).astype(np.float32)
 
@@ -36,7 +39,6 @@ def test_normalization_inverse_round_trip():
 
 
 def test_normalization_rejects_stats_shape_mismatch():
-    from src.preprocessing.tokenizer import apply_normalization, fit_normalization_stats
 
     stats = fit_normalization_stats(np.zeros((3, 5, 2), dtype=np.float32))
 
@@ -45,7 +47,6 @@ def test_normalization_rejects_stats_shape_mismatch():
 
 
 def test_tokenizer_uses_explicit_gene_and_numeric_component_order():
-    from src.preprocessing.tokenizer import tokenize_dataset
 
     features = pd.DataFrame(
         {
@@ -68,7 +69,6 @@ def test_tokenizer_uses_explicit_gene_and_numeric_component_order():
 
 
 def test_gene_size_matches_default_model_downsampling_and_patch_stride():
-    from src.preprocessing.tokenizer import compute_gene_size
 
     assert compute_gene_size(24_482) == 24_576
     assert compute_gene_size(128) == 256
@@ -88,11 +88,6 @@ def _two_population_train():
 
 @pytest.mark.parametrize("arm", ["mean", "mean_std"])
 def test_conditional_prior_centers_each_population_and_inverts(arm):
-    from src.preprocessing.tokenizer import (
-        apply_normalization,
-        fit_normalization_stats,
-        invert_normalization,
-    )
 
     train, labels = _two_population_train()
     stats = fit_normalization_stats(train, labels=labels, conditional=arm)
@@ -112,8 +107,6 @@ def test_conditional_prior_centers_each_population_and_inverts(arm):
 
 def test_mean_arm_keeps_population_diversity_that_mean_std_arm_removes():
     """The one measurable difference between the two arms."""
-    from src.preprocessing.tokenizer import apply_normalization, fit_normalization_stats
-
     train, labels = _two_population_train()
     spread = {}
     for arm in ("mean", "mean_std"):
@@ -128,11 +121,6 @@ def test_mean_arm_keeps_population_diversity_that_mean_std_arm_removes():
 
 
 def test_conditional_stats_require_in_range_population_labels():
-    from src.preprocessing.tokenizer import (
-        apply_normalization,
-        fit_normalization_stats,
-        invert_normalization,
-    )
 
     train, labels = _two_population_train()
     stats = fit_normalization_stats(train, labels=labels, conditional="mean")
@@ -150,9 +138,7 @@ def test_conditional_stats_require_in_range_population_labels():
 
 
 def test_loader_rejects_moments_whose_shape_contradicts_the_recorded_arm(tmp_path):
-    import pickle
 
-    from src.preprocessing.tokenizer import load_normalization_stats
 
     path = tmp_path / "stats.pkl"
     with path.open("wb") as handle:
@@ -173,8 +159,6 @@ def test_loader_rejects_moments_whose_shape_contradicts_the_recorded_arm(tmp_pat
 def test_variance_floor_keeps_a_within_population_constant_from_exploding():
     """Minority populations are numerically constant in some cells; without a
     floor the mean_std arm divides fp32 rounding dust by itself."""
-    from src.preprocessing.tokenizer import apply_normalization, fit_normalization_stats
-
     train, labels = _two_population_train()
     # Population 0 is exactly constant at this coordinate, population 1 is not.
     train[labels == 0, 2, 1] = 0.7

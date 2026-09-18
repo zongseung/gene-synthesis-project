@@ -18,17 +18,14 @@ import math
 import numpy as np
 import pytest
 
-from src.evaluation.dupi import (
-    dupi_score,
-    kth_dupi_benchmark,
-    ui_pi_from_dupi,
-)
 from src.evaluation.distribution_metrics import (
     centroid_distance,
     gaussian_w2_distance,
     mmd_rbf,
+    nn_adversarial_accuracy,
     same_class_coverage,
 )
+from src.evaluation.dupi import dupi_score, kth_dupi_benchmark, ui_pi_from_dupi
 
 
 # ── DUPI ────────────────────────────────────────────────────────────────
@@ -179,7 +176,6 @@ class TestDistributionMetrics:
 # ── Paper reproduction (Jeong, Kim, Im 2023) ────────────────────────────
 class TestPaperReproduction:
     """Re-run the printed numerical examples from the IEEE TIFS paper."""
-
     # ── Eq. (10) closed form ──────────────────────────────────────────
     def test_eq10_k1_special_case(self) -> None:
         """Eq. (10) reduces to ``m / (n + m - 1)`` when k = 1 (paper text after Eq. 10)."""
@@ -271,8 +267,6 @@ class TestPaperReproduction:
 
 def test_aats_reads_0p5_for_indistinguishable_and_the_extremes_for_the_failure_modes():
     """The AG literature's three regimes, on data built to sit in each."""
-    from src.evaluation.distribution_metrics import nn_adversarial_accuracy
-
     rng = np.random.default_rng(7)
     real = rng.normal(size=(400, 6))
 
@@ -291,8 +285,6 @@ def test_aats_reads_0p5_for_indistinguishable_and_the_extremes_for_the_failure_m
 
 
 def test_aats_rejects_mismatched_or_degenerate_inputs():
-    from src.evaluation.distribution_metrics import nn_adversarial_accuracy
-
     rng = np.random.default_rng(1)
     with pytest.raises(ValueError, match="Feature mismatch"):
         nn_adversarial_accuracy(rng.normal(size=(5, 3)), rng.normal(size=(5, 4)))

@@ -12,6 +12,31 @@ import numpy as np
 import pytest
 from scipy.special import expit
 
+from scripts.hipodit_genotype_check import (
+    _digest,
+    _gate1,
+    _gate1_prime,
+    af_preservation,
+    base_logits,
+    classifier_blocks,
+    evaluate_genotypes,
+    gate2_prime,
+    genotype_metrics,
+    load_superpop_of_cohort,
+    panel_positions,
+    population_classifier_scores,
+    seed_summary,
+    test_nll_comparison as nll_comparison,
+)
+from src.models.genotype_decoder import (
+    distance_bins,
+    fit_decoder,
+    GenotypeDecoder,
+    nll_calls,
+    sample_calls,
+)
+import scripts.hipodit_genotype_check as module
+
 SCRIPT = Path(__file__).parents[1] / "scripts" / "hipodit_genotype_check.py"
 PANEL_DIR = Path("outputs/diagnostics/hipodit_fisher_20260915_unique")
 
@@ -38,7 +63,6 @@ GENERATED = np.array([
 
 
 def _metrics(**overrides):
-    from scripts.hipodit_genotype_check import genotype_metrics
 
     arguments = dict(offsets=OFFSETS, positions=POSITIONS, edges=EDGES)
     arguments.update(overrides)
@@ -130,8 +154,6 @@ def test_maf_bins_average_only_the_snps_they_contain() -> None:
 
 
 def _base_logits(prepared: Path, factors: np.ndarray) -> np.ndarray:
-    from scripts.hipodit_genotype_check import base_logits
-
     with (prepared / "glm_pca_parameters.pkl").open("rb") as handle:
         return base_logits(pickle.load(handle), factors)
 
@@ -144,9 +166,6 @@ def _split_factors(prepared: Path, split: str) -> np.ndarray:
 
 def _fake_decoder_dir(prepared: Path, decoder_dir: Path, *, gate1_passed: bool = True) -> None:
     """A Task 8-shaped oracle output: a fitted arm-T decoder, prepared hashes and the verdict."""
-    from scripts.hipodit_genotype_check import _digest, base_logits, panel_positions
-    from src.models.genotype_decoder import fit_decoder
-
     decoder_dir.mkdir(parents=True)
     with np.load(prepared / "genotypes.npz") as data:
         calls, offsets = data["calls"].astype(np.float64), data["offsets"]
@@ -167,7 +186,6 @@ def _fake_decoder_dir(prepared: Path, decoder_dir: Path, *, gate1_passed: bool =
 
 def test_evaluate_genotypes_keeps_its_legacy_keys(tmp_path: Path) -> None:
     # Given the frozen prepared-directory layout and factors on the GLM-PCA scale.
-    from scripts.hipodit_genotype_check import evaluate_genotypes
 
     prepared = tmp_path / "prepared"
     _fake_prepared(prepared)
@@ -191,8 +209,6 @@ def test_evaluate_genotypes_keeps_its_legacy_keys(tmp_path: Path) -> None:
 
 def test_evaluate_genotypes_decodes_arm_t_beside_the_unchanged_binomial_draw(tmp_path: Path) -> None:
     # Given a Gate 1'-passing arm-T decoder fitted on the same prepared panel.
-    from scripts.hipodit_genotype_check import evaluate_genotypes
-    from src.models.genotype_decoder import GenotypeDecoder, sample_calls
 
     prepared = tmp_path / "prepared"
     _fake_prepared(prepared)
@@ -254,7 +270,6 @@ def test_evaluate_genotypes_decodes_arm_t_beside_the_unchanged_binomial_draw(tmp
 
 def test_evaluate_genotypes_refuses_factors_off_the_inverse_normalized_scale(tmp_path: Path) -> None:
     # Given real factors that are not what inverting the stored normalization produces.
-    from scripts.hipodit_genotype_check import evaluate_genotypes
 
     prepared = tmp_path / "prepared"
     _fake_prepared(prepared)
@@ -269,7 +284,6 @@ def test_evaluate_genotypes_refuses_factors_off_the_inverse_normalized_scale(tmp
 def test_evaluate_genotypes_refuses_a_panel_that_changed_since_the_decoder_was_fitted(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # Given a decoder whose manifest no longer describes the genotypes it was fitted on.
-    import scripts.hipodit_genotype_check as module
 
     prepared = tmp_path / "prepared"
     _fake_prepared(prepared)
@@ -292,7 +306,6 @@ def test_evaluate_genotypes_refuses_a_panel_that_changed_since_the_decoder_was_f
 
 
 def test_evaluate_genotypes_refuses_a_decoder_that_failed_gate1_prime(tmp_path: Path) -> None:
-    from scripts.hipodit_genotype_check import evaluate_genotypes
 
     prepared = tmp_path / "prepared"
     _fake_prepared(prepared)
@@ -306,7 +319,6 @@ def test_evaluate_genotypes_refuses_a_decoder_that_failed_gate1_prime(tmp_path: 
 
 def test_evaluate_genotypes_reads_the_requested_split(tmp_path: Path) -> None:
     # Given a panel whose validation and test rows carry different cohort labels.
-    from scripts.hipodit_genotype_check import evaluate_genotypes
 
     prepared = tmp_path / "prepared"
     _fake_prepared(prepared)
@@ -332,7 +344,6 @@ def test_evaluate_genotypes_reads_the_requested_split(tmp_path: Path) -> None:
 ], ids=["all-improve", "cohort-at-1.05", "cohort-past-1.05", "af-at-1.05", "af-past-1.05",
         "het-tie", "cohort-not-estimable"])
 def test_gate2_prime_needs_a_het_gain_inside_both_af_guardrails(candidate, failing) -> None:
-    from scripts.hipodit_genotype_check import gate2_prime
 
     # Given B0 with heterozygosity MAE 0.1 and unit cohort and overall AF MAE on generated latents.
     names = ("heterozygosity_mae", "cohort_af_mae", "af_mae")
@@ -377,7 +388,6 @@ def _oracle(prepared: Path, output: Path, *extra: str) -> subprocess.CompletedPr
 
 def test_oracle_writes_a_hashed_study_manifest_and_the_gate1_prime_study(tmp_path: Path) -> None:
     # Given a prepared directory and no pilot experiment to link.
-    from src.models.genotype_decoder import GenotypeDecoder
 
     prepared = tmp_path / "prepared"
     _fake_prepared(prepared)
@@ -480,7 +490,6 @@ def test_legacy_oracle_keeps_its_arms_controls_and_gate1_keys(tmp_path: Path) ->
 
 
 def test_superpop_map_must_name_every_cohort(tmp_path: Path) -> None:
-    from scripts.hipodit_genotype_check import load_superpop_of_cohort
 
     def write(mapping: dict) -> Path:
         prepared = tmp_path / f"prepared_{len(list(tmp_path.iterdir()))}"
@@ -500,7 +509,6 @@ def test_superpop_map_must_name_every_cohort(tmp_path: Path) -> None:
 
 
 def test_generated_covariance_reuses_the_real_mask_only_when_row_counts_match() -> None:
-    from scripts.hipodit_genotype_check import genotype_metrics
 
     # Given one within-gene pair whose last two real rows each miss a call.
     real = np.array([[0, 0], [1, 1], [2, 2], [0, 1], [np.nan, 0], [2, np.nan]])
@@ -517,7 +525,6 @@ def test_generated_covariance_reuses_the_real_mask_only_when_row_counts_match() 
 
 
 def test_seed_summary_reports_leafwise_mean_and_sample_sd() -> None:
-    from scripts.hipodit_genotype_check import seed_summary
 
     # Given two seeds of scalar, per-bin and per-cohort metrics with bins not always estimable.
     per_seed = [{"af_mae": 1.0, "ld_r2_mae_by_bin": [2.0, None, 1.0], "by_cohort": {3: 0.5}},
@@ -535,7 +542,6 @@ def test_seed_summary_reports_leafwise_mean_and_sample_sd() -> None:
 
 
 def test_af_preservation_compares_the_largest_gap_with_the_largest_draw_noise() -> None:
-    from scripts.hipodit_genotype_check import af_preservation
 
     # Given 200 sampled individuals: 3 sigma is 3*sqrt(.25/400) = .075 at p=.5, .045 at p=.1.
     expected = np.array([0.5, 0.1, 0.02])
@@ -552,7 +558,6 @@ def test_af_preservation_compares_the_largest_gap_with_the_largest_draw_noise() 
 
 
 def _tilt_arm(nll: float, *seeds: tuple) -> dict:
-    from scripts.hipodit_genotype_check import seed_summary
 
     names = ("heterozygosity_mae", "cohort_af_mae", "af_mae")
     per_seed = [dict(zip(names, seed)) for seed in seeds]
@@ -571,7 +576,6 @@ def _tilt_arm(nll: float, *seeds: tuple) -> dict:
 ], ids=["all-improve", "cohort-at-1.05", "cohort-past-1.05", "af-at-1.05", "af-past-1.05",
         "nll-tie", "het-tie", "cohort-not-estimable"])
 def test_gate1_prime_needs_all_four_conditions_at_exact_boundaries(nll, seed, failing) -> None:
-    from scripts.hipodit_genotype_check import _gate1_prime
 
     # Given B0 with NLL 0.2, heterozygosity MAE 0.1 and unit cohort and overall AF MAE.
     gate = _gate1_prime({"B0": _tilt_arm(0.2, (0.1, 1.0, 1.0)), "T": _tilt_arm(nll, seed)})
@@ -586,7 +590,6 @@ def test_gate1_prime_needs_all_four_conditions_at_exact_boundaries(nll, seed, fa
 
 
 def test_gate1_prime_judges_the_seed_mean_and_counts_passing_seeds() -> None:
-    from scripts.hipodit_genotype_check import _gate1_prime
 
     # Given a T whose second seed alone exceeds the cohort AF margin while the mean stays inside.
     arms = {"B0": _tilt_arm(0.2, (0.1, 1.0, 1.0), (0.1, 1.0, 1.0)),
@@ -610,7 +613,6 @@ def _legacy_arm(nll, ld, cohort) -> dict:
     (_legacy_arm(0.1, 1.0, 1.0), False),
 ], ids=["cohort-at-1.05", "cohort-past-1.05", "nll-tie", "ld-tie"])
 def test_gate1_holds_b3_to_strict_nll_and_ld_gains_within_cohort_margin(candidate, passed) -> None:
-    from scripts.hipodit_genotype_check import _gate1
 
     # Given B0 with NLL 0.2, LD r2 MAE 1.0 and unit cohort AF MAE.
     gate = _gate1({"B0": _legacy_arm(0.2, 1.0, 1.0), "B3": candidate})
@@ -621,7 +623,6 @@ def test_gate1_holds_b3_to_strict_nll_and_ld_gains_within_cohort_margin(candidat
 
 
 def test_gate1_keeps_b0_when_ld_or_cohort_af_is_not_estimable() -> None:
-    from scripts.hipodit_genotype_check import _gate1
 
     gate = _gate1({"B0": _legacy_arm(0.2, 1.0, 1.0), "B3": _legacy_arm(0.1, None, 1.0)})
 
@@ -631,8 +632,6 @@ def test_gate1_keeps_b0_when_ld_or_cohort_af_is_not_estimable() -> None:
 @pytest.mark.skipif(not PANEL_DIR.exists(), reason="prepared chr17 panel is unavailable")
 def test_real_panel_distance_bin_edges_are_the_frozen_quartiles() -> None:
     # Given the frozen chr17 panel read the way the oracle reads it.
-    from scripts.hipodit_genotype_check import panel_positions
-    from src.models.genotype_decoder import distance_bins
 
     positions = panel_positions(PANEL_DIR)
     with np.load(PANEL_DIR / "genotypes.npz") as data:
@@ -644,7 +643,6 @@ def test_real_panel_distance_bin_edges_are_the_frozen_quartiles() -> None:
 
 def test_population_classifier_separates_cohorts_and_names_the_ones_it_cannot_score() -> None:
     # Given four cohorts whose dosage blocks are disjoint, so the cohort is readable from the row.
-    from scripts.hipodit_genotype_check import population_classifier_scores
 
     train_calls = np.repeat(np.eye(4, dtype=np.float64) * 2, 5, axis=0)
     train_labels = np.repeat([0, 1, 2, 3], 5)
@@ -668,7 +666,6 @@ def test_population_classifier_separates_cohorts_and_names_the_ones_it_cannot_sc
 
 def test_population_classifier_refuses_a_cohort_it_was_never_trained_on() -> None:
     # Given an evaluation block conditioned on a cohort absent from the real training rows.
-    from scripts.hipodit_genotype_check import population_classifier_scores
 
     train_calls = np.repeat(np.eye(4, dtype=np.float64) * 2, 5, axis=0)
     # When/Then the score is refused rather than silently reported against a shifted label set.
@@ -679,15 +676,13 @@ def test_population_classifier_refuses_a_cohort_it_was_never_trained_on() -> Non
 
 def test_test_nll_comparison_matches_nll_calls_and_brackets_its_difference(tmp_path: Path) -> None:
     # Given a frozen panel and the Gate 1'-passing oracle decoders fitted on it.
-    from scripts.hipodit_genotype_check import test_nll_comparison
-    from src.models.genotype_decoder import GenotypeDecoder, nll_calls
 
     prepared, decoder_dir = tmp_path / "prepared", tmp_path / "oracle"
     _fake_prepared(prepared)
     _fake_decoder_dir(prepared, decoder_dir)
 
     # When the deterministic oracle NLL of both arms is compared on the held-out test split.
-    result = test_nll_comparison(prepared, decoder_dir, split="test")
+    result = nll_comparison(prepared, decoder_dir, split="test")
 
     # Then each arm reproduces the per-call NLL of its own decoder on the test rows.
     with np.load(prepared / "genotypes.npz") as data:
@@ -707,24 +702,22 @@ def test_test_nll_comparison_matches_nll_calls_and_brackets_its_difference(tmp_p
     assert (result["n_individuals"], result["n_calls"]) == (len(indices), len(indices) * 8)
     assert result["resampling_unit"] == "held-out individuals"
     # And the interval is reproducible, because the bootstrap generator is seeded.
-    assert test_nll_comparison(prepared, decoder_dir, split="test") == result
+    assert nll_comparison(prepared, decoder_dir, split="test") == result
 
 
 def test_test_nll_comparison_refuses_a_decoder_that_failed_gate1_prime(tmp_path: Path) -> None:
     # Given an oracle directory whose Gate 1' verdict did not pass.
-    from scripts.hipodit_genotype_check import test_nll_comparison
 
     prepared, decoder_dir = tmp_path / "prepared", tmp_path / "oracle"
     _fake_prepared(prepared)
     _fake_decoder_dir(prepared, decoder_dir, gate1_passed=False)
     # When/Then the test split is not opened with a decoder that never earned the comparison.
     with pytest.raises(ValueError, match="Gate 1'"):
-        test_nll_comparison(prepared, decoder_dir, split="test")
+        nll_comparison(prepared, decoder_dir, split="test")
 
 
 def test_classifier_blocks_reads_the_real_train_and_eval_dosages(tmp_path: Path) -> None:
     # Given the frozen panel layout.
-    from scripts.hipodit_genotype_check import classifier_blocks
 
     prepared = tmp_path / "prepared"
     _fake_prepared(prepared)
