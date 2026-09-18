@@ -204,6 +204,16 @@ def samples_per_population(
     return counts
 
 
+def save_samples(samples: torch.Tensor, pop_idx: int, start: int, output_dir: str) -> None:
+    """Write each (K, gene_size) row as sample_pop{pop}_{index:04d}.pt with its label."""
+    for i in range(len(samples)):
+        # Clone so each .pt file stores only one sample, not the whole batch storage.
+        torch.save(
+            (samples[i].clone(), torch.tensor(pop_idx, dtype=torch.long)),
+            os.path.join(output_dir, f"sample_pop{pop_idx}_{start + i:04d}.pt"),
+        )
+
+
 # ───────────────────────────────────────────────────────────────────
 # Generation
 # ───────────────────────────────────────────────────────────────────
@@ -346,16 +356,7 @@ def generate_samples(
                 samples, final_mask, stats_path, np.full(current_batch, pop_idx)
             )
 
-            # Save individual samples
-            for i in range(current_batch):
-                # Clone so each .pt file stores only one sample, not the whole batch storage.
-                sample_tensor = samples[i].clone()  # (K, gene_size)
-                label_tensor = torch.tensor(pop_idx, dtype=torch.long)
-                save_path = os.path.join(
-                    output_dir, f"sample_pop{pop_idx}_{generated + i:04d}.pt"
-                )
-                torch.save((sample_tensor, label_tensor), save_path)
-
+            save_samples(samples, pop_idx, generated, output_dir)
             generated += current_batch
             total_generated += current_batch
 

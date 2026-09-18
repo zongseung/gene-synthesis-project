@@ -261,3 +261,15 @@ def test_samples_per_population_applies_floor_then_cap() -> None:
 def test_samples_per_population_rejects_a_nonpositive_cap() -> None:
     with pytest.raises(ValueError, match="max_per_pop"):
         generator.samples_per_population({0: 5}, oversample_minority=None, max_per_pop=0)
+
+
+def test_save_samples_writes_one_numbered_file_per_row(tmp_path: Path) -> None:
+    samples = torch.arange(12, dtype=torch.float32).reshape(2, 2, 3)  # (B, K, gene_size)
+
+    generator.save_samples(samples, pop_idx=7, start=5, output_dir=str(tmp_path))
+
+    names = sorted(p.name for p in tmp_path.iterdir())
+    assert names == ["sample_pop7_0005.pt", "sample_pop7_0006.pt"]
+    tensor, label = torch.load(tmp_path / "sample_pop7_0006.pt")
+    torch.testing.assert_close(tensor, samples[1])
+    assert int(label) == 7
