@@ -51,3 +51,62 @@ def test_fisher_sensitivity_includes_normalization_chain_rule():
     sensitivity = fit.fisher_diagonal(np.zeros((3, 2)), np.array([2., 3.]))
     # Then mean-per-SNP information includes the squared affine scales.
     np.testing.assert_allclose(sensitivity, [1., 2.25])
+
+
+def test_pipeline_routes_binom2_to_the_bounded_likelihood_and_decodes_with_its_link():
+    """The per-gene entry point and the genotype decoder must agree on the family."""
+    from src.inference.decode import decode_gene
+    from src.preprocessing.glm_pca import glm_pca_single_gene
+
+    rng = np.random.default_rng(5)
+    z = rng.normal(size=(60, 2))
+    v = rng.normal(size=(20, 2))
+    calls = rng.binomial(2, expit(-0.4 + z @ v.T)).astype(float)
+    train = np.arange(45)
+
+    result = glm_pca_single_gene("GENE", calls, 2, train, family="binom2")
+    assert result["family"] == "binom2" and result["link"] == "logit"
+    assert len(result["features"]) == result["actual_k"] == 2
+    assert all(f.shape == (60,) for f in result["features"].values())
+
+    # The logit mean stays inside the two-copy range without needing a clip,
+    # which is the whole point of the bounded likelihood.
+    dosage = decode_gene(result["features"] and np.stack(
+        [result["features"][f"GENE:{k}"] for k in range(2)], axis=1),
+        result["loadings"], result["intercept"], "binom2")
+    assert dosage.shape == (60, 20)
+    assert dosage.min() > 0.0 and dosage.max() < 2.0
+    # Recovered allele frequencies track the real ones.
+    assert np.corrcoef(dosage.mean(axis=0), calls.mean(axis=0))[0, 1] > 0.9
+
+    with pytest.raises(ValueError, match="Unknown GLM-PCA family"):
+        decode_gene(z, v, np.zeros(20), "nb")
+
+    # A two-variant gene falls to K=1 rather than being dropped, so the gene
+    # panel stays identical to the Poisson run.
+    narrow = glm_pca_single_gene("NARROW", calls[:, :2], 2, train, family="binom2")
+    assert narrow is not None and narrow["actual_k"] == 1
+
+
+def test_spectral_start_survives_a_driver_failure_instead_of_aborting():
+    """One unlucky gene must not take down a 24k-gene preprocessing run."""
+    import src.preprocessing.binomial_glm_pca as module
+
+    calls = np.zeros((6, 4))
+    calls[:, 0] = 1.0
+    failures = []
+
+    def always_fails(*args, **kwargs):
+        failures.append(kwargs.get("lapack_driver"))
+        raise np.linalg.LinAlgError("SVD did not converge")
+
+    original = module.scipy_svd
+    module.scipy_svd = always_fails
+    try:
+        z, v = module._spectral_start(calls, 2)
+    finally:
+        module.scipy_svd = original
+
+    assert failures == ["gesdd", "gesvd"]          # both drivers tried
+    assert z.shape == (6, 2) and v.shape == (4, 2)  # zero start, not an exception
+    assert not z.any() and not v.any()

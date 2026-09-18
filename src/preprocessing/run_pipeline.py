@@ -29,7 +29,9 @@ if _PROJECT_ROOT not in sys.path:
 import pandas as pd
 
 from src.preprocessing.config import (
+    CONDITIONAL_PRIOR,
     DIM_RED_METHOD,
+    GLM_FAMILY,
     PANEL_PATH,
     PCA_K,
     PREPROCESS_SEED,
@@ -108,7 +110,10 @@ def main() -> None:
     )
 
     optimal_k = PCA_K
-    logger.info(f"Dimensionality reduction backend: {DIM_RED_METHOD}, K={optimal_k}")
+    logger.info(
+        f"Dimensionality reduction backend: {DIM_RED_METHOD} "
+        f"(family {GLM_FAMILY}), K={optimal_k}"
+    )
 
     # Step 2 (Pass 2): Stream all 22 chr → PCA (train-only fit, full transform)
     logger.info(
@@ -168,7 +173,9 @@ def main() -> None:
 
     generate_zero_mask(x_train, gene_size, optimal_k)
     x_train_norm, x_val_norm, x_test_norm, stats = normalize_data(
-        x_train, x_val, x_test
+        x_train, x_val, x_test,
+        labels=(y_train, y_val, y_test),
+        conditional=CONDITIONAL_PRIOR,
     )
     del x_train, x_val, x_test
     gc.collect()
@@ -181,13 +188,14 @@ def main() -> None:
     metadata = {
         "version": 1,
         "dim_reduction_method": DIM_RED_METHOD,
-        "glm_family": "poi",
+        "glm_family": GLM_FAMILY,
         "glm_projection": "fixed_decoder_likelihood",
         "glm_decoder_path": "glm_pca_decoders.pkl",
         "normalization": {
             "fit_split": stats["fit_split"],
             "shape": list(stats["shape"]),
             "clip": stats["clip"],
+            "conditional_prior": stats["conditional"],
         },
         "tensor_layout": "N,G,K",
         "gene_order": gene_rows[["gene", "chrom", "start", "end"]].to_dict("records"),
@@ -200,6 +208,7 @@ def main() -> None:
     logger.info(f"\n{'=' * 60}")
     logger.info(f"Preprocessing complete: {elapsed:.0f}s ({elapsed / 60:.1f}min)")
     logger.info(f"  Genes: {n_genes}, PCA K: {optimal_k}, gene_size: {gene_size}")
+    logger.info(f"  Conditional prior: {stats['conditional']}")
     logger.info(f"  Train: {x_train_norm.shape}")
     logger.info(f"  Val:   {x_val_norm.shape}")
     logger.info(f"  Test:  {x_test_norm.shape}")

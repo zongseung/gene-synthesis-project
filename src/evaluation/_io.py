@@ -108,12 +108,13 @@ def load_real(
     with path.open("rb") as f:
         x, y = pickle.load(f)
     values = np.asarray(x, dtype=np.float32)
+    labels = np.asarray(y, dtype=np.int64)
     if sample_space == "normalized":
         if stats_path is None:
             raise FileNotFoundError("Normalization stats are required for normalized real data")
         stats = load_normalization_stats(stats_path, expected_shape=values.shape[-2:])
-        values = invert_normalization(values, stats)
-    return values, np.asarray(y, dtype=np.int64)
+        values = invert_normalization(values, stats, labels)
+    return values, labels
 
 
 def load_synthetic(
@@ -169,11 +170,12 @@ def load_synthetic(
         names.append(file_path.name)
 
     values = np.stack(xs, axis=0)
+    labels = np.asarray(ys, dtype=np.int64)
     if sample_space == "normalized":
         if stats is None:
             raise FileNotFoundError("Normalization stats are required for normalized synthetic data")
-        values = invert_normalization(values, stats)
-    return values, np.asarray(ys, dtype=np.int64), names
+        values = invert_normalization(values, stats, labels)
+    return values, labels, names
 
 
 def load_synthetic_cached(

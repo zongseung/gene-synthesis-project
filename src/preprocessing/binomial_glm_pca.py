@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 import numpy as np
 from numpy.typing import NDArray
+from scipy.linalg import svd as scipy_svd
 from scipy.optimize import minimize
 from scipy.special import expit, logit
 
@@ -47,6 +48,28 @@ def _score_calls(calls: FloatArray, loadings: FloatArray, intercept: FloatArray)
     return result.x.reshape(shape)
 
 
+def _spectral_start(centered: FloatArray, components: int) -> tuple[FloatArray, FloatArray]:
+    """Truncated-SVD starting point for the L-BFGS fit, with driver fallbacks.
+
+    LAPACK's default ``gesdd`` fails to converge on some real gene matrices and
+    took down a whole 24k-gene preprocessing run. This is only a starting point,
+    so it falls back to the slower but robust ``gesvd`` and finally to a zero
+    start rather than aborting: L-BFGS still converges from a poor start.
+    """
+    for attempt in ("gesdd", "gesvd"):
+        try:
+            u, s, vt = scipy_svd(centered, full_matrices=False, lapack_driver=attempt)
+        except (np.linalg.LinAlgError, ValueError):
+            continue
+        if np.isfinite(s).all():
+            root = np.sqrt(s[:components])
+            return u[:, :components] * root, vt[:components].T * root
+    return (
+        np.zeros((centered.shape[0], components)),
+        np.zeros((centered.shape[1], components)),
+    )
+
+
 def fit_binomial_glm_pca(
     calls: FloatArray, train_indices: NDArray[np.int64], components: int, *, max_iter: int = 150,
 ) -> BinomialGLMPCA:
@@ -72,9 +95,7 @@ def fit_binomial_glm_pca(
     y = np.nan_to_num(train)
     intercept = logit((y.sum(axis=0) + 0.5) / (2 * counts + 1))
     centered = np.where(observed, logit((y + 0.5) / 3) - intercept, 0)
-    u, s, vt = np.linalg.svd(centered, full_matrices=False)
-    z = u[:, :components] * np.sqrt(s[:components])
-    v = vt[:components].T * np.sqrt(s[:components])
+    z, v = _spectral_start(centered, components)
     split = n * components
     end = split + j * components
 

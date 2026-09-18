@@ -32,12 +32,24 @@ from src.preprocessing.vcf_parser import process_one_chromosome, resolve_vcf_pat
 
 
 def decode_gene(
-    factors: np.ndarray, loadings: np.ndarray, intercept: np.ndarray
+    factors: np.ndarray,
+    loadings: np.ndarray,
+    intercept: np.ndarray,
+    family: str = "poi",
 ) -> np.ndarray:
-    """Factors ``(N, K)`` → expected dosage ``(N, J)``, clipped to the {0,1,2} range."""
+    """Factors ``(N, K)`` → expected dosage ``(N, J)`` in the {0,1,2} range.
+
+    The mean follows the family the representation was fit under. Poisson uses
+    a log link and needs the clip, because ``exp`` runs past the two-copy
+    maximum; Binomial(2, p) uses a logit link and is bounded by construction.
+    """
     eta = np.asarray(intercept, dtype=np.float64) + np.asarray(
         factors, dtype=np.float64
     ) @ np.asarray(loadings, dtype=np.float64).T
+    if family == "binom2":
+        return 2.0 / (1.0 + np.exp(-np.clip(eta, -700.0, 700.0)))
+    if family != "poi":
+        raise ValueError(f"Unknown GLM-PCA family {family!r}")
     return np.clip(np.exp(eta), 0.0, 2.0)
 
 
@@ -62,7 +74,8 @@ def main() -> None:
     parser.add_argument(
         "--save-genotypes",
         action="store_true",
-        help="Also write sampled {0,1,2} calls for the chromosome (int8 npz).",
+        help="Also write the sampled synthetic {0,1,2} calls and the real dosage "
+             "for the chromosome (two int8 npz files, gene name per array).",
     )
     args = parser.parse_args()
 
@@ -97,6 +110,7 @@ def main() -> None:
     af_real_all: list[np.ndarray] = []
     af_syn_all: list[np.ndarray] = []
     calls: dict[str, np.ndarray] = {}
+    real_calls: dict[str, np.ndarray] = {}
     skipped = 0
 
     for gene_index, gene in gene_rows:
@@ -113,7 +127,9 @@ def main() -> None:
             continue
 
         factors = syn[:, gene_index, : loadings.shape[1]]
-        dosage = decode_gene(factors, loadings, decoder["intercept"])
+        dosage = decode_gene(
+            factors, loadings, decoder["intercept"], decoder.get("family", "poi")
+        )
         af_syn = dosage.mean(axis=0) / 2.0
         af_real = np.asarray(real, dtype=np.float64).mean(axis=0) / 2.0
 
@@ -122,6 +138,10 @@ def main() -> None:
         rows += [f"{name},{j},{r:.6f},{s:.6f}" for j, (r, s) in enumerate(zip(af_real, af_syn))]
         if args.save_genotypes:
             calls[name] = sample_genotypes(dosage, rng)
+            # The real side is re-parsed from the VCF here and nowhere else, so
+            # save it too: no genotype-level real-vs-synthetic comparison
+            # (AATS, privacy) is possible without it.
+            real_calls[name] = np.asarray(real, dtype=np.int8)
 
     af_real_cat = np.concatenate(af_real_all)
     af_syn_cat = np.concatenate(af_syn_all)
@@ -145,6 +165,7 @@ def main() -> None:
     )
     if calls:
         np.savez_compressed(out_dir / f"synthetic_calls_chr{args.chrom}.npz", **calls)
+        np.savez_compressed(out_dir / f"real_calls_chr{args.chrom}.npz", **real_calls)
 
     print(json.dumps(summary, indent=2))
 

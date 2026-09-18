@@ -39,7 +39,9 @@ wandb/
 
 # Rust
 vcf_parser_rs/target/
+binom_glmpca_rs/target/
 vcf_parser_rs/.venv/
+binom_glmpca_rs/.venv/
 glm_pca_rs/target/
 glm_pca_rs/.venv/
 

@@ -144,6 +144,27 @@ def _try_import_rust():
 _RUST_BACKEND = _try_import_rust()
 
 
+def _try_import_binomial_rust():
+    """Import the Rust Binomial(2, p) GLM-PCA extension if it is installed.
+
+    Built from ``binom_glmpca_rs/`` via ``uv pip install -e ./binom_glmpca_rs``.
+    Absent, the scipy reference in :mod:`src.preprocessing.binomial_glm_pca`
+    still runs, just slower.
+    """
+    try:
+        import binom_glmpca_rs
+        return binom_glmpca_rs
+    except ImportError:
+        logger.warning(
+            "binom_glmpca_rs not importable; falling back to the slower "
+            "scipy Binomial GLM-PCA reference"
+        )
+        return None
+
+
+_BINOM_BACKEND = _try_import_binomial_rust()
+
+
 def _project_held_out(
     X_full: np.ndarray,
     train_indices: np.ndarray,
@@ -183,6 +204,7 @@ def glm_pca_single_gene(
     n_components: int,
     train_indices: np.ndarray | None = None,
     max_iter: int = DEFAULT_MAX_ITER,
+    family: str | None = None,
 ) -> dict | None:
     """Fit a train-only Poisson GLM-PCA decoder and score every sample.
 
@@ -214,11 +236,28 @@ def glm_pca_single_gene(
     -------
     Requires :mod:`glmpca_fast`; unsupported families fail explicitly.
     """
+    from src.preprocessing.config import GLM_FAMILY
+
+    family = GLM_FAMILY if family is None else family
     n_vars = matrix.shape[1]
     n_fit = matrix.shape[0] if train_indices is None else int(len(train_indices))
     n_comp = min(n_components, n_vars, n_fit)
     if n_comp < 2:
         return None
+
+    if family == "binom2":
+        return _binomial_result(
+            gene_name=gene_name,
+            matrix=matrix,
+            train_indices=train_indices,
+            n_comp=min(n_comp, n_vars - 1, n_fit - 1),
+            n_vars=n_vars,
+            max_iter=max(150, max_iter),
+        )
+    if family != "poi":
+        raise UnsupportedProjectionFamilyError(
+            f"Unknown GLM-PCA family {family!r}; expected 'poi' or 'binom2'"
+        )
 
     fit_matrix = matrix if train_indices is None else matrix[train_indices]
 
@@ -253,7 +292,97 @@ def glm_pca_single_gene(
 
     raise RuntimeError("Poisson GLM-PCA requires the installed glmpca-fast backend")
 
-    # ── Python reference fallback ──────────────────────────────────────
+
+def _binomial_result(
+    *,
+    gene_name: str,
+    matrix: np.ndarray,
+    train_indices: np.ndarray | None,
+    n_comp: int,
+    n_vars: int,
+    max_iter: int,
+) -> dict | None:
+    """Fit Binomial(2, p) GLM-PCA, the correctly specified dosage likelihood.
+
+    Delegates to :func:`src.preprocessing.binomial_glm_pca.fit_binomial_glm_pca`,
+    which already fits on training rows only and scores held-out rows, so no
+    separate projection step is needed.
+    """
+    # The fitter needs components < min(rows, variants), so a two-variant gene
+    # drops to K=1. Keep it: dropping those 429 genes would change the panel
+    # between families and break the Poisson comparison.
+    if n_comp < 1:
+        return None
+    rows = (
+        np.arange(matrix.shape[0], dtype=np.int64)
+        if train_indices is None
+        else np.asarray(train_indices, dtype=np.int64)
+    )
+    # A Binomial count must be an integer draw out of two. Fractionally imputed
+    # entries are missingness, not observations, so they enter as NaN.
+    calls = np.asarray(matrix, dtype=np.float64)
+    integral = np.isclose(calls, np.round(calls))
+    calls = np.where(integral, np.round(calls), np.nan)
+    if not integral.all():
+        logger.debug(
+            f"{gene_name}: {(~integral).sum()} fractional entries treated as missing"
+        )
+    fit, backend, version = _fit_binomial(calls, rows, n_comp, max_iter)
+    return _build_result(
+        gene_name=gene_name,
+        matrix=matrix,
+        train_indices=train_indices,
+        loadings=np.asarray(fit["loadings"], dtype=np.float32),
+        intercept=np.asarray(fit["intercept"], dtype=np.float32),
+        family="binom2",
+        backend=backend,
+        backend_version=version,
+        projection="joint_penalized_likelihood",
+        max_iter=max_iter,
+        dev=np.asarray(
+            [fit["objective_initial"], fit["objective_final"]], dtype=np.float32
+        ),
+        n_comp=n_comp,
+        n_vars=n_vars,
+        factors=np.asarray(fit["factors"], dtype=np.float32),
+    )
+
+
+def _fit_binomial(
+    calls: np.ndarray, rows: np.ndarray, n_comp: int, max_iter: int
+) -> tuple[dict, str, str]:
+    """Fit Binomial(2, p) GLM-PCA, preferring the Rust alternating-IRLS backend.
+
+    Measured on a realistic rare-variant panel (2003 x 300, K=4, 37 monomorphic
+    columns): Rust 1.28 s against 4.84 s for the scipy L-BFGS reference, at a
+    lower penalized objective and identical allele-frequency recovery. The
+    Python path stays as the fallback and as the oracle the Rust is tested
+    against in tests/test_binom_glmpca_rs.py.
+    """
+    if _BINOM_BACKEND is not None:
+        return (
+            _BINOM_BACKEND.fit_binomial(
+                calls, np.asarray(rows, dtype=np.int64), n_comp, max_iter
+            ),
+            "binom_glmpca_rs",
+            str(getattr(_BINOM_BACKEND, "__version__", "unknown")),
+        )
+    from src.preprocessing.binomial_glm_pca import fit_binomial_glm_pca
+
+    fitted = fit_binomial_glm_pca(calls, rows, n_comp, max_iter=max_iter)
+    return (
+        {
+            "loadings": fitted.loadings,
+            "intercept": fitted.intercept,
+            "factors": fitted.factors,
+            "objective_initial": fitted.objective_initial,
+            "objective_final": fitted.objective_final,
+        },
+        "binomial_glm_pca",
+        "lbfgsb",
+    )
+
+
 def _build_result(
     *,
     gene_name: str,
@@ -269,14 +398,21 @@ def _build_result(
     dev: np.ndarray,
     n_comp: int,
     n_vars: int,
+    factors: np.ndarray | None = None,
 ) -> dict:
-    """Common post-processing shared by Rust + Python backends."""
+    """Common post-processing shared by every backend.
+
+    ``factors`` lets a fitter that already scored every row hand them over
+    instead of paying for a second projection.
+    """
     if dev.size >= 2 and dev[0] > 0:
         explained = float(max(0.0, 1.0 - dev[-1] / dev[0]))
     else:
         explained = 0.0
 
-    if train_indices is None:
+    if factors is not None:
+        transformed = factors
+    elif train_indices is None:
         transformed = project_glm_factors(
             matrix,
             loadings,

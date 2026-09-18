@@ -265,3 +265,38 @@ class TestPaperReproduction:
         x_real = np.arange(20, dtype=float)[:, None]
         x_syn = x_real + 0.1
         assert dupi_score(x_real, x_syn, k=1)["dupi"] == pytest.approx(1.0)
+
+
+# ── AATS (nearest-neighbour adversarial accuracy) ──────────────────────
+
+def test_aats_reads_0p5_for_indistinguishable_and_the_extremes_for_the_failure_modes():
+    """The AG literature's three regimes, on data built to sit in each."""
+    from src.evaluation.distribution_metrics import nn_adversarial_accuracy
+
+    rng = np.random.default_rng(7)
+    real = rng.normal(size=(400, 6))
+
+    same = nn_adversarial_accuracy(real, rng.normal(size=(400, 6)))
+    assert same["aats"] == pytest.approx(0.5, abs=0.05)
+
+    # Synthetic samples that are near-copies of real ones: the overfitting /
+    # leakage regime the literature reads below 0.5.
+    copies = real + rng.normal(scale=1e-3, size=real.shape)
+    memorised = nn_adversarial_accuracy(real, copies)
+    assert memorised["aats"] < 0.1
+
+    # Synthetic samples on a far-away cloud: the underfitting regime above 0.5.
+    far = nn_adversarial_accuracy(real, rng.normal(size=(400, 6)) + 50.0)
+    assert far["aats"] > 0.95
+
+
+def test_aats_rejects_mismatched_or_degenerate_inputs():
+    from src.evaluation.distribution_metrics import nn_adversarial_accuracy
+
+    rng = np.random.default_rng(1)
+    with pytest.raises(ValueError, match="Feature mismatch"):
+        nn_adversarial_accuracy(rng.normal(size=(5, 3)), rng.normal(size=(5, 4)))
+    with pytest.raises(ValueError, match="at least two samples"):
+        nn_adversarial_accuracy(rng.normal(size=(5, 3)), rng.normal(size=(1, 3)))
+    with pytest.raises(ValueError, match="2-D"):
+        nn_adversarial_accuracy(rng.normal(size=(5,)), rng.normal(size=(5,)))

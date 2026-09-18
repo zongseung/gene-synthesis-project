@@ -28,11 +28,22 @@ from src.preprocessing.vcf_parser import process_one_chromosome, resolve_vcf_pat
 logger = logging.getLogger(__name__)
 
 
-def _pool_init_no_blas_threads() -> None:
-    """Pool initializer: pin each worker to 1 BLAS thread (avoid oversubscription)."""
-    os.environ["OMP_NUM_THREADS"] = "1"
-    os.environ["MKL_NUM_THREADS"] = "1"
-    os.environ["OPENBLAS_NUM_THREADS"] = "1"
+BLAS_THREAD_VARS = ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS")
+
+
+def _pin_blas_threads() -> None:
+    """Hold every BLAS backend to one thread per process.
+
+    This must run in the PARENT before the pool is created. The workers use the
+    ``spawn`` context, so a child imports this module — and with it numpy and
+    OpenBLAS — before any pool initializer runs, and OpenBLAS reads its thread
+    count at load time. Pinning from an initializer is therefore too late: it
+    left 32 workers each opening 32 threads (observed load average 464 on a
+    32-core box). The Poisson path never showed this because its Rust backend
+    does not use BLAS; the Binomial path is numpy and scipy, so it does.
+    """
+    for variable in BLAS_THREAD_VARS:
+        os.environ.setdefault(variable, "1")
 
 
 def _reduce_one(
@@ -93,7 +104,8 @@ def stream_vcf_and_pca(
     # every child on a futex forever (verified locally) because fork() only
     # copies the calling thread, leaving other threads' held locks stuck.
     ctx = mp.get_context("spawn")
-    with ctx.Pool(os.cpu_count(), initializer=_pool_init_no_blas_threads) as pool:
+    _pin_blas_threads()
+    with ctx.Pool(os.cpu_count(), initializer=_pin_blas_threads) as pool:
         for i, chrom_num in enumerate(chroms):
             chrom_genes = gene_coords.get(str(chrom_num), [])
             if not chrom_genes:

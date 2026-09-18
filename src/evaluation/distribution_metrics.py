@@ -10,6 +10,8 @@ Pure-numpy implementations of:
                                       percentile real-NN radius contains at
                                       least one synthetic sample.
     * ``centroid_distance``        — Euclidean distance between mean vectors.
+    * ``nn_adversarial_accuracy``  — AATS, the artificial-genome literature's
+                                      standard resemblance/privacy statistic.
 
 All functions are pure (no I/O, no global state); the module depends only
 on ``numpy`` and ``scikit-learn``.
@@ -25,6 +27,7 @@ __all__ = [
     "centroid_distance",
     "gaussian_w2_distance",
     "mmd_rbf",
+    "nn_adversarial_accuracy",
     "same_class_coverage",
 ]
 
@@ -123,3 +126,67 @@ def _symmetric_sqrt(mat: np.ndarray) -> np.ndarray:
 def _rbf_kernel(a: np.ndarray, b: np.ndarray, gamma: float) -> np.ndarray:
     sq = pairwise_distances(a, b, metric="sqeuclidean")
     return np.exp(-gamma * sq)
+
+
+def nn_adversarial_accuracy(x_real: np.ndarray, x_syn: np.ndarray) -> dict:
+    """Nearest-neighbour adversarial accuracy (AATS) and its two components.
+
+    This is the statistic the artificial-genome literature reports (Yale et al.
+    2020; applied to 1000 Genomes artificial genomes by Yelmen et al. 2021 and
+    2023), so it is what makes our runs comparable to published models. With
+
+        d_TT(i) = real i to its nearest *other* real sample
+        d_TS(i) = real i to its nearest synthetic sample
+        d_SS(j) = synthetic j to its nearest *other* synthetic sample
+        d_ST(j) = synthetic j to its nearest real sample
+
+    ``AA_truth = mean(d_TS > d_TT)``, ``AA_syn = mean(d_ST > d_SS)`` and AATS is
+    their average. 0.5 means the two sets are indistinguishable, above 0.5 means
+    the synthetic samples sit too far (underfitting), below 0.5 means they sit
+    too close (overfitting, and the regime the literature reads as privacy
+    leakage).
+
+    ``AA_syn`` depends on how dense the synthetic set is, so compare sets of
+    equal size or the number is not on the published scale.
+
+    Parameters
+    ----------
+    x_real, x_syn : np.ndarray, shape (n, d) and (m, d)
+        Samples in a common metric space. Needs at least 2 of each.
+
+    Returns
+    -------
+    dict
+        ``aats``, ``aa_truth``, ``aa_syn``, ``n_real``, ``n_synthetic`` and the
+        four mean distances.
+    """
+    if x_real.ndim != 2 or x_syn.ndim != 2:
+        raise ValueError(f"Expected 2-D arrays, got {x_real.shape} and {x_syn.shape}")
+    if x_real.shape[1] != x_syn.shape[1]:
+        raise ValueError(f"Feature mismatch: {x_real.shape[1]} vs {x_syn.shape[1]}")
+    if len(x_real) < 2 or len(x_syn) < 2:
+        raise ValueError("AATS needs at least two samples on each side")
+
+    def _within(x: np.ndarray) -> np.ndarray:
+        distances, _ = NearestNeighbors(n_neighbors=2).fit(x).kneighbors(x)
+        return distances[:, 1]  # column 0 is the sample itself
+
+    def _across(query: np.ndarray, reference: np.ndarray) -> np.ndarray:
+        distances, _ = NearestNeighbors(n_neighbors=1).fit(reference).kneighbors(query)
+        return distances[:, 0]
+
+    d_tt, d_ss = _within(x_real), _within(x_syn)
+    d_ts, d_st = _across(x_real, x_syn), _across(x_syn, x_real)
+    aa_truth = float(np.mean(d_ts > d_tt))
+    aa_syn = float(np.mean(d_st > d_ss))
+    return {
+        "aats": 0.5 * (aa_truth + aa_syn),
+        "aa_truth": aa_truth,
+        "aa_syn": aa_syn,
+        "n_real": int(len(x_real)),
+        "n_synthetic": int(len(x_syn)),
+        "mean_d_truth_truth": float(np.mean(d_tt)),
+        "mean_d_truth_syn": float(np.mean(d_ts)),
+        "mean_d_syn_syn": float(np.mean(d_ss)),
+        "mean_d_syn_truth": float(np.mean(d_st)),
+    }

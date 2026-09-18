@@ -7,7 +7,8 @@ DUPI (Jeong, Kim, and Im 2023, IEEE TIFS):
 
 Distribution-distance metrics:
     :func:`centroid_distance`, :func:`gaussian_w2_distance`,
-    :func:`mmd_rbf`, :func:`same_class_coverage`
+    :func:`mmd_rbf`, :func:`same_class_coverage`,
+    :func:`nn_adversarial_accuracy` (AATS, the AG literature's standard)
 
 High-level pipeline:
     :class:`EvaluationReport`, :func:`evaluate`,
@@ -18,6 +19,7 @@ from src.evaluation.distribution_metrics import (
     centroid_distance,
     gaussian_w2_distance,
     mmd_rbf,
+    nn_adversarial_accuracy,
     same_class_coverage,
 )
 from src.evaluation.dupi import (
@@ -41,6 +43,7 @@ __all__ = [
     "centroid_distance",
     "gaussian_w2_distance",
     "mmd_rbf",
+    "nn_adversarial_accuracy",
     "same_class_coverage",
     # pipeline
     "EvaluationReport",

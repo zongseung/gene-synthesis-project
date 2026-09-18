@@ -39,6 +39,11 @@ import matplotlib.pyplot as plt  # noqa: E402
 _PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, _PROJECT_ROOT)
 
+from src.preprocessing.tokenizer import (  # noqa: E402
+    invert_normalization,
+    load_normalization_stats,
+)
+
 
 # ── Constants ────────────────────────────────────────────────────────────
 SUPERPOP_COLORS = {
@@ -60,23 +65,17 @@ def load_real(
 
     Real data layout in the pickle is ``(N, gene_size, K)`` — stored normalized.
     Returns (x, y) with x shape ``(N, gene_size, K)`` in the original scale.
+    Under a population-conditional prior the statistics are per-population, so
+    the labels pick each row's moments; ``invert_normalization`` owns that.
     """
-    with open(stats_path, "rb") as f:
-        stats = pickle.load(f)
-    mean = stats["mean"].astype(np.float32)  # (gene_size, K)
-    std = stats["std"].astype(np.float32)
-
+    stats = load_normalization_stats(stats_path)
     xs, ys = [], []
-    for p in paths:
-        with open(p, "rb") as f:
+    for path in paths:
+        with open(path, "rb") as f:
             x, y = pickle.load(f)
-        x = np.asarray(x, dtype=np.float32)
-        if x.shape[1:] != mean.shape:
-            raise ValueError(
-                f"Shape mismatch in {p}: got {x.shape[1:]}, expected {mean.shape}"
-            )
-        xs.append(x * std + mean)
-        ys.append(np.asarray(y, dtype=np.int64))
+        labels = np.asarray(y, dtype=np.int64)
+        xs.append(invert_normalization(np.asarray(x, dtype=np.float32), stats, labels))
+        ys.append(labels)
     return np.concatenate(xs, axis=0), np.concatenate(ys, axis=0)
 
 
@@ -274,6 +273,13 @@ def main() -> None:
     )
     parser.add_argument("--config", default="configs/default.yaml")
     parser.add_argument(
+        "--processed-dir",
+        default="data/processed",
+        help="Processed data directory holding the real splits, normalization stats, "
+             "zero mask and label hierarchy. Point it at a conditional-prior "
+             "directory (e.g. data/processed_cond_mean) to plot that arm.",
+    )
+    parser.add_argument(
         "--real-splits",
         nargs="+",
         default=["test"],
@@ -300,16 +306,17 @@ def main() -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     # -- Load inputs --
-    with open("data/processed/label_hierarchy.pkl", "rb") as f:
+    processed = Path(args.processed_dir)
+    with open(processed / "label_hierarchy.pkl", "rb") as f:
         lh = pickle.load(f)
 
     zero_mask = torch.load(
-        "data/processed/zero_mask.pt", map_location="cpu", weights_only=True
+        processed / "zero_mask.pt", map_location="cpu", weights_only=True
     ).numpy()
 
-    real_paths = [f"data/processed/{s}_data.pkl" for s in args.real_splits]
+    real_paths = [str(processed / f"{s}_data.pkl") for s in args.real_splits]
     real_x, real_y = load_real(
-        real_paths, "data/processed/normalization_stats.pkl"
+        real_paths, str(processed / "normalization_stats.pkl")
     )
     syn_x, syn_y = load_synthetic(str(syn_dir))
 

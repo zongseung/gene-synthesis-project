@@ -41,7 +41,7 @@ if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
 from src.models import GaussianDiffusion, HybridCNNDiTFiLM
-from src.preprocessing.tokenizer import load_normalization_stats
+from src.preprocessing.tokenizer import invert_normalization, load_normalization_stats
 from src.utils.config import load_config
 
 logging.basicConfig(
@@ -58,12 +58,16 @@ logger = logging.getLogger(__name__)
 def denormalize_samples(
     samples: torch.Tensor,
     stats_path: str,
+    labels: np.ndarray | None = None,
 ) -> torch.Tensor:
     """Restore generated samples to original scale.
 
     Args:
         samples: (B, K, gene_size) float32 model output (normalized).
         stats_path: Path to normalization_stats.pkl.
+        labels: (B,) population labels, required when the statistics carry a
+            per-population conditional prior. This is the de-normalization step
+            that adds each population's mean back (PriorGrad / ShiftDDPMs).
 
     Returns:
         (B, K, gene_size) float32 denormalized tensor.
@@ -72,25 +76,24 @@ def denormalize_samples(
     """
     expected_shape = (samples.shape[2], samples.shape[1])
     stats = load_normalization_stats(stats_path, expected_shape=expected_shape)
-    mean_np = stats["mean"]
-    std_np = stats["std"]
-
-    # (gene_size, K) -> (K, gene_size) -> (1, K, gene_size)
-    xmean = torch.tensor(mean_np.T, dtype=torch.float32).unsqueeze(0)
-    xstd = torch.tensor(std_np.T, dtype=torch.float32).unsqueeze(0)
-
-    return samples * xstd + xmean
+    # invert_normalization already owns the moment selection for every
+    # conditional arm, so this path keeps no second copy of that logic.
+    restored = invert_normalization(
+        samples.detach().float().cpu().permute(0, 2, 1).numpy(), stats, labels
+    )
+    return torch.from_numpy(restored).permute(0, 2, 1).contiguous()
 
 
 def postprocess_samples(
     samples: torch.Tensor,
     zero_mask: torch.Tensor | None,
     stats_path: str | Path | None,
+    labels: np.ndarray | None = None,
 ) -> torch.Tensor:
     if zero_mask is not None:
         samples = samples * (~zero_mask.cpu()).unsqueeze(0).to(samples.dtype)
     if stats_path is not None:
-        samples = denormalize_samples(samples, str(stats_path))
+        samples = denormalize_samples(samples, str(stats_path), labels)
     return samples
 
 
@@ -368,7 +371,9 @@ def generate_samples(
             samples = samples.float().cpu()
 
             final_mask = zero_mask if data_cfg.get("enforce_zeros", True) else None
-            samples = postprocess_samples(samples, final_mask, stats_path)
+            samples = postprocess_samples(
+                samples, final_mask, stats_path, np.full(current_batch, pop_idx)
+            )
 
             # Save individual samples
             for i in range(current_batch):
@@ -391,6 +396,11 @@ def generate_samples(
     meta = {
         "sample_space": "original",
         "stats_path": str(stats_path) if stats_path is not None else None,
+        "conditional_prior": (
+            load_normalization_stats(stats_path)["conditional"]
+            if stats_path is not None
+            else None
+        ),
         "stats_fingerprint": stats_fingerprint,
         "model_path": str(model_path),
         "model_epoch": checkpoint.get("epoch", None),

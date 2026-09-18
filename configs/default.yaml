@@ -41,7 +41,11 @@ diffusion:
   guidance_weight: 0.0
   cfg_dropout_rate: 0.1
   sampling_timesteps: 100
-  ddim_eta: 0.5
+  # 0.0 measured better on the 2026-09-17 conditional-prior run: within-population
+  # diversity 0.58 -> 0.67x real at no cost to DUPI or allele frequency. The 0.5 it
+  # replaces came from outputs/eta_sweep (2026-03-31), an 8-channel model whose AF
+  # correlation was -0.04, so that sweep does not carry over to this pipeline.
+  ddim_eta: 0.0
 
 # ── 학습 ──
 training:
