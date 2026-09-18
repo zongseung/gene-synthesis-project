@@ -470,7 +470,6 @@ flowchart LR
 |---|---|---|
 | `max_timesteps` | 1,000 | `diffusion.max_timesteps` |
 | `noise_schedule` | linear | `diffusion.noise_schedule` |
-| `prediction_target` | ε (epsilon) | `diffusion.prediction_target` |
 | `sample_clip` | 6.0 (normalized model space) | `diffusion.sample_clip` |
 | `sampling_timesteps` | 100 (DDIM) | `diffusion.sampling_timesteps` |
 | `ddim_eta` | 0.5 | `diffusion.ddim_eta` |
@@ -988,7 +987,6 @@ flowchart TD
 
 | 조건 | 위치 | 이유 |
 |---|---|---|
-| `HIPODIT_DIM_RED` 가 `glm_pca` 가 아님 | `run_pipeline.main` | 학습·추론 계약이 GLM-PCA decoder 를 전제 |
 | 입력 파일(VCF, .tbi, panel, refGene) 없음 | `validate_input_files` | |
 | 파서가 한 염색체에서 유전자 0개 반환 | `pca.stream_vcf_and_pca` | chr2–22 가 비어 chr1 만 든 "완성" 데이터가 나온 적이 있음 |
 | 염색체 간 샘플 순서 불일치 | `pca.stream_vcf_and_pca` | 행이 섞이면 모든 feature 가 틀어짐 |
@@ -1052,8 +1050,6 @@ print(f'Parameters: {sum(p.numel() for p in model.parameters()):,}')
 "
 
 # Phase 3: 학습 (DDP 2-GPU)
-#   training.precision: bf16(기본) | fp32 — 학습·검증 autocast 둘 다 이 값을 따른다
-#   training.optimizer: adamw 만 지원 (다른 값이면 ValueError)
 torchrun --nproc_per_node=2 src/training/trainer.py --config configs/default.yaml
 
 # Phase 3 (single GPU debug)
@@ -1104,11 +1100,11 @@ pytest tests/
 
 ### 전처리 차원축소 — Poisson GLM-PCA
 
-`run_pipeline.py` 는 **GLM-PCA (Townes et al. 2019, Poisson family) 만** 받는다. `src/preprocessing/dim_reduction.py` 에 sklearn `pca` 분기가 남아 있지만, `HIPODIT_DIM_RED=pca` 로 실행하면 `ValueError("The production preprocessing pipeline requires glm_pca")` 로 멈춘다.
+`run_pipeline.py` 는 **GLM-PCA (Townes et al. 2019, Poisson family) 만** 받는다. 백엔드는 상수이며 런타임 전환 경로가 없다.
 
 | 설정 | 값 | 위치 |
 |---|---|---|
-| backend | `glm_pca` (고정) | `config.DIM_RED_METHOD`, env `HIPODIT_DIM_RED` |
+| backend | `glm_pca` (상수) | `config.DIM_RED_METHOD` |
 | family | Poisson (`poi`) 고정, 다른 family 설정 없음 | `glm_pca.DEFAULT_GLM_FAMILY` |
 | 성분 수 K | 4 | `config.PCA_K` |
 | 최대 반복 | 100 | `config.GLM_PCA_MAX_ITER`, env `HIPODIT_GLM_MAX_ITER` |
@@ -1133,7 +1129,6 @@ gene-synthesis-project/
 │   │   ├── vcf_parser.py           # VCF 파싱 디스패치: Rust(vcf_parser_rs) 우선, 없으면 cyvcf2
 │   │   ├── gene_annotation.py      # RefGene → 겹치는 transcript만 병합한 유전자 좌위
 │   │   ├── pca.py                  # 염색체 순차 스트리밍 + 유전자별 차원축소 Pool
-│   │   ├── dim_reduction.py        # 유전자 1개 차원축소 디스패치 (glm_pca | pca)
 │   │   ├── glm_pca.py              # Poisson GLM-PCA (glmpca-fast), train fit → 전체 projection
 │   │   ├── binomial_glm_pca.py     # 이항 GLM-PCA (chr17 고정 패널 실험 전용)
 │   │   ├── tokenizer.py            # 토큰화, alignment 패딩, zero_mask, 정규화
@@ -1153,7 +1148,7 @@ gene-synthesis-project/
 │   │       └── dit.py              # PatchEmbed1D, DiTBlock, DiTCore
 │   │
 │   ├── training/
-│   │   └── trainer.py              # DDP 학습 루프 (precision bf16|fp32, AdamW, cosine warmup LambdaLR)
+│   │   └── trainer.py              # DDP 학습 루프 (bf16 autocast, AdamW, cosine warmup LambdaLR)
 │   │
 │   ├── inference/
 │   │   ├── generator.py            # EMA 로드, DDIM 생성, 역정규화 (stats 패딩 처리)
@@ -1165,7 +1160,7 @@ gene-synthesis-project/
 │   │   ├── dupi.py                 # DUPI · UI · PI (Eqs. 8/10-13, citable core)
 │   │   ├── distribution_metrics.py # Gaussian W2, MMD-RBF, coverage, centroid
 │   │   ├── synthetic_pipeline.py   # evaluate() + EvaluationReport dataclass
-│   │   └── _io.py                  # 프로젝트-특화 IO + 캐싱 (project-coupled)
+│   │   └── _io.py                  # 프로젝트-특화 IO (real/synthetic 로더, CSV)
 │   │
 │   ├── data/
 │   │   ├── dataset.py              # GenotypeDataset (pkl → tensor)
@@ -1173,11 +1168,10 @@ gene-synthesis-project/
 │   │   └── dataloader.py           # DataLoader 팩토리 (텐서 shape ≠ config 이면 ValueError)
 │   │
 │   └── utils/
-│       ├── config.py               # YAML 로드, CLI override, 검증
+│       ├── config.py               # YAML 로드
 │       ├── ddp.py                  # DDP setup/cleanup
-│       ├── ema.py                  # EMA (decay 0.999, configs/default.yaml)
-│       └── logger.py               # wandb 래퍼 (rank 0 only, project=HiPoDiT)
-│                                   # (.pth 저장/top-k 관리는 src/training/trainer.py 안에 있다)
+│       └── ema.py                  # EMA (decay 0.999, configs/default.yaml)
+│                                   # (.pth 저장과 wandb 호출은 src/training/trainer.py 안에 있다)
 │
 ├── vcf_parser_rs/                     # Rust(PyO3) VCF 파서 — README 는 vcf_parser_rs/README.md
 │   ├── Cargo.toml · pyproject.toml    # maturin 빌드
@@ -1195,7 +1189,7 @@ gene-synthesis-project/
 │   ├── export_chr17_csv.py           # chr17 TSV 익스포트 유틸
 │   └── hipodit_*.py                  # chr17 고정 패널 실험 (prepare / check / multiseed / privacy)
 │
-├── tests/                            # pytest tests/ → 228 tests
+├── tests/                            # pytest tests/ → 260 tests
 │   ├── test_dupi.py                  # DUPI invariants + 논문 수치 재현
 │   ├── test_gene_annotation.py       # RefGene 좌위 분리
 │   ├── test_glm_pca_preprocessing.py # GLM-PCA 전처리 계약

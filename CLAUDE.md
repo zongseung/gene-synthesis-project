@@ -82,7 +82,7 @@ src/
 ├── training/             # DDP trainer, EMA (loss lives in GaussianDiffusion.p_losses)
 ├── inference/            # DDIM sampler, CFG, population-conditional generation
 ├── evaluation/           # DUPI/UI/PI, distribution distances (W2, MMD-RBF), PCA(2) compare
-└── utils/                # DDP setup, config loading, EMA, wandb ExperimentLogger
+└── utils/                # DDP setup, config loading, EMA (wandb는 trainer 안에서 직접 호출)
 ```
 
 **Data flow**: `(B, C, gene_size)` → CNN encoder [FiLM] → Patchify → DiT [AdaLN-Zero] → Un-patchify → CNN decoder [FiLM] + skips → `(B, C, gene_size)`. 현재 기본 설정은 `C=4`, `gene_size=24576`.
@@ -199,7 +199,7 @@ Preprocessing produces: `gene_pca_features.pkl`, `train_data.pkl`, `test_data.pk
 
 - **Hierarchical labels**: 26 populations map to 5 superpopulations (AFR/EUR/EAS/SAS/AMR). The `pop_to_superpop` mapping in `label_hierarchy.pkl` is loaded by `HierarchicalPopulationEmbedding` to enable information sharing from superpop (e.g., AFR 661 samples) to minority pop (e.g., ASW 61 samples).
 - **AdaLN-Zero in DiT = FiLM**: DiT blocks use `γ·LayerNorm(x) + β` with α (gate) initialized to zero. This means DiT starts as identity function and gradually learns long-range corrections on top of CNN features.
-- **차원 축소**: 기본값은 `glm_pca` (`src/preprocessing/config.py`의 `DIM_RED_METHOD`, `HIPODIT_DIM_RED` 환경변수로 변경). `configs/default.yaml`은 `num_channels: 4`, `gene_size: 24576`을 쓴다. 성분 수 그리드 서치는 linear PCA 경로의 동작이며 glm_pca 기본 경로에는 적용되지 않는다. 모델 입력은 `(num_channels, gene_size)`.
+- **차원 축소**: `glm_pca` 상수 (`src/preprocessing/config.py`의 `DIM_RED_METHOD`). `configs/default.yaml`은 `num_channels: 4`, `gene_size: 24576`을 쓴다. 모델 입력은 `(num_channels, gene_size)`.
 - **관측 모형(family)**: `HIPODIT_GLM_FAMILY`로 고른다. 기본값은 여전히 `poi`(Poisson, 러스트 `glmpca_fast`)이지만 **`binom2`가 맞는 우도다.** 유전형은 시행 2회의 성공 횟수이고, Poisson은 dosage 2를 넘는 값에 질량을 주며 `Var = 평균`을 가정한다. 1KG chr22 실측으로 예측 평균이 2를 넘어 clip되는 비율이 3.34%, 분산이 2배 이상 틀리는 비율이 15.6%다. `binom2`로 바꾸면 chr22 대립유전자 빈도 오차가 0.0217 → 0.0156으로 줄었다(2026-09-18, 4시드). 백엔드는 러스트 `binom_glmpca_rs`를 우선 쓰고 없으면 `src/preprocessing/binomial_glm_pca.py`의 scipy 구현으로 떨어진다.
 - **EMA** (Exponential Moving Average) with decay 0.999 (`configs/default.yaml: training.ema_decay`) is applied during training; EMA weights are used for inference. The 0.9999 seen in `src/utils/ema.py` is the `EMAModel` class's own default, used only when a config omits `ema_decay` — the shipped config does not.
 - **Population-balanced sampling**: sqrt-proportional oversampling for minority populations.
