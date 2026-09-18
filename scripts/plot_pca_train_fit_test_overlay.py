@@ -19,12 +19,10 @@ from sklearn.decomposition import PCA
 
 import sys
 sys.path.insert(0, str(Path(__file__).parent))
-from plot_pca import (  # type: ignore
-    apply_nonzero_mask,
-    load_real,
-    load_synthetic,
-    pop_idx_to_superpop_name,
-)
+from plot_pca import apply_nonzero_mask, pop_idx_to_superpop_name  # type: ignore
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from src.evaluation._io import load_real, load_synthetic  # noqa: E402
 
 
 SUPERPOP_COLORS = {
@@ -67,9 +65,10 @@ def main():
         "data/processed/zero_mask.pt", map_location="cpu", weights_only=True
     ).numpy()
 
-    train_x, train_y = load_real(["data/processed/train_data.pkl"], "data/processed/normalization_stats.pkl")
-    test_x, test_y = load_real(["data/processed/test_data.pkl"], "data/processed/normalization_stats.pkl")
-    syn_x, syn_y = load_synthetic(args.syn_dir)
+    stats_path = Path("data/processed/normalization_stats.pkl")
+    train_x, train_y = load_real(Path("data/processed/train_data.pkl"), stats_path=stats_path)
+    test_x, test_y = load_real(Path("data/processed/test_data.pkl"), stats_path=stats_path)
+    syn_x, syn_y, _ = load_synthetic(Path(args.syn_dir), stats_path=stats_path)
 
     train_flat = apply_nonzero_mask(train_x, zero_mask)
     test_flat = apply_nonzero_mask(test_x, zero_mask)

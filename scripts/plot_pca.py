@@ -39,10 +39,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 _PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, _PROJECT_ROOT)
 
-from src.preprocessing.tokenizer import (  # noqa: E402
-    invert_normalization,
-    load_normalization_stats,
-)
+from src.evaluation._io import load_real, load_synthetic  # noqa: E402
 
 
 # ── Constants ────────────────────────────────────────────────────────────
@@ -57,49 +54,6 @@ SUPERPOP_ORDER = ["AFR", "EUR", "EAS", "SAS", "AMR"]
 
 
 # ── Data loading ─────────────────────────────────────────────────────────
-def load_real(
-    paths: list[str],
-    stats_path: str,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Load real pkl datasets, concatenate, and denormalize.
-
-    Real data layout in the pickle is ``(N, gene_size, K)`` — stored normalized.
-    Returns (x, y) with x shape ``(N, gene_size, K)`` in the original scale.
-    Under a population-conditional prior the statistics are per-population, so
-    the labels pick each row's moments; ``invert_normalization`` owns that.
-    """
-    stats = load_normalization_stats(stats_path)
-    xs, ys = [], []
-    for path in paths:
-        with open(path, "rb") as f:
-            x, y = pickle.load(f)
-        labels = np.asarray(y, dtype=np.int64)
-        xs.append(invert_normalization(np.asarray(x, dtype=np.float32), stats, labels))
-        ys.append(labels)
-    return np.concatenate(xs, axis=0), np.concatenate(ys, axis=0)
-
-
-def load_synthetic(syn_dir: str) -> tuple[np.ndarray, np.ndarray]:
-    """Load synthetic .pt files produced by ``src/inference/generator.py``.
-
-    Each file holds ``(genome, label)`` where ``genome`` has shape
-    ``(K, gene_size)`` and is already denormalized. We transpose to
-    ``(gene_size, K)`` so the layout matches the real tensor.
-    """
-    pt_files = sorted(Path(syn_dir).glob("sample_pop*.pt"))
-    if not pt_files:
-        raise FileNotFoundError(f"No sample_pop*.pt under {syn_dir}")
-    samples, labels = [], []
-    for f in pt_files:
-        genome, label = torch.load(f, map_location="cpu", weights_only=True)
-        arr = genome.numpy().astype(np.float32)
-        if arr.ndim == 2 and arr.shape[0] < arr.shape[1]:
-            arr = arr.T  # (K, gene) -> (gene, K)
-        samples.append(arr)
-        labels.append(int(label.item() if label.ndim == 0 else label.numpy().item()))
-    return np.stack(samples), np.asarray(labels, dtype=np.int64)
-
-
 def apply_nonzero_mask(x: np.ndarray, zero_mask: np.ndarray) -> np.ndarray:
     """Flatten (N, gene_size, K) → (N, F_nonzero) using the non-zero mask."""
     flat = x.reshape(x.shape[0], -1)  # (N, gene_size * K)
@@ -314,11 +268,14 @@ def main() -> None:
         processed / "zero_mask.pt", map_location="cpu", weights_only=True
     ).numpy()
 
-    real_paths = [str(processed / f"{s}_data.pkl") for s in args.real_splits]
-    real_x, real_y = load_real(
-        real_paths, str(processed / "normalization_stats.pkl")
-    )
-    syn_x, syn_y = load_synthetic(str(syn_dir))
+    stats_path = processed / "normalization_stats.pkl"
+    loaded = [
+        load_real(processed / f"{split}_data.pkl", stats_path=stats_path)
+        for split in args.real_splits
+    ]
+    real_x = np.concatenate([x for x, _ in loaded], axis=0)
+    real_y = np.concatenate([y for _, y in loaded], axis=0)
+    syn_x, syn_y, _ = load_synthetic(syn_dir, stats_path=stats_path)
 
     print(f"Real: {real_x.shape}, Synthetic: {syn_x.shape}")
     print(f"Zero mask: {zero_mask.sum()}/{zero_mask.size} positions masked out")
