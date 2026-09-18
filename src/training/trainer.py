@@ -12,7 +12,7 @@ Supports:
 - Cosine warmup scheduler
 - Min-SNR-gamma loss weighting
 - No early stopping: runs all epochs, saves best by val_reconstruction_error
-- wandb logging on rank 0 only
+- wandb logging on rank 0 only (called directly, no wrapper)
 
 Usage:
     # DDP (2 GPU)
@@ -36,6 +36,7 @@ import numpy as np
 import torch
 import torch.distributed as dist
 import torch.nn as nn
+import wandb
 from torch.utils.data import DataLoader
 
 # Allow direct execution: torchrun src/training/trainer.py
@@ -50,7 +51,7 @@ from src.models import GaussianDiffusion, HybridCNNDiTFiLM
 from src.utils.config import parse_args_with_config
 from src.utils.ddp import cleanup_ddp, get_rank, get_world_size, is_main_process, setup_ddp
 from src.utils.ema import EMAModel
-from src.utils.logger import ExperimentLogger
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -369,13 +370,15 @@ def train(config: dict) -> None:
 
     # ── wandb (rank 0 only) ──
     exp_cfg = config.get("experiment", {})
-    wb_logger = ExperimentLogger(
-        project="HiPoDiT",
-        run_name=exp_cfg.get("run_name", None),
-        tags=exp_cfg.get("tags", None),
-        enabled=is_main_process(),
-    )
-    wb_logger.log_config(config)
+    log_to_wandb = is_main_process()
+    if log_to_wandb:
+        wandb.init(
+            project="HiPoDiT",
+            name=exp_cfg.get("run_name", None),
+            tags=exp_cfg.get("tags", None),
+            reinit=True,
+        )
+        wandb.config.update(config, allow_val_change=True)
 
     # ── Save dir ──
     save_dir = config.get("save_dir", "outputs/default")
@@ -457,7 +460,7 @@ def train(config: dict) -> None:
                     "train/lr": scheduler.get_last_lr()[0],
                     "train/epoch": epoch,
                 }
-                wb_logger.log_metrics(global_step, metrics)
+                wandb.log(metrics, step=global_step)
 
         # ── Validation (every epoch, using EMA weights) ──
         ema.apply_shadow(base_model)
@@ -469,13 +472,13 @@ def train(config: dict) -> None:
 
         if is_main_process():
             avg_loss = epoch_loss / max(epoch_steps, 1)
-            wb_logger.log_metrics(
-                global_step,
+            wandb.log(
                 {
                     "val/reconstruction_error": val_rec_error,
                     "val/epoch": epoch,
                     "train/avg_epoch_loss": avg_loss,
                 },
+                step=global_step,
             )
             logger.info(
                 f"[Epoch {epoch}/{training_cfg['epochs']}] "
@@ -512,7 +515,8 @@ def train(config: dict) -> None:
         )
         logger.info(f"Training complete. Best val_rec={best_val_loss:.6f}")
 
-    wb_logger.finish()
+    if log_to_wandb:
+        wandb.finish()
 
     if not single_gpu:
         cleanup_ddp()
