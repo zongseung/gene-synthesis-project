@@ -174,8 +174,6 @@ def stream_vcf_and_pca(
                         "actual_k": result["actual_k"],
                         "explained_total": result["explained_total"],
                     }
-                    for j, v in enumerate(result["explained_per_component"]):
-                        stat_row[f"explained_pc{j + 1}"] = v
                     all_pca_stats.append(stat_row)
 
             del gene_matrices, tasks  # tasks also references every matrix

@@ -29,10 +29,6 @@ DEFAULT_GLM_FAMILY = "poi"
 DEFAULT_MAX_ITER = 100
 
 
-class UnsupportedProjectionFamilyError(ValueError):
-    pass
-
-
 def project_glm_factors(
     observations: np.ndarray,
     loadings: np.ndarray,
@@ -45,7 +41,7 @@ def project_glm_factors(
 ) -> np.ndarray:
     """Fit held-out factors with fixed ``exp(intercept + factors @ loadings.T)``."""
     if family != "poi":
-        raise UnsupportedProjectionFamilyError(
+        raise ValueError(
             f"Likelihood projection is implemented for 'poi', got {family!r}"
         )
 
@@ -125,44 +121,23 @@ def project_glm_factors(
     return factors.astype(np.float32)
 
 
-def _try_import_rust():
-    """Import the accelerated GLM-PCA extension if available.
+# Poisson backend, published on PyPI as ``glmpca-fast`` and installed by ``uv sync``.
+try:
+    import glmpca_fast as _RUST_BACKEND
+except ImportError:
+    _RUST_BACKEND = None
+    logger.warning("glmpca-fast not importable; Poisson GLM-PCA is unavailable")
 
-    Published on PyPI as ``glmpca-fast`` (declared in pyproject.toml);
-    installed normally via ``uv sync``. Returns the module on success.
-    """
-    try:
-        import glmpca_fast
-        return glmpca_fast
-    except ImportError:
-        logger.warning(
-            "glmpca-fast not importable; Poisson GLM-PCA is unavailable"
-        )
-        return None
-
-
-_RUST_BACKEND = _try_import_rust()
-
-
-def _try_import_binomial_rust():
-    """Import the Rust Binomial(2, p) GLM-PCA extension if it is installed.
-
-    Built from ``binom_glmpca_rs/`` via ``uv pip install -e ./binom_glmpca_rs``.
-    Absent, the scipy reference in :mod:`src.preprocessing.binomial_glm_pca`
-    still runs, just slower.
-    """
-    try:
-        import binom_glmpca_rs
-        return binom_glmpca_rs
-    except ImportError:
-        logger.warning(
-            "binom_glmpca_rs not importable; falling back to the slower "
-            "scipy Binomial GLM-PCA reference"
-        )
-        return None
-
-
-_BINOM_BACKEND = _try_import_binomial_rust()
+# Binomial(2, p) backend, built from ``binom_glmpca_rs/``. Absent, the scipy
+# reference in src.preprocessing.binomial_glm_pca still runs, just slower.
+try:
+    import binom_glmpca_rs as _BINOM_BACKEND
+except ImportError:
+    _BINOM_BACKEND = None
+    logger.warning(
+        "binom_glmpca_rs not importable; falling back to the slower scipy "
+        "Binomial GLM-PCA reference"
+    )
 
 
 def _project_held_out(
@@ -255,7 +230,7 @@ def glm_pca_single_gene(
             max_iter=max(150, max_iter),
         )
     if family != "poi":
-        raise UnsupportedProjectionFamilyError(
+        raise ValueError(
             f"Unknown GLM-PCA family {family!r}; expected 'poi' or 'binom2'"
         )
 
@@ -434,7 +409,6 @@ def _build_result(
     return {
         "features": features,
         "explained_total": explained,
-        "explained_per_component": [explained / n_comp] * n_comp,
         "n_variants": n_vars,
         "actual_k": n_comp,
         "loadings": loadings,

@@ -34,7 +34,6 @@ class TestSchemaParity:
         assert {
             "features",
             "explained_total",
-            "explained_per_component",
             "n_variants",
             "actual_k",
             "loadings",
