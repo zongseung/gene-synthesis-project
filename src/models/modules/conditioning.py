@@ -118,9 +118,6 @@ class UnifiedFiLMGenerator(nn.Module):
         )
 
         # CNN decoder FiLM layers: use actual decoder block output channels.
-        # If not provided, fall back to reversed encoder channels.
-        if cnn_dec_channels is None:
-            cnn_dec_channels = list(reversed(cnn_channels))
         self.cnn_dec_films = nn.ModuleList(
             [nn.Linear(d_model, ch * 2) for ch in cnn_dec_channels]
         )

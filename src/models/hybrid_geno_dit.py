@@ -40,14 +40,12 @@ class HybridCNNDiTFiLM(nn.Module):
     def __init__(self, config: dict):
         super().__init__()
 
-        # --- Extract and validate config ---
-        model_cfg = config.get("model", config)
-        data_cfg = config.get("data", {})
+        # --- Extract config ---
+        model_cfg = config["model"]
+        data_cfg = config["data"]
 
-        self.in_channels = data_cfg.get(
-            "num_channels", model_cfg.get("in_channels", 8)
-        )
-        self.gene_size = data_cfg.get("gene_size", model_cfg.get("gene_size", 26624))
+        self.in_channels = data_cfg["num_channels"]
+        self.gene_size = data_cfg["gene_size"]
         base_channels = model_cfg.get("base_channels", 64)
         channel_mult = tuple(model_cfg.get("channel_mult", (1, 1, 2, 4)))
         kernel_size = model_cfg.get("kernel_size", 3)
@@ -182,10 +180,4 @@ class HybridCNNDiTFiLM(nn.Module):
         features_out = self.unpatchify(tokens)
 
         # --- CNN Decoder with skip connections ---
-        output = self.decoder(features_out, skips, cnn_dec_params)
-
-        # Ensure output matches input spatial size
-        if output.shape[-1] != self.gene_size:
-            output = output[..., : self.gene_size]
-
-        return output
+        return self.decoder(features_out, skips, cnn_dec_params)
