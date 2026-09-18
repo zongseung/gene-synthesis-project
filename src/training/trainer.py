@@ -286,7 +286,6 @@ def train(config: dict) -> None:
         null_class=data_cfg.get("num_classes", 26),
         cfg_dropout_rate=diffusion_cfg.get("cfg_dropout_rate", 0.1),
         schedule_type=diffusion_cfg.get("noise_schedule", "cosine"),
-        prediction_target=diffusion_cfg.get("prediction_target", "epsilon"),
         sample_clip=diffusion_cfg.get("sample_clip", 6.0),
         feature_schedule=diffusion_cfg.get("feature_schedule"),
     ).to(device)

@@ -15,23 +15,11 @@ from src.inference import generator
 
 def test_diffusion_uses_checkpoint_prediction_contract() -> None:
     data = {"num_classes": 3, "enforce_zeros": False}
-    diffusion = {
-        "max_timesteps": 2,
-        "prediction_target": "epsilon",
-        "sample_clip": 2.5,
-    }
+    diffusion = {"max_timesteps": 2, "sample_clip": 2.5}
 
     result = generator.build_generation_diffusion(data, diffusion, None)
 
     assert result.sample_clip == 2.5
-
-
-def test_diffusion_rejects_checkpoint_with_unsupported_prediction_target() -> None:
-    data = {"num_classes": 3, "enforce_zeros": False}
-    diffusion = {"max_timesteps": 2, "prediction_target": "v"}
-
-    with pytest.raises(ValueError, match="prediction_target"):
-        generator.build_generation_diffusion(data, diffusion, None)
 
 
 def test_normalized_generation_requires_existing_stats(tmp_path: Path) -> None:
@@ -220,20 +208,17 @@ def test_generation_threads_the_guidance_variant_into_the_sampler_and_the_meta(
     assert meta["config"]["guide_model_path"] == str(guide_path)
 
 
-@pytest.mark.parametrize(
-    "key, value", [("noise_schedule", "linear"), ("prediction_target", "x0")]
-)
-def test_guide_trained_on_another_diffusion_setting_is_rejected(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, key: str, value: str,
+def test_guide_trained_on_another_noise_schedule_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     guide_path = tmp_path / "weak_model.pth"
     guide_path.touch()
 
-    with pytest.raises(ValueError, match=key):
+    with pytest.raises(ValueError, match="noise_schedule"):
         _run_generation(
             tmp_path,
             monkeypatch,
-            guide_diffusion={key: value},
+            guide_diffusion={"noise_schedule": "linear"},
             guide_model_path=str(guide_path),
         )
 

@@ -35,7 +35,6 @@ model:
 diffusion:
   max_timesteps: 1000
   noise_schedule: "linear"
-  prediction_target: "epsilon"
   sample_clip: 6.0
   guidance_type: "classifier_free"
   guidance_weight: 0.0

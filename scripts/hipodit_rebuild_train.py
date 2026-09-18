@@ -80,8 +80,7 @@ def train(args: argparse.Namespace) -> None:
             "pop_to_superpop": pop_mapping,
         },
         "diffusion": {
-            "max_timesteps": 1000, "noise_schedule": "linear",
-            "prediction_target": "epsilon", "sample_clip": 6.0,
+            "max_timesteps": 1000, "noise_schedule": "linear", "sample_clip": 6.0,
             "guidance_type": "classifier_free", "guidance_weight": 0.0,
             "cfg_dropout_rate": 0.1, "sampling_timesteps": args.ddim_steps, "ddim_eta": 0.0,
             "feature_schedule": feature_schedule,
@@ -92,7 +91,7 @@ def train(args: argparse.Namespace) -> None:
     model = HybridCNNDiTFiLM(config).to(device)
     diffusion = GaussianDiffusion(
         timesteps=1000, enforce_zeros=False, null_class=26, cfg_dropout_rate=0.1,
-        schedule_type="linear", prediction_target="epsilon", sample_clip=6.0,
+        schedule_type="linear", sample_clip=6.0,
         feature_schedule=feature_schedule,
     ).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=2e-4, weight_decay=1e-4)

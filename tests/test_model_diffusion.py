@@ -24,11 +24,6 @@ class RecordingZeroNoiseModel(nn.Module):
         return torch.zeros_like(x)
 
 
-def test_diffusion_rejects_unimplemented_prediction_target():
-    with pytest.raises(ValueError, match="prediction_target"):
-        GaussianDiffusion(timesteps=1, prediction_target="v")
-
-
 @pytest.mark.parametrize("sample_clip", [0.0, float("inf"), float("nan")])
 def test_diffusion_rejects_invalid_model_space_clip(sample_clip):
     with pytest.raises(ValueError, match="sample_clip"):

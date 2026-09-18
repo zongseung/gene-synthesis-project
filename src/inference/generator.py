@@ -108,7 +108,6 @@ def build_generation_diffusion(
         enforce_zeros=data_config.get("enforce_zeros", True),
         null_class=data_config.get("num_classes", 26),
         schedule_type=diffusion_config.get("noise_schedule", "cosine"),
-        prediction_target=diffusion_config.get("prediction_target", "epsilon"),
         sample_clip=diffusion_config.get("sample_clip", 6.0),
         feature_schedule=diffusion_config.get("feature_schedule"),
     )
@@ -319,15 +318,14 @@ def generate_samples(
         guide_checkpoint = torch.load(
             guide_model_path, map_location=device, weights_only=False
         )
-        # A guide trained on another schedule/target predicts epsilon on another scale.
+        # A guide trained on another schedule predicts epsilon on another scale.
         guide_diffusion_cfg = guide_checkpoint.get("config", {}).get("diffusion", {})
-        for key, default in (("noise_schedule", "cosine"), ("prediction_target", "epsilon")):
-            guide_value = guide_diffusion_cfg.get(key, default)
-            if guide_value != diffusion_cfg.get(key, default):
-                raise ValueError(
-                    f"Guide model {key} ({guide_value}) does not match the main "
-                    f"checkpoint ({diffusion_cfg.get(key, default)})"
-                )
+        guide_value = guide_diffusion_cfg.get("noise_schedule", "cosine")
+        if guide_value != diffusion_cfg.get("noise_schedule", "cosine"):
+            raise ValueError(
+                f"Guide model noise_schedule ({guide_value}) does not match the main "
+                f"checkpoint ({diffusion_cfg.get('noise_schedule', 'cosine')})"
+            )
         guide_model, guide_ema = load_generator_model(guide_checkpoint, config, device)
         if not guide_ema:
             logger.warning(
@@ -413,7 +411,6 @@ def generate_samples(
         "config": {
             "max_timesteps": diffusion_cfg["max_timesteps"],
             "noise_schedule": diffusion_cfg.get("noise_schedule", "cosine"),
-            "prediction_target": diffusion_cfg.get("prediction_target", "epsilon"),
             "sample_clip": diffusion_cfg.get("sample_clip", 6.0),
             "ddim_steps": ddim_steps,
             "guidance_type": guidance_type,

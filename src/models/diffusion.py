@@ -22,15 +22,12 @@ class GaussianDiffusion(nn.Module):
         null_class: int = 26,
         cfg_dropout_rate: float = 0.1,
         schedule_type: str = "cosine",
-        prediction_target: str = "epsilon",
         sample_clip: float | None = 6.0,
         feature_schedule: torch.Tensor | list[list[int]] | None = None,
     ):
         super().__init__()
         if timesteps < 1:
             raise ValueError("timesteps must be positive")
-        if prediction_target != "epsilon":
-            raise ValueError(f"Unsupported prediction_target: {prediction_target}; expected epsilon")
         if sample_clip is not None and (not math.isfinite(sample_clip) or sample_clip <= 0):
             raise ValueError("sample_clip must be positive or null")
         if not math.isfinite(min_snr_gamma) or min_snr_gamma <= 0:
