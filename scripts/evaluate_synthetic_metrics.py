@@ -25,8 +25,7 @@ import numpy as np
 from sklearn.decomposition import PCA
 
 
-from src.evaluation import evaluate  # noqa: E402
-from src.evaluation._io import (  # noqa: E402
+from src.evaluation._io import (
     flatten_subsample_genes,
     load_label_hierarchy,
     load_real,
@@ -34,6 +33,7 @@ from src.evaluation._io import (  # noqa: E402
     pop_to_superpop,
     write_csv,
 )
+from src.evaluation.synthetic_pipeline import evaluate
 
 
 def _build_parser() -> argparse.ArgumentParser:

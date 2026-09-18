@@ -52,7 +52,7 @@ far (utility loss)?* It
 
 ```python
 import numpy as np
-from src.evaluation import dupi_score, kth_dupi_benchmark, ui_pi_from_dupi
+from src.evaluation.dupi import dupi_score, kth_dupi_benchmark, ui_pi_from_dupi
 
 rng = np.random.default_rng(0)
 x_real = rng.standard_normal((300, 8))
@@ -69,7 +69,7 @@ End-to-end pipeline that also runs distribution distances + per-class
 breakdown:
 
 ```python
-from src.evaluation import evaluate
+from src.evaluation.synthetic_pipeline import evaluate
 
 report = evaluate(real_pcs, syn_pcs, real_sp, syn_sp, k=1, tau=5.0)
 print(report.dupi)                    # global UI/PI/DUPI

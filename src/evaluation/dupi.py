@@ -57,13 +57,6 @@ import math
 import numpy as np
 from sklearn.neighbors import NearestNeighbors
 
-__all__ = [
-    "dupi_score",
-    "kth_dupi_benchmark",
-    "ui_pi_from_dupi",
-]
-
-
 def kth_dupi_benchmark(n: int, m: int, k: int) -> float:
     """Theoretical DUPI value when real and synthetic share the same distribution.
 

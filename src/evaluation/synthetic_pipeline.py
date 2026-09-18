@@ -26,14 +26,6 @@ from src.evaluation.distribution_metrics import (
 )
 from src.evaluation.dupi import dupi_score, ui_pi_from_dupi
 
-__all__ = [
-    "EvaluationReport",
-    "centroid_rows",
-    "class_metric_rows",
-    "evaluate",
-]
-
-
 @dataclass
 class EvaluationReport:
     """Structured container for per-run synthetic-data evaluation results."""

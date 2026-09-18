@@ -23,16 +23,6 @@ from src.preprocessing.tokenizer import invert_normalization, load_normalization
 
 SampleSpace = Literal["normalized", "original"]
 
-__all__ = [
-    "flatten_subsample_genes",
-    "load_label_hierarchy",
-    "load_real",
-    "load_synthetic",
-    "pop_to_superpop",
-    "write_csv",
-]
-
-
 # ── filesystem fingerprints ────────────────────────────────────────────
 def file_sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()

@@ -23,15 +23,6 @@ import numpy as np
 from sklearn.metrics import pairwise_distances
 from sklearn.neighbors import NearestNeighbors
 
-__all__ = [
-    "centroid_distance",
-    "gaussian_w2_distance",
-    "mmd_rbf",
-    "nn_adversarial_accuracy",
-    "same_class_coverage",
-]
-
-
 def centroid_distance(x_real: np.ndarray, x_syn: np.ndarray) -> float:
     """Euclidean distance between the centroids of two point sets."""
     return float(np.linalg.norm(x_real.mean(axis=0) - x_syn.mean(axis=0)))
